@@ -10,6 +10,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"pocketcqrs/aggregates"
+	"pocketcqrs/consumers"
 	"pocketcqrs/decider"
 	"pocketcqrs/events"
 	"pocketcqrs/functions"
@@ -24,7 +25,7 @@ import (
 type components struct {
 	store    *events.Store
 	registry *decider.Registry
-	engine   *projections.Engine
+	engine   *consumers.Engine
 }
 
 func main() {
@@ -59,21 +60,29 @@ func main() {
 
 		logger := e.App.Logger()
 
-		// read side: projections into PocketBase collections
-		c.engine = projections.NewEngine(e.App, store,
+		// durable consumption of the log (projections + functions)
+		c.engine = consumers.NewEngine(store,
 			func(msg string, args ...any) { logger.Warn(msg, args...) })
-		c.engine.Register(projections.Tasks())
+
+		// read side: projections into PocketBase collections
+		projs := []projections.Projection{projections.NewTasks(e.App)}
+		for _, p := range projs {
+			c.engine.Register(p)
+		}
 
 		// write-guard: no out-of-band writes on projection-owned collections
-		writeguard.Register(e.App, c.engine.GuardedCollections()...)
+		writeguard.Register(e.App, projections.GuardedCollections(projs...)...)
 
-		// functions (FaaS): effect functions on domain events
+		// functions (FaaS): effect functions on domain events, delivered
+		// durably through the same consumers engine
 		rt := functions.NewGojaRuntime(
 			func(msg string, args ...any) { logger.Info(msg, args...) })
 		if err := functions.RegisterBuiltins(rt); err != nil {
 			return err
 		}
-		rt.Subscribe(store)
+		for _, fc := range rt.Consumers() {
+			c.engine.Register(fc)
+		}
 
 		return e.Next()
 	})

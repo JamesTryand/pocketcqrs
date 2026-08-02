@@ -4,9 +4,15 @@
 // Runtime is deliberately language/runtime-agnostic so isolated runtimes
 // (wasm, separate processes) can slot in once untrusted code is in scope.
 // The v1 GojaRuntime runs trusted, owner-authored JavaScript in-process.
+//
+// Event delivery is durable and at-least-once via the consumers engine
+// (checkpointed, replayed after restart). A function that fails on an event
+// is logged and skipped for that event — poison messages do not block the
+// log (dead-lettering is future work).
 package functions
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -15,14 +21,15 @@ import (
 
 	"github.com/dop251/goja"
 
+	"pocketcqrs/consumers"
 	"pocketcqrs/events"
 )
 
 // Runtime hosts user-defined functions.
 type Runtime interface {
-	// RegisterEventFunction compiles source and runs it for each committed
-	// event of eventType. The function is called as handle(event).
-	RegisterEventFunction(eventType, name, source string) error
+	// RegisterEventFunction compiles source as name and runs it once per
+	// committed event whose type is in eventTypes.
+	RegisterEventFunction(eventTypes []string, name, source string) error
 }
 
 // FunctionTimeout bounds a single function execution.
@@ -33,12 +40,16 @@ type GojaRuntime struct {
 	logger func(msg string, args ...any)
 
 	mu  sync.RWMutex
-	fns map[string][]eventFunction
+	fns []*eventFunction
 }
 
+// eventFunction is a compiled function plus its trigger; it is also the
+// consumers.Consumer for checkpointed delivery.
 type eventFunction struct {
-	name string
-	prog *goja.Program
+	name       string
+	eventTypes []string
+	prog       *goja.Program
+	runtime    *GojaRuntime
 }
 
 // NewGojaRuntime creates a GojaRuntime. logger may be nil (defaults to no-op).
@@ -46,38 +57,51 @@ func NewGojaRuntime(logger func(string, ...any)) *GojaRuntime {
 	if logger == nil {
 		logger = func(string, ...any) {}
 	}
-	return &GojaRuntime{logger: logger, fns: map[string][]eventFunction{}}
+	return &GojaRuntime{logger: logger, fns: nil}
 }
 
 // RegisterEventFunction implements Runtime.
-func (r *GojaRuntime) RegisterEventFunction(eventType, name, source string) error {
+func (r *GojaRuntime) RegisterEventFunction(eventTypes []string, name, source string) error {
 	prog, err := goja.Compile(name, source, false)
 	if err != nil {
 		return fmt.Errorf("functions: compile %s: %w", name, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.fns[eventType] = append(r.fns[eventType], eventFunction{name: name, prog: prog})
+	r.fns = append(r.fns, &eventFunction{name: name, eventTypes: eventTypes, prog: prog, runtime: r})
 	return nil
 }
 
-// Subscribe wires the runtime to the store's in-process event feed.
-func (r *GojaRuntime) Subscribe(store *events.Store) {
-	store.Subscribe(func(ev events.Event) {
-		r.mu.RLock()
-		fns := r.fns[ev.Type]
-		r.mu.RUnlock()
-		for _, fn := range fns {
-			fn := fn
-			go r.run(fn, ev)
-		}
-	})
+// Consumers returns one checkpointed consumer per registered function, for
+// registering with the consumers engine.
+func (r *GojaRuntime) Consumers() []consumers.Consumer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]consumers.Consumer, 0, len(r.fns))
+	for _, fn := range r.fns {
+		out = append(out, fn)
+	}
+	return out
 }
 
-func (r *GojaRuntime) run(fn eventFunction, ev events.Event) {
+// Name implements consumers.Consumer.
+func (fn *eventFunction) Name() string { return "fn:" + fn.name }
+
+// Apply implements consumers.Consumer: delivers the event to the function
+// if it subscribed to the type. Execution failures are logged, not returned,
+// so a failing function does not block the log.
+func (fn *eventFunction) Apply(ctx context.Context, ev events.Event) error {
+	if !contains(fn.eventTypes, ev.Type) {
+		return nil
+	}
+	fn.runtime.run(fn.name, fn.prog, ev)
+	return nil
+}
+
+func (r *GojaRuntime) run(name string, prog *goja.Program, ev events.Event) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			r.logger("function panicked", "function", fn.name, "error", rec)
+			r.logger("function panicked", "function", name, "error", rec)
 		}
 	}()
 
@@ -88,12 +112,12 @@ func (r *GojaRuntime) run(fn eventFunction, ev events.Event) {
 	defer timer.Stop()
 
 	vm.Set("console", map[string]any{
-		"log": func(args ...any) { r.logger("fn "+fn.name, "args", fmt.Sprint(args...)) },
+		"log": func(args ...any) { r.logger("fn "+name, "args", fmt.Sprint(args...)) },
 	})
 
 	var data any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
-		r.logger("function event data decode failed", "function", fn.name, "error", err)
+		r.logger("function event data decode failed", "function", name, "error", err)
 		return
 	}
 	vm.Set("event", map[string]any{
@@ -107,9 +131,18 @@ func (r *GojaRuntime) run(fn eventFunction, ev events.Event) {
 		"created":     ev.Created,
 	})
 
-	if _, err := vm.RunProgram(fn.prog); err != nil {
-		r.logger("function failed", "function", fn.name, "error", err)
+	if _, err := vm.RunProgram(prog); err != nil {
+		r.logger("function failed", "function", name, "error", err)
 	}
+}
+
+func contains(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------
@@ -121,10 +154,5 @@ var taskAuditJS string
 
 // RegisterBuiltins registers the built-in example functions.
 func RegisterBuiltins(r Runtime) error {
-	for _, eventType := range []string{"TaskCreated", "TaskCompleted"} {
-		if err := r.RegisterEventFunction(eventType, "task_audit.js", taskAuditJS); err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.RegisterEventFunction([]string{"TaskCreated", "TaskCompleted"}, "task_audit.js", taskAuditJS)
 }
