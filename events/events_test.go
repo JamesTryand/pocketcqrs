@@ -1,0 +1,119 @@
+package events
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"path/filepath"
+	"testing"
+)
+
+func openTest(t *testing.T) *Store {
+	t.Helper()
+	s, err := Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func TestAppendAndLoadStream(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	appended, err := s.Append(ctx, "task", "t1", 0, []NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{"title":"a"}`)},
+		{Type: "TaskCompleted", Data: json.RawMessage(`{}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(appended) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(appended))
+	}
+	if appended[0].Sequence != 1 || appended[1].Sequence != 2 {
+		t.Fatalf("unexpected sequences: %d, %d", appended[0].Sequence, appended[1].Sequence)
+	}
+	if appended[0].Position <= 0 || appended[1].Position <= appended[0].Position {
+		t.Fatalf("positions not increasing: %d, %d", appended[0].Position, appended[1].Position)
+	}
+
+	stream, err := s.LoadStream(ctx, "task", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stream) != 2 || stream[0].Type != "TaskCreated" || stream[1].Type != "TaskCompleted" {
+		t.Fatalf("unexpected stream: %+v", stream)
+	}
+
+	// a different stream is independent
+	if _, err := s.Append(ctx, "task", "t2", 0, []NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{"title":"b"}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppendConcurrencyConflict(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	if _, err := s.Append(ctx, "task", "t1", 0, []NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{"title":"a"}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// stale expected sequence must be rejected
+	_, err := s.Append(ctx, "task", "t1", 0, []NewEvent{
+		{Type: "TaskCompleted", Data: json.RawMessage(`{}`)},
+	})
+	if !errors.Is(err, ErrConcurrency) {
+		t.Fatalf("expected ErrConcurrency, got %v", err)
+	}
+
+	// correct sequence succeeds
+	if _, err := s.Append(ctx, "task", "t1", 1, []NewEvent{
+		{Type: "TaskCompleted", Data: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPollAndCheckpoints(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	for range 3 {
+		if _, err := s.Append(ctx, "task", newID(), 0, []NewEvent{
+			{Type: "TaskCreated", Data: json.RawMessage(`{"title":"x"}`)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	batch, err := s.Poll(ctx, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(batch))
+	}
+
+	if err := s.SaveCheckpoint(ctx, "p1", batch[len(batch)-1].Position); err != nil {
+		t.Fatal(err)
+	}
+	pos, err := s.Checkpoint(ctx, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rest, err := s.Poll(ctx, pos, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != 1 {
+		t.Fatalf("expected 1 remaining event, got %d", len(rest))
+	}
+}

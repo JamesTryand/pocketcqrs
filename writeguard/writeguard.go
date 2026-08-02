@@ -1,0 +1,45 @@
+// Package writeguard rejects out-of-band record writes on guarded
+// (projection-owned) collections. There is no user-facing escape hatch:
+// the only writer is the projection engine, whose server-side calls carry
+// an internal context marker that never crosses the HTTP/API boundary.
+package writeguard
+
+import (
+	"context"
+
+	"github.com/pocketbase/pocketbase/apis"
+	"github.com/pocketbase/pocketbase/core"
+)
+
+type markerKey struct{}
+
+// MarkInternal returns a context flagged as an internal (projection) write.
+func MarkInternal(ctx context.Context) context.Context {
+	return context.WithValue(ctx, markerKey{}, true)
+}
+
+// IsInternal reports whether ctx carries the internal-write marker.
+func IsInternal(ctx context.Context) bool {
+	v, _ := ctx.Value(markerKey{}).(bool)
+	return v
+}
+
+// Register denies create/update/delete on the named collections for every
+// caller except internal writers (see MarkInternal). Superusers are denied
+// too: state changes must flow through the command API so they become events.
+func Register(app core.App, collections ...string) {
+	deny := func(e *core.RecordEvent) error {
+		if IsInternal(e.Context) {
+			return e.Next()
+		}
+		return apis.NewForbiddenError(
+			"Direct writes to '"+e.Record.Collection().Name+"' are disabled; "+
+				"state changes must go through the command API (POST /api/cqrs/{aggregate}/{id}/{command}).",
+			nil,
+		)
+	}
+
+	app.OnRecordCreate(collections...).BindFunc(deny)
+	app.OnRecordUpdate(collections...).BindFunc(deny)
+	app.OnRecordDelete(collections...).BindFunc(deny)
+}

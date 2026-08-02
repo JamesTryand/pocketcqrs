@@ -1,13 +1,79 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"path/filepath"
 
 	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/core"
+
+	"pocketcqrs/aggregates"
+	"pocketcqrs/decider"
+	"pocketcqrs/events"
+	"pocketcqrs/functions"
+	"pocketcqrs/gateway"
+	"pocketcqrs/projections"
+	"pocketcqrs/writeguard"
+
+	_ "pocketcqrs/migrations"
 )
+
+// components is filled during bootstrap, before the server starts.
+type components struct {
+	store    *events.Store
+	registry *decider.Registry
+	engine   *projections.Engine
+}
 
 func main() {
 	app := pocketbase.New()
+	c := &components{}
+
+	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
+		dataDir := e.App.DataDir()
+		if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
+			return err
+		}
+
+		// event store (source of truth) next to PocketBase's data.db
+		store, err := events.Open(filepath.Join(dataDir, "events.db"))
+		if err != nil {
+			return err
+		}
+		c.store = store
+
+		// write side: deciders + command handling
+		c.registry = decider.NewRegistry(store)
+		aggregates.RegisterAll(c.registry)
+
+		logger := e.App.Logger()
+
+		// read side: projections into PocketBase collections
+		c.engine = projections.NewEngine(e.App, store,
+			func(msg string, args ...any) { logger.Warn(msg, args...) })
+		c.engine.Register(projections.Tasks())
+
+		// write-guard: no out-of-band writes on projection-owned collections
+		writeguard.Register(e.App, c.engine.GuardedCollections()...)
+
+		// functions (FaaS): effect functions on domain events
+		rt := functions.NewGojaRuntime(
+			func(msg string, args ...any) { logger.Info(msg, args...) })
+		if err := functions.RegisterBuiltins(rt); err != nil {
+			return err
+		}
+		rt.Subscribe(store)
+
+		return e.Next()
+	})
+
+	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		gateway.RegisterRoutes(e, c.registry)
+		c.engine.Start(context.Background())
+		return e.Next()
+	})
 
 	if err := app.Start(); err != nil {
 		log.Fatal(err)
