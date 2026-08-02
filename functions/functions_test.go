@@ -106,3 +106,76 @@ func TestCronFunctionFire(t *testing.T) {
 		t.Fatalf("cron function did not fire correctly; logs: %v", logs)
 	}
 }
+
+func TestDeadLetterOnFailureAndRetry(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	rt := NewGojaRuntime(nil)
+	rt.SetStore(store)
+
+	// a function that fails on TaskCreated
+	if err := rt.RegisterEventFunction([]string{"TaskCreated"}, "poison.js",
+		`throw new Error("poisoned");`); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := consumers.NewEngine(store, nil)
+	for _, c := range rt.Consumers() {
+		engine.Register(c)
+	}
+
+	if _, err := store.Append(ctx, "task", "t1", 0, []events.NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{"title":"x"}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// failure was dead-lettered with the full envelope
+	letters, err := store.DeadLetters(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(letters) != 1 || letters[0].Consumer != "fn:poison.js" {
+		t.Fatalf("expected 1 dead letter, got %+v", letters)
+	}
+	dl := letters[0]
+	if dl.Event.AggregateID != "t1" || dl.Error == "" {
+		t.Fatalf("bad dead letter: %+v", dl)
+	}
+
+	// retry with the current (still broken) code fails and is recorded
+	if err := rt.RetryEventFunction("poison.js", dl.Event); err == nil {
+		t.Fatal("expected retry to fail")
+	} else {
+		_ = store.FailDeadLetterRetry(ctx, dl.ID, err)
+	}
+	letters, _ = store.DeadLetters(ctx, false)
+	if letters[0].Attempts != 2 {
+		t.Fatalf("expected attempts=2, got %d", letters[0].Attempts)
+	}
+
+	// "fix" the function (re-register same name: latest code wins)
+	if err := rt.RegisterEventFunction([]string{"TaskCreated"}, "poison.js",
+		`console.log("recovered: " + event.data.title);`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.RetryEventFunction("poison.js", dl.Event); err != nil {
+		t.Fatalf("retry with fixed code failed: %v", err)
+	}
+	if err := store.ResolveDeadLetter(ctx, dl.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	letters, _ = store.DeadLetters(ctx, false)
+	if len(letters) != 0 {
+		t.Fatalf("expected no pending dead letters, got %+v", letters)
+	}
+}

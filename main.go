@@ -24,12 +24,13 @@ import (
 
 // components is filled during bootstrap, before the server starts.
 type components struct {
-	app      core.App
-	store    *events.Store
-	registry *decider.Registry
-	engine   *consumers.Engine
-	httpFns  *functions.HTTPRegistry
-	jsProjs  []*functions.JSProjection
+	app       core.App
+	store     *events.Store
+	registry  *decider.Registry
+	engine    *consumers.Engine
+	httpFns   *functions.HTTPRegistry
+	jsProjs   []*functions.JSProjection
+	fnRuntime *functions.GojaRuntime
 }
 
 func main() {
@@ -52,6 +53,7 @@ func main() {
 		"the directory with the user defined JS functions",
 	)
 	app.RootCmd.AddCommand(newProjectionCommand(c))
+	app.RootCmd.AddCommand(newDeadletterCommand(c))
 	app.RootCmd.ParseFlags(os.Args[1:])
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
@@ -95,6 +97,8 @@ func main() {
 		rt := functions.NewGojaRuntime(
 			func(msg string, args ...any) { logger.Info(msg, args...) })
 		rt.SetReader(functions.NewAppReader(e.App))
+		rt.SetStore(store)
+		c.fnRuntime = rt
 		loaded, err := functions.LoadDir(rt, e.App, functionsDir)
 		if err != nil {
 			return err

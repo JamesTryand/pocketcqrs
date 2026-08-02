@@ -117,7 +117,13 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
-	_, err := db.Exec(`PRAGMA user_version = 1`)
+
+	// v2: dead_letters table
+	if _, err := db.Exec(deadLettersSchema); err != nil {
+		return err
+	}
+
+	_, err := db.Exec(`PRAGMA user_version = 2`)
 	return err
 }
 

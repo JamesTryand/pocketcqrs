@@ -38,6 +38,7 @@ const FunctionTimeout = 5 * time.Second
 type GojaRuntime struct {
 	logger func(msg string, args ...any)
 	reader Reader
+	store  *events.Store
 
 	mu      sync.RWMutex
 	fns     []*eventFunction
@@ -77,6 +78,10 @@ func NewGojaRuntime(logger func(string, ...any)) *GojaRuntime {
 
 // SetReader installs the read-only query-side binding exposed as `pb`.
 func (r *GojaRuntime) SetReader(reader Reader) { r.reader = reader }
+
+// SetStore installs the event store used for dead-lettering failed
+// deliveries. Without it, failures are only logged.
+func (r *GojaRuntime) SetStore(store *events.Store) { r.store = store }
 
 // RegisterEventFunction implements Runtime.
 func (r *GojaRuntime) RegisterEventFunction(eventTypes []string, name, source string) error {
@@ -135,14 +140,47 @@ func (r *GojaRuntime) Consumers() []consumers.Consumer {
 func (fn *eventFunction) Name() string { return "fn:" + fn.name }
 
 // Apply implements consumers.Consumer: delivers the event to the function
-// if it subscribed to the type. Execution failures are logged, not returned,
-// so a failing function does not block the log.
+// if it subscribed to the type. A failing function is logged and
+// dead-lettered (inspection + retry via the deadletter CLI); the failure
+// never blocks the log.
 func (fn *eventFunction) Apply(ctx context.Context, ev events.Event) error {
 	if !contains(fn.eventTypes, ev.Type) {
 		return nil
 	}
-	fn.runtime.runEvent(fn.name, fn.prog, ev)
+	if err := fn.runtime.runEvent(fn.name, fn.prog, ev); err != nil {
+		fn.runtime.logger("function delivery failed, dead-lettered",
+			"function", fn.name, "position", ev.Position, "error", err)
+		fn.runtime.deadLetter(ctx, fn.Name(), ev, err)
+	}
 	return nil
+}
+
+// deadLetter records a failed delivery if a store is installed.
+func (r *GojaRuntime) deadLetter(ctx context.Context, consumer string, ev events.Event, cause error) {
+	if r.store == nil {
+		return
+	}
+	if err := r.store.AddDeadLetter(ctx, consumer, ev, cause); err != nil {
+		r.logger("failed to write dead letter", "consumer", consumer, "error", err)
+	}
+}
+
+// RetryEventFunction re-delivers an event to the named function (the most
+// recently registered with that name, i.e. the current code). Used by the
+// deadletter CLI; the error is returned for the caller to adjudicate.
+func (r *GojaRuntime) RetryEventFunction(name string, ev events.Event) error {
+	r.mu.RLock()
+	var fn *eventFunction
+	for _, f := range r.fns {
+		if f.name == name {
+			fn = f // keep the last (most recently loaded)
+		}
+	}
+	r.mu.RUnlock()
+	if fn == nil {
+		return fmt.Errorf("functions: no function named %s is registered", name)
+	}
+	return r.runEvent(fn.name, fn.prog, ev)
 }
 
 // newVM creates a VM with the standard bindings (console, pb read access)
@@ -171,13 +209,12 @@ func (r *GojaRuntime) newVM(name string) (*goja.Runtime, *time.Timer) {
 	return vm, timer
 }
 
-func (r *GojaRuntime) runEvent(name string, prog *goja.Program, ev events.Event) {
+func (r *GojaRuntime) runEvent(name string, prog *goja.Program, ev events.Event) error {
 	var data any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
-		r.logger("function event data decode failed", "function", name, "error", err)
-		return
+		return fmt.Errorf("function event data decode failed: %w", err)
 	}
-	r.runScript(name, prog, map[string]any{
+	return r.runScript(name, prog, map[string]any{
 		"event": map[string]any{
 			"position":    ev.Position,
 			"id":          ev.ID,
@@ -192,21 +229,25 @@ func (r *GojaRuntime) runEvent(name string, prog *goja.Program, ev events.Event)
 }
 
 // runCron executes a cron function's script body with a `job` binding.
+// Cron failures are logged only (there is no event delivery to dead-letter).
 func (r *GojaRuntime) runCron(fn *cronFunction) {
-	r.runScript(fn.name, fn.prog, map[string]any{
+	err := r.runScript(fn.name, fn.prog, map[string]any{
 		"job": map[string]any{
 			"name":    fn.name,
 			"firedAt": time.Now().UTC().Format("2006-01-02 15:04:05.000Z"),
 		},
 	})
+	if err != nil {
+		r.logger("cron function failed", "function", fn.name, "error", err)
+	}
 }
 
-// runScript runs prog's body once with the given extra globals, logging
-// panics and errors instead of propagating them (effect-tier semantics).
-func (r *GojaRuntime) runScript(name string, prog *goja.Program, globals map[string]any) {
+// runScript runs prog's body once with the given extra globals. Panics and
+// script errors are recovered and returned, never thrown into the host.
+func (r *GojaRuntime) runScript(name string, prog *goja.Program, globals map[string]any) (err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			r.logger("function panicked", "function", name, "error", rec)
+			err = fmt.Errorf("function %s panicked: %v", name, rec)
 		}
 	}()
 
@@ -218,8 +259,9 @@ func (r *GojaRuntime) runScript(name string, prog *goja.Program, globals map[str
 	}
 
 	if _, err := vm.RunProgram(prog); err != nil {
-		r.logger("function failed", "function", name, "error", err)
+		return fmt.Errorf("function %s failed: %w", name, err)
 	}
+	return nil
 }
 
 func contains(list []string, v string) bool {
