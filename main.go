@@ -26,6 +26,7 @@ type components struct {
 	store    *events.Store
 	registry *decider.Registry
 	engine   *consumers.Engine
+	httpFns  *functions.HTTPRegistry
 }
 
 func main() {
@@ -38,6 +39,14 @@ func main() {
 		"cqrsAllowAnonymous",
 		false,
 		"allow anonymous CQRS command execution (dev only; no actor metadata is stamped)",
+	)
+
+	var functionsDir string
+	app.RootCmd.PersistentFlags().StringVar(
+		&functionsDir,
+		"functionsDir",
+		"pb_functions",
+		"the directory with the user defined JS functions",
 	)
 	app.RootCmd.ParseFlags(os.Args[1:])
 
@@ -73,13 +82,16 @@ func main() {
 		// write-guard: no out-of-band writes on projection-owned collections
 		writeguard.Register(e.App, projections.GuardedCollections(projs...)...)
 
-		// functions (FaaS): effect functions on domain events, delivered
-		// durably through the same consumers engine
+		// functions (FaaS): JS functions loaded from functionsDir; event
+		// functions are delivered durably through the consumers engine
 		rt := functions.NewGojaRuntime(
 			func(msg string, args ...any) { logger.Info(msg, args...) })
-		if err := functions.RegisterBuiltins(rt); err != nil {
+		rt.SetReader(functions.NewAppReader(e.App))
+		httpFns, err := functions.LoadDir(rt, functionsDir)
+		if err != nil {
 			return err
 		}
+		c.httpFns = httpFns
 		for _, fc := range rt.Consumers() {
 			c.engine.Register(fc)
 		}
@@ -89,6 +101,7 @@ func main() {
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		gateway.RegisterRoutes(e, c.registry, gatewayCfg)
+		functions.RegisterHTTPRoutes(e, c.httpFns, !gatewayCfg.AllowAnonymous)
 		c.engine.Start(context.Background())
 		return e.Next()
 	})
