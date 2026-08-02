@@ -90,6 +90,26 @@ work from a separate process while `serve` is running and take effect
 immediately. Maintenance is the barrier for reloading schema-bearing
 function files — see the [reload endpoint](gateway.md#admin).
 
+## catalog
+
+```sh
+pocketcqrs catalog                     # Markdown + Mermaid to stdout
+pocketcqrs catalog --json              # the raw catalog document
+pocketcqrs catalog --skeletons docs/domains [--force]
+```
+
+Introspects the platform: registered aggregates (Go and JS, with declared
+handles/transforms), empirical event types and version ranges from the log,
+consumers (kind, triggers, owned collections, checkpoints), guarded
+collections, HTTP/cron functions, and reactor flows derived from causation
+metadata. The Markdown rendering includes a Mermaid flowchart
+(aggregates → consumers → collections, plus empirical reactor edges).
+
+`--skeletons` writes one domain-doc skeleton per aggregate (the
+[convention template](../domains/README.md)) — events, flows and
+implementation prefilled, commands left as TODO rows. Existing files are
+skipped unless `--force`.
+
 ## superuser (PocketBase)
 
 ```sh

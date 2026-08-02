@@ -46,6 +46,10 @@ func (spec *ProjectionSpec) Consumer() *JSProjection { return &JSProjection{spec
 // Name is the durable checkpoint key.
 func (p *JSProjection) Name() string { return p.spec.Name }
 
+// Spec returns the underlying projection spec (introspection, e.g. the
+// catalog: declared event types and schemas).
+func (p *JSProjection) Spec() *ProjectionSpec { return p.spec }
+
 // Collections lists the guarded collections this projection owns.
 func (p *JSProjection) Collections() []string { return p.spec.Collections() }
 

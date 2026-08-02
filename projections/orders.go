@@ -27,6 +27,12 @@ type ordersProjection struct {
 func (ordersProjection) Name() string          { return "orders" }
 func (ordersProjection) Collections() []string { return []string{"orders", "order_lines"} }
 
+// EventTypes declares the consumed event types (introspection; the engine
+// still delivers everything — Apply self-filters).
+func (ordersProjection) EventTypes() []string {
+	return []string{aggregates.OrderPlaced, aggregates.OrderLineAdded, aggregates.OrderConfirmed, aggregates.OrderCancelled}
+}
+
 func (p ordersProjection) Apply(ctx context.Context, ev events.Event) error {
 	if ev.Aggregate != aggregates.OrderAggregate {
 		return nil

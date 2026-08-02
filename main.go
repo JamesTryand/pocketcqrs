@@ -74,6 +74,7 @@ func main() {
 	app.RootCmd.AddCommand(newDeadletterCommand(c))
 	app.RootCmd.AddCommand(newDryrunCommand(c))
 	app.RootCmd.AddCommand(newSystemCommand(c))
+	app.RootCmd.AddCommand(newCatalogCommand(c))
 	app.RootCmd.ParseFlags(os.Args[1:])
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
@@ -220,6 +221,7 @@ func main() {
 		gateway.RegisterRoutes(e, c.registry, gatewayCfg)
 		functions.RegisterHTTPRoutes(e, c.httpFns, !gatewayCfg.AllowAnonymous)
 		registerReloadRoute(e, c, functionsDir)
+		registerCatalogRoute(e, c)
 		c.engine.Start(context.Background())
 		return e.Next()
 	})

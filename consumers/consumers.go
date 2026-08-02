@@ -9,6 +9,7 @@ package consumers
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -69,6 +70,18 @@ func (e *Engine) Unregister(name string) {
 			return
 		}
 	}
+}
+
+// Names returns the registered consumer names, sorted (a snapshot).
+func (e *Engine) Names() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]string, 0, len(e.consumers))
+	for _, c := range e.consumers {
+		out = append(out, c.Name())
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Start runs the catch-up loop until ctx is done: immediately on every

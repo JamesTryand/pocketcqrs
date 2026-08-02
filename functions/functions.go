@@ -136,6 +136,24 @@ func (r *GojaRuntime) Consumers() []consumers.Consumer {
 	return out
 }
 
+// EventFunctionInfo is the introspection view of one event function.
+type EventFunctionInfo struct {
+	Name       string
+	EventTypes []string
+}
+
+// EventFunctions returns the registered event functions with their
+// declared trigger types (for the catalog).
+func (r *GojaRuntime) EventFunctions() []EventFunctionInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]EventFunctionInfo, 0, len(r.fns))
+	for _, fn := range r.fns {
+		out = append(out, EventFunctionInfo{Name: fn.name, EventTypes: fn.eventTypes})
+	}
+	return out
+}
+
 // Name implements consumers.Consumer.
 func (fn *eventFunction) Name() string { return "fn:" + fn.name }
 

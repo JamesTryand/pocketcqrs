@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -100,6 +101,18 @@ func (r *Registry) Has(aggregate string) bool {
 	defer r.mu.RUnlock()
 	_, ok := r.deciders[aggregate]
 	return ok
+}
+
+// Aggregates returns the registered aggregate names, sorted.
+func (r *Registry) Aggregates() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.deciders))
+	for name := range r.deciders {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Handle loads the stream, folds it into state, decides the command and

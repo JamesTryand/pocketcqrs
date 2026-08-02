@@ -52,6 +52,10 @@ type taskEventData struct {
 func (tasksProjection) Name() string          { return "tasks" }
 func (tasksProjection) Collections() []string { return []string{"tasks"} }
 
+// EventTypes declares the consumed event types (introspection; the engine
+// still delivers everything — Apply self-filters).
+func (tasksProjection) EventTypes() []string { return []string{"TaskCreated", "TaskCompleted"} }
+
 func (p tasksProjection) Apply(ctx context.Context, ev events.Event) error {
 	app := p.app
 	// the internal marker lets projection writes pass the writeguard

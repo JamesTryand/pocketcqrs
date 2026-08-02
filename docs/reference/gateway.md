@@ -85,6 +85,19 @@ previous code keeps serving.
 (`schemaTier` is `"skipped: not in maintenance"` when running; the
 `*Removed`/`*Refused` fields appear only when non-empty.)
 
+### Catalog
+
+```
+GET /api/cqrs/catalog
+```
+
+**Auth**: superuser token required (`401` otherwise).
+
+Returns the platform catalog as JSON — the same document the
+[`catalog` CLI](cli.md#catalog) renders as Markdown: aggregates, empirical
+event types, consumers with checkpoints, guarded collections, functions and
+reactor flows, plus mode and log totals.
+
 ## Write-guard (all collections API routes)
 
 `POST/PATCH/DELETE /api/collections/<guarded>/records` on any
