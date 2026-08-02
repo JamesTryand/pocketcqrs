@@ -1,0 +1,15 @@
+# Local dev data
+pb_data/
+pb_hooks/
+
+# Event store
+events.db
+events.db-*
+
+# Binaries
+*.exe
+pocketcqrs
+
+# Editor
+.vscode/
+.idea/
