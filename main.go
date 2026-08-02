@@ -223,6 +223,7 @@ func main() {
 		functions.RegisterHTTPRoutes(e, c.httpFns, !gatewayCfg.AllowAnonymous)
 		registerReloadRoute(e, c, functionsDir)
 		registerCatalogRoute(e, c)
+		registerOpsRoutes(e, c)
 		c.engine.Start(context.Background())
 		return e.Next()
 	})

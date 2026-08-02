@@ -254,6 +254,114 @@ func TestListStreams(t *testing.T) {
 	}
 }
 
+func TestQueryEvents(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	seed := []struct {
+		aggregate, id, typ string
+	}{
+		{"task", "t1", "TaskCreated"},   // pos 1
+		{"task", "t1", "TaskCompleted"}, // pos 2
+		{"note", "n1", "NoteCreated"},   // pos 3
+		{"task", "t2", "TaskCreated"},   // pos 4
+	}
+	seqs := map[string]int64{}
+	for _, e := range seed {
+		key := e.aggregate + "/" + e.id
+		if _, err := s.Append(ctx, e.aggregate, e.id, seqs[key], []NewEvent{
+			{Type: e.typ, Data: json.RawMessage(`{}`)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		seqs[key]++
+	}
+
+	positions := func(evs []Event) []int64 {
+		out := make([]int64, len(evs))
+		for i, ev := range evs {
+			out[i] = ev.Position
+		}
+		return out
+	}
+	assert := func(q EventQuery, want []int64) {
+		t.Helper()
+		evs, err := s.QueryEvents(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := positions(evs)
+		if len(got) != len(want) {
+			t.Fatalf("query %+v: expected positions %v, got %v", q, want, got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("query %+v: expected positions %v, got %v", q, want, got)
+			}
+		}
+	}
+
+	assert(EventQuery{After: 0, Limit: 10}, []int64{1, 2, 3, 4})
+	assert(EventQuery{After: 0, Limit: 2}, []int64{1, 2})
+	assert(EventQuery{After: 2, Limit: 2}, []int64{3, 4})
+	assert(EventQuery{After: 4, Limit: 10}, nil)
+	assert(EventQuery{After: 0, Limit: 10, Aggregate: "task"}, []int64{1, 2, 4})
+	assert(EventQuery{After: 0, Limit: 10, Type: "TaskCreated"}, []int64{1, 4})
+	assert(EventQuery{After: 0, Limit: 10, Aggregate: "task", Type: "TaskCreated"}, []int64{1, 4})
+	// a zero limit falls back to the default batch size
+	assert(EventQuery{}, []int64{1, 2, 3, 4})
+}
+
+func TestListStreamInfos(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	appendN := func(aggregate, id string, n int) {
+		t.Helper()
+		for i := range n {
+			if _, err := s.Append(ctx, aggregate, id, int64(i), []NewEvent{
+				{Type: "SomethingHappened", Data: json.RawMessage(`{}`)},
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	appendN("note", "a1", 2) // pos 1,2
+	appendN("note", "a2", 1) // pos 3
+	appendN("task", "t1", 1) // pos 4
+
+	all, err := s.ListStreamInfos(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 streams, got %d", len(all))
+	}
+	want := []StreamInfo{
+		{Aggregate: "note", AggregateID: "a1", Events: 2, LastPosition: 2},
+		{Aggregate: "note", AggregateID: "a2", Events: 1, LastPosition: 3},
+		{Aggregate: "task", AggregateID: "t1", Events: 1, LastPosition: 4},
+	}
+	for i, w := range want {
+		got := all[i]
+		if got.Aggregate != w.Aggregate || got.AggregateID != w.AggregateID ||
+			got.Events != w.Events || got.LastPosition != w.LastPosition {
+			t.Fatalf("row %d: expected %+v, got %+v", i, w, got)
+		}
+		if got.Updated == "" {
+			t.Fatalf("row %d: empty Updated", i)
+		}
+	}
+
+	notes, err := s.ListStreamInfos(ctx, "note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notes) != 2 || notes[0].Aggregate != "note" || notes[1].Aggregate != "note" {
+		t.Fatalf("unexpected filtered streams: %+v", notes)
+	}
+}
+
 func TestStoreMigratesPreVersioningDB(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.db")
 

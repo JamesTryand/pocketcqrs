@@ -1,6 +1,6 @@
 # Gateway (HTTP) reference
 
-PocketCQRS adds three route groups to the stock PocketBase API (which serves
+PocketCQRS adds four route groups to the stock PocketBase API (which serves
 queries unchanged — see any PocketBase docs for `/api/collections/...`).
 
 ## Commands
@@ -97,6 +97,47 @@ Returns the platform catalog as JSON — the same document the
 [`catalog` CLI](cli.md#catalog) renders as Markdown: aggregates, empirical
 event types, consumers with checkpoints, guarded collections, functions and
 reactor flows, plus mode and log totals.
+
+## Operations
+
+The operational API is the platform's public log interface — dashboards and
+out-of-process read-model consumers tail the log through it instead of
+touching `events.db` (preserving the single-process model). All routes
+require a superuser token (`401` otherwise); all reads see events at their
+latest schema version (store-level upcasting).
+
+```
+GET /api/cqrs/events?after=&limit=&aggregate=&type=
+```
+
+The log feed, in global position order. `after` is exclusive (0 = from the
+start); `limit` defaults to 100 and caps at 1000; `aggregate` and `type`
+filter. Response: `{ "events": [...] }` — page by re-requesting with
+`after` = the last seen position.
+
+```
+GET /api/cqrs/streams?aggregate=
+```
+
+One row per stream: `{ "streams": [{ aggregate, aggregateId, events,
+lastPosition, updated }] }`, ordered by aggregate and stream id.
+
+```
+GET /api/cqrs/deadletters?all=
+```
+
+Failed function deliveries: `{ "deadLetters": [...] }` — pending only unless
+`all=1`. Retry/dismiss stays with the [`deadletter` CLI](cli.md#deadletter).
+
+```
+GET  /api/cqrs/admin/mode
+POST /api/cqrs/admin/mode   { "mode": "running" | "maintenance" }
+```
+
+Reads or sets the system mode barrier. `POST` validates like
+`store.SetMode`: an invalid mode is a `400` and the current mode is
+unchanged. While `maintenance`, domain commands are rejected (`503`) and
+schema-bearing functions may be reloaded.
 
 ## Write-guard (all collections API routes)
 

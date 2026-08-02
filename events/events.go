@@ -268,6 +268,45 @@ func (s *Store) ListStreams(ctx context.Context, aggregate string) ([]string, er
 	return out, rows.Err()
 }
 
+// StreamInfo describes one stream: its length, latest global position and
+// last-write timestamp (the operational stream listing behind
+// GET /api/cqrs/streams).
+type StreamInfo struct {
+	Aggregate    string `json:"aggregate"`
+	AggregateID  string `json:"aggregateId"`
+	Events       int64  `json:"events"`
+	LastPosition int64  `json:"lastPosition"`
+	Updated      string `json:"updated"`
+}
+
+// ListStreamInfos returns one row per stream, ordered by aggregate and
+// stream id. An empty aggregate lists streams of every aggregate type.
+func (s *Store) ListStreamInfos(ctx context.Context, aggregate string) ([]StreamInfo, error) {
+	query := `SELECT aggregate, aggregate_id, COUNT(*), MAX(position), MAX(created)
+		 FROM events`
+	args := []any{}
+	if aggregate != "" {
+		query += ` WHERE aggregate = ?`
+		args = append(args, aggregate)
+	}
+	query += ` GROUP BY aggregate, aggregate_id ORDER BY aggregate, aggregate_id`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StreamInfo
+	for rows.Next() {
+		var si StreamInfo
+		if err := rows.Scan(&si.Aggregate, &si.AggregateID, &si.Events, &si.LastPosition, &si.Updated); err != nil {
+			return nil, err
+		}
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
 // Poll returns up to limit events with position > after, in position order.
 func (s *Store) Poll(ctx context.Context, after int64, limit int) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
@@ -286,10 +325,56 @@ func (s *Store) Poll(ctx context.Context, after int64, limit int) ([]Event, erro
 	return s.upcastEvents(evs)
 }
 
+// EventQuery filters a log read (the operational feed behind
+// GET /api/cqrs/events and out-of-process consumers).
+type EventQuery struct {
+	// After returns events with position > After (0 = from the start).
+	After int64
+	// Limit caps the batch (<= 0 defaults to 100).
+	Limit int
+	// Aggregate restricts to one aggregate type ("" = all).
+	Aggregate string
+	// Type restricts to one event type ("" = all).
+	Type string
+}
+
+// QueryEvents returns the events matching q in position order. Like Poll,
+// results pass through the installed upcaster: feed consumers see events at
+// their latest schema version.
+func (s *Store) QueryEvents(ctx context.Context, q EventQuery) ([]Event, error) {
+	if q.Limit <= 0 {
+		q.Limit = 100
+	}
+	query := `SELECT position, id, aggregate, aggregate_id, sequence, type, data, metadata, version, created
+		 FROM events WHERE position > ?`
+	args := []any{q.After}
+	if q.Aggregate != "" {
+		query += ` AND aggregate = ?`
+		args = append(args, q.Aggregate)
+	}
+	if q.Type != "" {
+		query += ` AND type = ?`
+		args = append(args, q.Type)
+	}
+	query += ` ORDER BY position LIMIT ?`
+	args = append(args, q.Limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	evs, err := scanEvents(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.upcastEvents(evs)
+}
+
 // SetUpcaster installs the read-path upcaster: every event handed out by
-// LoadStream and Poll is passed through it, so all consumers — deciders,
-// projections, functions, reactors — see events at their latest schema
-// version. The stored row is never rewritten: upcasting is a read-time
+// LoadStream, Poll and QueryEvents is passed through it, so all consumers —
+// deciders, projections, functions, reactors, feed readers — see events at
+// their latest schema version. The stored row is never rewritten: upcasting is a read-time
 // view, consistent with the append-only log. A nil upcaster disables it.
 func (s *Store) SetUpcaster(fn func(Event) (Event, error)) {
 	s.upcastMu.Lock()
