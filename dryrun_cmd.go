@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"pocketcqrs/decider"
-	"pocketcqrs/functions"
+	"github.com/JamesTryand/pocketcqrs/decider"
+	"github.com/JamesTryand/pocketcqrs/functions"
 )
 
 // newDryrunCommand builds the `dryrun` CLI command group: run candidate JS

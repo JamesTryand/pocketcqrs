@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"pocketcqrs/packs"
-	"pocketcqrs/projections"
+	"github.com/JamesTryand/pocketcqrs/packs"
+	"github.com/JamesTryand/pocketcqrs/projections"
 )
 
 // newPackCommand builds the `pack` CLI command group: export/import domain

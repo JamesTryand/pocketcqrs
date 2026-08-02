@@ -9,9 +9,9 @@ import (
 
 	"github.com/pocketbase/pocketbase/core"
 
-	"pocketcqrs/aggregates"
-	"pocketcqrs/events"
-	"pocketcqrs/writeguard"
+	"github.com/JamesTryand/pocketcqrs/aggregates"
+	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/writeguard"
 )
 
 // NewOrders projects order events into the "orders" and "order_lines"

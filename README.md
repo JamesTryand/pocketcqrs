@@ -33,6 +33,12 @@ go run . serve
 
 Then open the PocketBase admin UI at `http://127.0.0.1:8090/_/`.
 
+## Install
+
+```sh
+go install github.com/JamesTryand/pocketcqrs@latest
+```
+
 ## License
 
 MIT (see `LICENSE`). PocketBase itself is MIT-licensed, (c) Gani Georgiev.

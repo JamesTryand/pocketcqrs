@@ -9,8 +9,8 @@ import (
 
 	"github.com/pocketbase/pocketbase/core"
 
-	"pocketcqrs/decider"
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/decider"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 // LoadDeciderFile loads a single JS decider file (for the dryrun CLI).

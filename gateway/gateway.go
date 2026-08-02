@@ -11,8 +11,8 @@ import (
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
-	"pocketcqrs/decider"
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/decider"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 // Config controls the gateway behavior.

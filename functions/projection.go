@@ -10,8 +10,8 @@ import (
 	"github.com/dop251/goja"
 	"github.com/pocketbase/pocketbase/core"
 
-	"pocketcqrs/events"
-	"pocketcqrs/writeguard"
+	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/writeguard"
 )
 
 // ProjectionSpec is a JS projection: its trigger, output schemas and code.

@@ -7,7 +7,7 @@ import (
 
 	"github.com/pocketbase/pocketbase/tests"
 
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 // TestMultiCollectionProjectionApply loads a two-schema projection against a

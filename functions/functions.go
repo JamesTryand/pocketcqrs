@@ -20,8 +20,8 @@ import (
 
 	"github.com/dop251/goja"
 
-	"pocketcqrs/consumers"
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/consumers"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 // Runtime hosts user-defined functions.

@@ -8,7 +8,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/spf13/cobra"
 
-	"pocketcqrs/catalog"
+	"github.com/JamesTryand/pocketcqrs/catalog"
 )
 
 // buildCatalog collects the catalog from the live components (shared by

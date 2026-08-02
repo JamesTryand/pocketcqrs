@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"pocketcqrs/decider"
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/decider"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 const noteDeciderJS = `

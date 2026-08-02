@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 // newDeadletterCommand builds the `deadletter` CLI command group:

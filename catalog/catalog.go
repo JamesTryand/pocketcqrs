@@ -18,11 +18,11 @@ import (
 
 	"github.com/pocketbase/pocketbase/core"
 
-	"pocketcqrs/consumers"
-	"pocketcqrs/decider"
-	"pocketcqrs/events"
-	"pocketcqrs/functions"
-	"pocketcqrs/projections"
+	"github.com/JamesTryand/pocketcqrs/consumers"
+	"github.com/JamesTryand/pocketcqrs/decider"
+	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/functions"
+	"github.com/JamesTryand/pocketcqrs/projections"
 )
 
 // Catalog is the full introspection document.

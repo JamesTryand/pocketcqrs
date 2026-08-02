@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"pocketcqrs/decider"
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/decider"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 // OrderAggregate is the stream/aggregate name for orders.

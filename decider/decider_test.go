@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 type counterState struct {

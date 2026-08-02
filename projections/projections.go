@@ -16,9 +16,9 @@ import (
 
 	"github.com/pocketbase/pocketbase/core"
 
-	"pocketcqrs/consumers"
-	"pocketcqrs/events"
-	"pocketcqrs/writeguard"
+	"github.com/JamesTryand/pocketcqrs/consumers"
+	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/writeguard"
 )
 
 // Projection materializes events into PocketBase collections.

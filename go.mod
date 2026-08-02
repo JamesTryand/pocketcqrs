@@ -1,4 +1,4 @@
-module pocketcqrs
+module github.com/JamesTryand/pocketcqrs
 
 go 1.25.0
 

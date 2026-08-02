@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pocketcqrs/decider"
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/decider"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 func setup(t *testing.T) *decider.Registry {

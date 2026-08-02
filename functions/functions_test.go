@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"pocketcqrs/consumers"
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/consumers"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 func TestEventFunctionDelivery(t *testing.T) {

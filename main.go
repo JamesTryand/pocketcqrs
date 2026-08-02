@@ -11,17 +11,17 @@ import (
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 
-	"pocketcqrs/aggregates"
-	"pocketcqrs/consumers"
-	"pocketcqrs/decider"
-	"pocketcqrs/events"
-	"pocketcqrs/functions"
-	"pocketcqrs/gateway"
-	"pocketcqrs/projections"
-	"pocketcqrs/reactors"
-	"pocketcqrs/writeguard"
+	"github.com/JamesTryand/pocketcqrs/aggregates"
+	"github.com/JamesTryand/pocketcqrs/consumers"
+	"github.com/JamesTryand/pocketcqrs/decider"
+	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/functions"
+	"github.com/JamesTryand/pocketcqrs/gateway"
+	"github.com/JamesTryand/pocketcqrs/projections"
+	"github.com/JamesTryand/pocketcqrs/reactors"
+	"github.com/JamesTryand/pocketcqrs/writeguard"
 
-	_ "pocketcqrs/migrations"
+	_ "github.com/JamesTryand/pocketcqrs/migrations"
 )
 
 // components is filled during bootstrap, before the server starts.

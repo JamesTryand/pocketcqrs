@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"pocketcqrs/events"
+	"github.com/JamesTryand/pocketcqrs/events"
 )
 
 type recorder struct {
