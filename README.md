@@ -13,6 +13,15 @@ A CQRS + functions-as-a-service backend built on [PocketBase](https://pocketbase
 
 Early development — see milestones in the issue worktree (`task_plan.md`). Not affiliated with PocketBase; upstream (`pocketbase/pocketbase`) is an unmodified dependency pinned in `go.mod`.
 
+## Docs
+
+- [Getting started](docs/getting-started.md) — run it, first command, first function, hot reload
+- [JS guide](docs/js-guide.md) — directives, tiers, bindings, determinism, dry-run/dead-letter workflows
+- [Go guide](docs/go-guide.md) — deciders, projections, reactors in Go
+- Reference: [directives](docs/reference/directives.md) · [CLI](docs/reference/cli.md) · [gateway](docs/reference/gateway.md)
+- [Domain docs](docs/domains/README.md) — convention + dogfooded [task](docs/domains/task.md), [order](docs/domains/order.md), [note](docs/domains/note.md)
+- [Contributing](docs/contributing.md)
+
 ## Development
 
 Requires Go 1.25+.
