@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -43,6 +44,14 @@ func main() {
 		"cqrsAllowAnonymous",
 		false,
 		"allow anonymous CQRS command execution (dev only; no actor metadata is stamped)",
+	)
+
+	var strictBoot bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&strictBoot,
+		"cqrsStrictBoot",
+		false,
+		"abort startup if a JS decider fails validation (default: skip the decider and keep serving)",
 	)
 
 	var functionsDir string
@@ -108,14 +117,21 @@ func main() {
 
 		// JS deciders (tier 3): dry-run validated against existing history
 		// at boot, then registered alongside the Go deciders. Failures are
-		// refused loudly — the rest of the system keeps serving.
+		// refused loudly — the rest of the system keeps serving, unless
+		// --cqrsStrictBoot is set (boot aborts instead).
 		for _, spec := range loaded.Deciders {
 			if c.registry.Has(spec.Aggregate) {
+				if strictBoot {
+					return fmt.Errorf("strict boot: JS decider aggregate %q collides with an existing decider", spec.Aggregate)
+				}
 				logger.Error("JS decider aggregate collides with an existing decider, skipped",
 					"aggregate", spec.Aggregate)
 				continue
 			}
 			if err := functions.ValidateDeciderSpec(store, spec); err != nil {
+				if strictBoot {
+					return fmt.Errorf("strict boot: JS decider %q failed validation: %w", spec.Aggregate, err)
+				}
 				logger.Error("JS decider failed validation, NOT registered",
 					"aggregate", spec.Aggregate, "error", err)
 				continue
