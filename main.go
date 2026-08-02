@@ -29,6 +29,7 @@ type components struct {
 	registry *decider.Registry
 	engine   *consumers.Engine
 	httpFns  *functions.HTTPRegistry
+	jsProjs  []*functions.JSProjection
 }
 
 func main() {
@@ -54,6 +55,13 @@ func main() {
 	app.RootCmd.ParseFlags(os.Args[1:])
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
+		// run the default bootstrap first: it creates the data dir and,
+		// crucially, opens the PocketBase DBs — ReconcileSchemas below
+		// needs a live DB
+		if err := e.Next(); err != nil {
+			return err
+		}
+
 		dataDir := e.App.DataDir()
 		if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
 			return err
@@ -83,28 +91,49 @@ func main() {
 			c.engine.Register(p)
 		}
 
+		// functions (FaaS): JS functions loaded from functionsDir
+		rt := functions.NewGojaRuntime(
+			func(msg string, args ...any) { logger.Info(msg, args...) })
+		rt.SetReader(functions.NewAppReader(e.App))
+		httpFns, jsProjSpecs, err := functions.LoadDir(rt, e.App, functionsDir)
+		if err != nil {
+			return err
+		}
+		c.httpFns = httpFns
+
+		// JS projection schemas are materialized at boot (a restart IS the
+		// maintenance window), additively: create/extend, never drop
+		if err := functions.ReconcileSchemas(e.App, jsProjSpecs); err != nil {
+			return err
+		}
+
+		// engine registration order matters: Go projections first, then JS
+		// projections (which may read Go-maintained collections), then
+		// reactors and effect functions
+		for _, spec := range jsProjSpecs {
+			c.jsProjs = append(c.jsProjs, spec.Consumer())
+		}
+		for _, p := range c.jsProjs {
+			c.engine.Register(p)
+		}
+
 		// sagas: reactors dispatch follow-up commands through the registry
 		c.engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.registry,
 			func(msg string, args ...any) { logger.Info(msg, args...) }))
 
 		// write-guard: no out-of-band writes on projection-owned collections
-		writeguard.Register(e.App, projections.GuardedCollections(projs...)...)
-
-		// functions (FaaS): JS functions loaded from functionsDir; event
-		// functions are delivered durably through the consumers engine
-		rt := functions.NewGojaRuntime(
-			func(msg string, args ...any) { logger.Info(msg, args...) })
-		rt.SetReader(functions.NewAppReader(e.App))
-		httpFns, err := functions.LoadDir(rt, functionsDir)
-		if err != nil {
-			return err
+		guarded := allProjections(e.App)
+		for _, p := range c.jsProjs {
+			guarded = append(guarded, p)
 		}
-		c.httpFns = httpFns
+		writeguard.Register(e.App, projections.GuardedCollections(guarded...)...)
+
+		// effect functions: durable delivery through the consumers engine
 		for _, fc := range rt.Consumers() {
 			c.engine.Register(fc)
 		}
 
-		return e.Next()
+		return nil
 	})
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {

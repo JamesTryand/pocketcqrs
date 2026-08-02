@@ -46,6 +46,14 @@ func newProjectionCommand(c *components) *cobra.Command {
 				}
 			}
 			if target == nil {
+				for _, p := range c.jsProjs {
+					if p.Name() == name {
+						target = p
+						break
+					}
+				}
+			}
+			if target == nil {
 				return fmt.Errorf("unknown projection %q", name)
 			}
 			if c.store == nil {
