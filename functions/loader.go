@@ -102,6 +102,12 @@ func LoadDir(rt *GojaRuntime, app core.App, dir string) (*LoadResult, error) {
 					return nil, err
 				}
 			}
+			if t.cron != "" {
+				if err := rt.RegisterCronFunction(t.cron, entry.Name(), src); err != nil {
+					return nil, err
+				}
+				rt.logger("cron function registered", "name", entry.Name(), "schedule", t.cron)
+			}
 			if t.isHTTP {
 				prog, err := goja.Compile(entry.Name(), src, false)
 				if err != nil {
@@ -163,6 +169,7 @@ func buildDeciderSpec(rt *GojaRuntime, filename, src string, t triggers) (*Decid
 type triggers struct {
 	eventTypes   []string // //@trigger event ...
 	isHTTP       bool     // //@trigger http
+	cron         string   // //@trigger cron <schedule>
 	projection   string   // //@trigger projection <name> on ...
 	projectionOn []string
 	schemaRaw    string // //@schema ...
@@ -173,7 +180,7 @@ type triggers struct {
 }
 
 func (t triggers) empty() bool {
-	return len(t.eventTypes) == 0 && !t.isHTTP && t.projection == "" && t.schemaRaw == "" &&
+	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && t.schemaRaw == "" &&
 		t.key == "" && t.decider == "" && len(t.handles) == 0 && len(t.transforms) == 0
 }
 
@@ -214,6 +221,14 @@ func parseTriggers(src string) (triggers, error) {
 					return t, fmt.Errorf("//@trigger decider wants: decider <aggregate>")
 				}
 				t.decider = fields[2]
+			case "cron":
+				if len(fields) < 3 {
+					return t, fmt.Errorf("//@trigger cron wants: cron <schedule>")
+				}
+				if t.cron != "" {
+					return t, fmt.Errorf("only one //@trigger cron per file")
+				}
+				t.cron = strings.Join(fields[2:], " ")
 			default:
 				return t, fmt.Errorf("unknown //@trigger kind %q", fields[1])
 			}

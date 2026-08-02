@@ -39,8 +39,9 @@ type GojaRuntime struct {
 	logger func(msg string, args ...any)
 	reader Reader
 
-	mu  sync.RWMutex
-	fns []*eventFunction
+	mu      sync.RWMutex
+	fns     []*eventFunction
+	cronFns []*cronFunction
 }
 
 // eventFunction is a compiled event function plus its triggers; it is also
@@ -50,6 +51,20 @@ type eventFunction struct {
 	eventTypes []string
 	prog       *goja.Program
 	runtime    *GojaRuntime
+}
+
+// cronFunction is a compiled function fired on a cron schedule.
+type cronFunction struct {
+	name     string
+	schedule string
+	prog     *goja.Program
+}
+
+// CronJob is a registered cron function ready for app.Cron().
+type CronJob struct {
+	Name     string
+	Schedule string
+	Fire     func()
 }
 
 // NewGojaRuntime creates a GojaRuntime. logger may be nil (defaults to no-op).
@@ -73,6 +88,35 @@ func (r *GojaRuntime) RegisterEventFunction(eventTypes []string, name, source st
 	defer r.mu.Unlock()
 	r.fns = append(r.fns, &eventFunction{name: name, eventTypes: eventTypes, prog: prog, runtime: r})
 	return nil
+}
+
+// RegisterCronFunction compiles source as name and schedules it for
+// cron-triggered execution (effect tier: script body runs per tick).
+func (r *GojaRuntime) RegisterCronFunction(schedule, name, source string) error {
+	prog, err := goja.Compile(name, source, false)
+	if err != nil {
+		return fmt.Errorf("functions: compile %s: %w", name, err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cronFns = append(r.cronFns, &cronFunction{name: name, schedule: schedule, prog: prog})
+	return nil
+}
+
+// CronJobs returns the registered cron functions ready for app.Cron().Add.
+func (r *GojaRuntime) CronJobs() []CronJob {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]CronJob, 0, len(r.cronFns))
+	for _, fn := range r.cronFns {
+		fn := fn
+		out = append(out, CronJob{
+			Name:     fn.name,
+			Schedule: fn.schedule,
+			Fire:     func() { r.runCron(fn) },
+		})
+	}
+	return out
 }
 
 // Consumers returns one checkpointed consumer per registered function, for
@@ -128,6 +172,38 @@ func (r *GojaRuntime) newVM(name string) (*goja.Runtime, *time.Timer) {
 }
 
 func (r *GojaRuntime) runEvent(name string, prog *goja.Program, ev events.Event) {
+	var data any
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		r.logger("function event data decode failed", "function", name, "error", err)
+		return
+	}
+	r.runScript(name, prog, map[string]any{
+		"event": map[string]any{
+			"position":    ev.Position,
+			"id":          ev.ID,
+			"aggregate":   ev.Aggregate,
+			"aggregateId": ev.AggregateID,
+			"sequence":    ev.Sequence,
+			"type":        ev.Type,
+			"data":        data,
+			"created":     ev.Created,
+		},
+	})
+}
+
+// runCron executes a cron function's script body with a `job` binding.
+func (r *GojaRuntime) runCron(fn *cronFunction) {
+	r.runScript(fn.name, fn.prog, map[string]any{
+		"job": map[string]any{
+			"name":    fn.name,
+			"firedAt": time.Now().UTC().Format("2006-01-02 15:04:05.000Z"),
+		},
+	})
+}
+
+// runScript runs prog's body once with the given extra globals, logging
+// panics and errors instead of propagating them (effect-tier semantics).
+func (r *GojaRuntime) runScript(name string, prog *goja.Program, globals map[string]any) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			r.logger("function panicked", "function", name, "error", rec)
@@ -137,21 +213,9 @@ func (r *GojaRuntime) runEvent(name string, prog *goja.Program, ev events.Event)
 	vm, timer := r.newVM(name)
 	defer timer.Stop()
 
-	var data any
-	if err := json.Unmarshal(ev.Data, &data); err != nil {
-		r.logger("function event data decode failed", "function", name, "error", err)
-		return
+	for k, v := range globals {
+		vm.Set(k, v)
 	}
-	vm.Set("event", map[string]any{
-		"position":    ev.Position,
-		"id":          ev.ID,
-		"aggregate":   ev.Aggregate,
-		"aggregateId": ev.AggregateID,
-		"sequence":    ev.Sequence,
-		"type":        ev.Type,
-		"data":        data,
-		"created":     ev.Created,
-	})
 
 	if _, err := vm.RunProgram(prog); err != nil {
 		r.logger("function failed", "function", name, "error", err)

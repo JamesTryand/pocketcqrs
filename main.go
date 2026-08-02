@@ -151,6 +151,13 @@ func main() {
 			c.engine.Register(fc)
 		}
 
+		// cron functions: scheduled by PocketBase's cron service
+		for _, job := range rt.CronJobs() {
+			if err := e.App.Cron().Add("fn:"+job.Name, job.Schedule, job.Fire); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 

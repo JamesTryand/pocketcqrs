@@ -7,7 +7,7 @@ A CQRS + functions-as-a-service backend built on [PocketBase](https://pocketbase
 - **Read side**: projections fold events into ordinary PocketBase collections, so the stock REST API, realtime subscriptions, auth rules and admin UI serve queries unchanged. Rebuild a projection offline with `pocketcqrs projection rebuild <name>`.
 - **Write-guard**: direct record writes to guarded collections are rejected for everyone (superusers included); the only writer is the projection engine.
 - **Sagas**: reactors are durable consumers that map committed events to follow-up commands, dispatched back through the registry with causation/correlation metadata — reactions become events like everything else.
-- **Functions (FaaS)**: user-defined JS functions from `pb_functions/` (`//@trigger event ...` / `//@trigger http`), delivered durably (checkpointed, at-least-once), with read-only query-side bindings. Commands and HTTP functions require PocketBase auth by default (`--cqrsAllowAnonymous` for dev).
+- **Functions (FaaS)**: user-defined JS functions from `pb_functions/` — effects (`//@trigger event`), HTTP (`//@trigger http`), cron (`//@trigger cron`), projections (`//@trigger projection` + `//@schema`), and full deciders (`//@trigger decider`) — with durability, determinism tiers and read-only query-side bindings per role. Commands and HTTP functions require PocketBase auth by default (`--cqrsAllowAnonymous` for dev).
 
 ## Status
 

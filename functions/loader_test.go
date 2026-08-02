@@ -123,6 +123,20 @@ func TestParseTriggers(t *testing.T) {
 		t.Fatalf("got %+v", tr)
 	}
 
+	// cron schedule keeps its spaces
+	tr, err = parseTriggers("//@trigger cron */5 * * * *\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.cron != "*/5 * * * *" {
+		t.Fatalf("unexpected cron schedule: %q", tr.cron)
+	}
+
+	// duplicate cron rejected
+	if _, err = parseTriggers("//@trigger cron * * * * *\n//@trigger cron * * * * *\n"); err == nil {
+		t.Fatal("expected duplicate cron error")
+	}
+
 	// directives must lead the file
 	tr, err = parseTriggers("console.log(1)\n//@trigger event A\n")
 	if err != nil {
