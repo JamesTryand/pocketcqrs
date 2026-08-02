@@ -110,6 +110,26 @@ metadata. The Markdown rendering includes a Mermaid flowchart
 implementation prefilled, commands left as TODO rows. Existing files are
 skipped unless `--force`.
 
+## pack
+
+```sh
+pocketcqrs pack export <outdir> --name <name> [--version v] [--description d]
+    [--functions a.js,b.js] [--collections c1,c2]
+pocketcqrs pack import <packdir> [--force]
+```
+
+Export bundles function files (default: all `.js` in `--functionsDir`) plus
+optionally plain (non-projection-owned) collection schemas into a domain
+pack directory (`manifest.json`, `pb_functions/`, `collections.json`).
+Projection-owned collections are refused on export — they're recreated from
+`//@schema` on import. Both directions load-validate the function files
+first.
+
+Import copies the function files into `--functionsDir` (skipping existing
+unless `--force`) and applies `collections.json` via PocketBase's native
+collection import. Activate with a restart or a maintenance-mode reload.
+See [domain packs](../packs.md).
+
 ## superuser (PocketBase)
 
 ```sh

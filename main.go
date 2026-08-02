@@ -75,6 +75,7 @@ func main() {
 	app.RootCmd.AddCommand(newDryrunCommand(c))
 	app.RootCmd.AddCommand(newSystemCommand(c))
 	app.RootCmd.AddCommand(newCatalogCommand(c))
+	app.RootCmd.AddCommand(newPackCommand(c, &functionsDir))
 	app.RootCmd.ParseFlags(os.Args[1:])
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
