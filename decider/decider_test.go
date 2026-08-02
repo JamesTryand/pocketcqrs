@@ -3,6 +3,7 @@ package decider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -45,6 +46,35 @@ func setup(t *testing.T) *Registry {
 	r := NewRegistry(store)
 	Register(r, "counter", counter())
 	return r
+}
+
+func TestUnregister(t *testing.T) {
+	r := setup(t)
+	ctx := context.Background()
+
+	if _, err := r.Handle(ctx, "counter", "c1", Command{Name: "Increment"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// unregistered aggregates are unknown again
+	r.Unregister("counter")
+	r.Unregister("no-such-aggregate") // absent: no-op
+	if _, err := r.Handle(ctx, "counter", "c1", Command{Name: "Increment"}); !errors.Is(err, ErrUnknownAggregate) {
+		t.Fatalf("expected ErrUnknownAggregate, got %v", err)
+	}
+	if r.Has("counter") {
+		t.Fatal("Has reports true after Unregister")
+	}
+
+	// re-registering works; history is intact (folds to count 1, appends #2)
+	Register(r, "counter", counter())
+	appended, err := r.Handle(ctx, "counter", "c1", Command{Name: "Increment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(appended) != 1 || appended[0].Sequence != 2 {
+		t.Fatalf("unexpected events after re-register: %+v", appended)
+	}
 }
 
 func TestHandleWithMetaMergesMetadata(t *testing.T) {

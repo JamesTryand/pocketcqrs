@@ -67,7 +67,24 @@ CREATE TABLE IF NOT EXISTS projection_checkpoints (
 	name     TEXT PRIMARY KEY,
 	position INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS meta (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
+
+// System modes (meta key "mode"): the barrier between serving traffic and
+// schema-changing work (see the reload endpoint and `system maintenance`).
+const (
+	// MetaMode is the meta key holding the system mode.
+	MetaMode = "mode"
+	// ModeRunning is the normal serving mode (default when unset).
+	ModeRunning = "running"
+	// ModeMaintenance rejects domain commands and permits reloading
+	// schema-bearing function files (projection schemas, deciders).
+	ModeMaintenance = "maintenance"
+)
 
 // Store is an append-only event log backed by a single SQLite file.
 type Store struct {
@@ -128,7 +145,15 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 
-	_, err := db.Exec(`PRAGMA user_version = 2`)
+	// v3: meta kv table (system mode, future platform flags)
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS meta (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
+
+	_, err := db.Exec(`PRAGMA user_version = 3`)
 	return err
 }
 
@@ -332,6 +357,42 @@ func (s *Store) SaveCheckpoint(ctx context.Context, name string, position int64)
 		 ON CONFLICT (name) DO UPDATE SET position = excluded.position`,
 		name, position)
 	return err
+}
+
+// GetMeta returns the meta value for key ("" when unset).
+func (s *Store) GetMeta(ctx context.Context, key string) (string, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetMeta upserts a meta value.
+func (s *Store) SetMeta(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO meta (key, value) VALUES (?, ?)
+		 ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+		key, value)
+	return err
+}
+
+// Mode returns the system mode (ModeRunning when never set).
+func (s *Store) Mode(ctx context.Context) (string, error) {
+	mode, err := s.GetMeta(ctx, MetaMode)
+	if err != nil || mode == "" {
+		return ModeRunning, err
+	}
+	return mode, nil
+}
+
+// SetMode persists the system mode (ModeRunning or ModeMaintenance).
+func (s *Store) SetMode(ctx context.Context, mode string) error {
+	if mode != ModeRunning && mode != ModeMaintenance {
+		return fmt.Errorf("events: invalid system mode %q (want %s or %s)", mode, ModeRunning, ModeMaintenance)
+	}
+	return s.SetMeta(ctx, MetaMode, mode)
 }
 
 func scanEvents(rows *sql.Rows) ([]Event, error) {

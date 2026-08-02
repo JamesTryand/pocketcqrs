@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/dop251/goja"
 	"github.com/pocketbase/pocketbase/apis"
@@ -14,6 +15,7 @@ import (
 // HTTPRegistry holds the HTTP-triggered functions.
 type HTTPRegistry struct {
 	runtime *GojaRuntime
+	mu      sync.RWMutex
 	fns     map[string]*goja.Program
 }
 
@@ -23,11 +25,35 @@ func NewHTTPRegistry(runtime *GojaRuntime) *HTTPRegistry {
 }
 
 func (r *HTTPRegistry) register(name string, prog *goja.Program) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.fns[name] = prog
+}
+
+// get returns the compiled function for name (nil when absent).
+func (r *HTTPRegistry) get(name string) (*goja.Program, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	prog, ok := r.fns[name]
+	return prog, ok
+}
+
+// ReplaceFrom swaps the whole function map for other's (hot reload): the
+// registry identity — captured by the route handlers at serve time — is
+// preserved, so bound routes start serving the new code immediately.
+func (r *HTTPRegistry) ReplaceFrom(other *HTTPRegistry) {
+	other.mu.RLock()
+	fns := other.fns
+	other.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fns = fns
 }
 
 // Names returns the registered function names (their /api/fn/ paths).
 func (r *HTTPRegistry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]string, 0, len(r.fns))
 	for name := range r.fns {
 		out = append(out, name)
@@ -47,7 +73,7 @@ func (r *HTTPRegistry) Names() []string {
 func RegisterHTTPRoutes(e *core.ServeEvent, reg *HTTPRegistry, requireAuth bool) {
 	handler := func(re *core.RequestEvent) error {
 		name := re.Request.PathValue("name")
-		prog, ok := reg.fns[name]
+		prog, ok := reg.get(name)
 		if !ok {
 			return apis.NewNotFoundError("unknown function: "+name, nil)
 		}

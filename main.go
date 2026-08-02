@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -32,6 +33,14 @@ type components struct {
 	httpFns   *functions.HTTPRegistry
 	jsProjs   []*functions.JSProjection
 	fnRuntime *functions.GojaRuntime
+
+	// jsDeciders tracks JS-managed aggregates (vs built-in Go deciders)
+	// with their active specs, for hot-reload swaps and upcaster rebuilds.
+	jsDeciders map[string]*functions.DeciderSpec
+	// cronJobs lists the registered cron job ids ("fn:"+name).
+	cronJobs []string
+	// reloadMu serializes hot reloads.
+	reloadMu sync.Mutex
 }
 
 func main() {
@@ -64,6 +73,7 @@ func main() {
 	app.RootCmd.AddCommand(newProjectionCommand(c))
 	app.RootCmd.AddCommand(newDeadletterCommand(c))
 	app.RootCmd.AddCommand(newDryrunCommand(c))
+	app.RootCmd.AddCommand(newSystemCommand(c))
 	app.RootCmd.ParseFlags(os.Args[1:])
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
@@ -98,6 +108,11 @@ func main() {
 		// write side: deciders + command handling
 		c.registry = decider.NewRegistry(store)
 		aggregates.RegisterAll(c.registry)
+		c.jsDeciders = map[string]*functions.DeciderSpec{}
+
+		// the gateway rejects domain commands while the system is in
+		// maintenance mode (hot reload of schema-bearing functions)
+		gatewayCfg.Mode = store.Mode
 
 		logger := e.App.Logger()
 
@@ -146,6 +161,7 @@ func main() {
 				continue
 			}
 			c.registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
+			c.jsDeciders[spec.Aggregate] = spec
 			validatedDeciders = append(validatedDeciders, spec)
 			logger.Info("JS decider active", "aggregate", spec.Aggregate)
 		}
@@ -190,9 +206,11 @@ func main() {
 
 		// cron functions: scheduled by PocketBase's cron service
 		for _, job := range rt.CronJobs() {
-			if err := e.App.Cron().Add("fn:"+job.Name, job.Schedule, job.Fire); err != nil {
+			id := "fn:" + job.Name
+			if err := e.App.Cron().Add(id, job.Schedule, job.Fire); err != nil {
 				return err
 			}
+			c.cronJobs = append(c.cronJobs, id)
 		}
 
 		return nil
@@ -201,6 +219,7 @@ func main() {
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		gateway.RegisterRoutes(e, c.registry, gatewayCfg)
 		functions.RegisterHTTPRoutes(e, c.httpFns, !gatewayCfg.AllowAnonymous)
+		registerReloadRoute(e, c, functionsDir)
 		c.engine.Start(context.Background())
 		return e.Next()
 	})

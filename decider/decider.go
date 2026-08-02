@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"pocketcqrs/events"
@@ -35,8 +36,11 @@ type Decider[S any] struct {
 }
 
 // Registry maps aggregate names to their deciders and executes commands.
+// The map is mutex-guarded so deciders can be swapped (hot reload) while
+// the gateway is serving commands.
 type Registry struct {
 	store    *events.Store
+	mu       sync.RWMutex
 	deciders map[string]erased
 }
 
@@ -62,6 +66,8 @@ func NewRegistry(store *events.Store) *Registry {
 
 // Register adds a decider for an aggregate name.
 func Register[S any](r *Registry, aggregate string, d *Decider[S]) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.deciders[aggregate] = erased{
 		initial: func() any { return d.InitialState() },
 		decide: func(cmd Command, state any, _ map[string]any) ([]events.NewEvent, error) {
@@ -75,11 +81,23 @@ func Register[S any](r *Registry, aggregate string, d *Decider[S]) {
 
 // RegisterUntyped adds an adapter-provided decider (e.g. a JavaScript one).
 func (r *Registry) RegisterUntyped(aggregate string, d Untyped) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.deciders[aggregate] = erased{initial: d.Initial, decide: d.Decide, evolve: d.Evolve}
+}
+
+// Unregister drops the decider for aggregate (no-op if absent): a JS
+// decider whose file was removed stops serving commands (404).
+func (r *Registry) Unregister(aggregate string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.deciders, aggregate)
 }
 
 // Has reports whether an aggregate is registered.
 func (r *Registry) Has(aggregate string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	_, ok := r.deciders[aggregate]
 	return ok
 }
@@ -102,7 +120,9 @@ func (r *Registry) Handle(ctx context.Context, aggregate, id string, cmd Command
 // context, and it is recorded in the produced events — the time the
 // decider saw is part of history.
 func (r *Registry) HandleWithMeta(ctx context.Context, aggregate, id string, cmd Command, meta map[string]any) ([]events.Event, error) {
+	r.mu.RLock()
 	d, ok := r.deciders[aggregate]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAggregate, aggregate)
 	}

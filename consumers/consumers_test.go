@@ -81,6 +81,45 @@ func TestRunOnceDeliversInOrderWithCheckpoint(t *testing.T) {
 	}
 }
 
+func TestUnregisterStopsDeliveryAndCheckpointResumes(t *testing.T) {
+	var dir string
+	store := openStore(t, &dir)
+	defer store.Close()
+	ctx := context.Background()
+
+	rec := &recorder{}
+	engine := NewEngine(store, nil)
+	engine.Register(rec)
+
+	appendOne(t, store, "t1")
+	if err := engine.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.count() != 1 {
+		t.Fatalf("expected 1 delivered, got %d", rec.count())
+	}
+
+	// unregistered consumers get no deliveries...
+	engine.Unregister(rec.Name())
+	engine.Unregister("no-such-consumer") // absent: no-op
+	appendOne(t, store, "t2")
+	if err := engine.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.count() != 1 {
+		t.Fatalf("expected no delivery while unregistered, got %d", rec.count())
+	}
+
+	// ...and re-registering resumes from the durable checkpoint
+	engine.Register(rec)
+	if err := engine.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.count() != 2 || rec.seen[1].AggregateID != "t2" {
+		t.Fatalf("expected checkpoint resume with t2, got %+v", rec.seen)
+	}
+}
+
 func TestDeliverySurvivesRestart(t *testing.T) {
 	var dir string
 	ctx := context.Background()

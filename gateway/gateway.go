@@ -2,6 +2,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,6 +20,10 @@ type Config struct {
 	// AllowAnonymous permits command execution without an auth token
 	// (dev only; commands then carry no actor metadata).
 	AllowAnonymous bool
+	// Mode reports the current system mode; domain commands are rejected
+	// with 503 while it returns events.ModeMaintenance (schema-bearing
+	// function files reload behind that barrier). Nil disables the check.
+	Mode func(ctx context.Context) (string, error)
 }
 
 // RegisterRoutes binds the command endpoint:
@@ -30,11 +35,30 @@ type Config struct {
 // token is required; the authenticated record is stamped into every
 // resulting event's metadata as {"actor": ..., "actorCollection": ...}.
 //
+// While the system is in maintenance mode (see Config.Mode), commands are
+// rejected with 503: the write side is paused so schema-bearing functions
+// can be reloaded safely.
+//
 // Returns 200 with the appended events, 400 for domain/validation errors,
 // 401 without a token, 404 for unknown aggregates, 409 for concurrency
-// conflicts.
+// conflicts, 503 in maintenance mode.
 func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) {
 	route := e.Router.POST("/api/cqrs/{aggregate}/{id}/{command}", func(re *core.RequestEvent) error {
+		if cfg.Mode != nil {
+			mode, err := cfg.Mode(re.Request.Context())
+			if err != nil {
+				// fail closed: the barrier's state must be known
+				return re.JSON(http.StatusInternalServerError,
+					map[string]string{"error": "failed reading system mode: " + err.Error()})
+			}
+			if mode == events.ModeMaintenance {
+				return re.JSON(http.StatusServiceUnavailable, map[string]string{
+					"error": "system is in maintenance mode: domain commands are temporarily rejected",
+					"hint":  "retry after maintenance ends (pocketcqrs system maintenance off)",
+				})
+			}
+		}
+
 		aggregate := re.Request.PathValue("aggregate")
 		id := re.Request.PathValue("id")
 		cmdName := re.Request.PathValue("command")

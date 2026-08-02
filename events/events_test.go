@@ -116,6 +116,54 @@ func TestStoreUpcaster(t *testing.T) {
 	}
 }
 
+func TestMetaAndSystemMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// meta defaults to absent; mode defaults to running
+	if v, err := s.GetMeta(ctx, "nope"); err != nil || v != "" {
+		t.Fatalf("expected empty meta, got %q (err=%v)", v, err)
+	}
+	if mode, err := s.Mode(ctx); err != nil || mode != ModeRunning {
+		t.Fatalf("expected default mode %s, got %q (err=%v)", ModeRunning, mode, err)
+	}
+
+	// mode round-trips, and survives a reopen (durability)
+	if err := s.SetMode(ctx, ModeMaintenance); err != nil {
+		t.Fatal(err)
+	}
+	if mode, _ := s.Mode(ctx); mode != ModeMaintenance {
+		t.Fatalf("expected %s, got %q", ModeMaintenance, mode)
+	}
+	if err := s.SetMode(ctx, "bogus"); err == nil {
+		t.Fatal("expected invalid mode rejection")
+	}
+	s.Close()
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if mode, _ := s2.Mode(ctx); mode != ModeMaintenance {
+		t.Fatalf("mode not durable across reopen: %q", mode)
+	}
+
+	// generic kv upsert
+	if err := s2.SetMeta(ctx, "k", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.SetMeta(ctx, "k", "v2"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s2.GetMeta(ctx, "k"); v != "v2" {
+		t.Fatalf("expected upsert to win, got %q", v)
+	}
+}
+
 func TestAppendConcurrencyConflict(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
