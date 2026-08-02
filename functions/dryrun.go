@@ -129,9 +129,10 @@ type ProjectionDryRun struct {
 	Events  int
 	Upserts int
 	Deletes int
-	// Rows is the final simulated row set (key -> fields), mirroring
-	// applyOp semantics (upsert merges, delete removes).
-	Rows map[string]map[string]any
+	// Rows is the final simulated row set per collection
+	// (collection -> key -> fields), mirroring applyOp semantics
+	// (upsert merges, delete removes).
+	Rows map[string]map[string]map[string]any
 }
 
 // DryRunProjection runs a candidate projection over the whole event log
@@ -139,7 +140,7 @@ type ProjectionDryRun struct {
 // pb.query calls) and nothing is written.
 func DryRunProjection(store *events.Store, spec *ProjectionSpec) (*ProjectionDryRun, error) {
 	ctx := context.Background()
-	out := &ProjectionDryRun{Name: spec.Name, Rows: map[string]map[string]any{}}
+	out := &ProjectionDryRun{Name: spec.Name, Rows: map[string]map[string]map[string]any{}}
 
 	var pos int64
 	for {
@@ -166,20 +167,29 @@ func DryRunProjection(store *events.Store, spec *ProjectionSpec) (*ProjectionDry
 				return nil, fmt.Errorf("dryrun: projection %s: %w", spec.Name, err)
 			}
 			for _, op := range ops {
+				s, err := spec.resolveSchema(op)
+				if err != nil {
+					return nil, fmt.Errorf("dryrun: projection %s: %w", spec.Name, err)
+				}
+				rows := out.Rows[s.Collection]
+				if rows == nil {
+					rows = map[string]map[string]any{}
+					out.Rows[s.Collection] = rows
+				}
 				key := fmt.Sprint(op.key)
 				if op.delete {
 					out.Deletes++
-					delete(out.Rows, key)
+					delete(rows, key)
 					continue
 				}
 				out.Upserts++
-				row := out.Rows[key]
+				row := rows[key]
 				if row == nil {
-					row = map[string]any{spec.Schema.Key: op.key}
-					out.Rows[key] = row
+					row = map[string]any{s.Key: op.key}
+					rows[key] = row
 				}
 				for name, value := range op.fields {
-					if reservedRowFields[name] || name == spec.Schema.Key {
+					if reservedRowFields[name] || name == s.Key {
 						continue
 					}
 					row[name] = value

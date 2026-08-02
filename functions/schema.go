@@ -94,11 +94,12 @@ func (s *SchemaSpec) uniqueIndexSQL() string {
 // ReconcileSchemas materializes declared schemas into PocketBase collections
 // at boot time (a restart IS the maintenance window).
 //
-// Two passes: the first creates/extends collections with their non-relation
-// fields, the second adds missing relation fields and the key indexes.
-// Relation targets may be collections declared by other specs (in any
-// order) or pre-existing ones (e.g. migration-created or auth collections),
-// so no relation is wired before every declared collection exists.
+// Two passes over every schema of every spec: the first creates/extends
+// collections with their non-relation fields, the second adds missing
+// relation fields and the key indexes. Relation targets may be collections
+// declared by other specs (in any order) or pre-existing ones (e.g.
+// migration-created or auth collections), so no relation is wired before
+// every declared collection exists.
 //
 // Reconciliation is additive-only, mirroring the append-only event rule:
 // missing collections are created, missing fields and the key index are
@@ -106,13 +107,17 @@ func (s *SchemaSpec) uniqueIndexSQL() string {
 // declared/actual type mismatch is logged and kept as-is).
 func ReconcileSchemas(app core.App, specs []*ProjectionSpec) error {
 	for _, spec := range specs {
-		if err := reconcileBase(app, spec); err != nil {
-			return err
+		for _, s := range spec.Schemas {
+			if err := reconcileBase(app, spec, s); err != nil {
+				return err
+			}
 		}
 	}
 	for _, spec := range specs {
-		if err := reconcileRelations(app, spec); err != nil {
-			return err
+		for _, s := range spec.Schemas {
+			if err := reconcileRelations(app, spec, s); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -120,8 +125,7 @@ func ReconcileSchemas(app core.App, specs []*ProjectionSpec) error {
 
 // reconcileBase is pass 1: the collection exists and carries all declared
 // non-relation fields.
-func reconcileBase(app core.App, spec *ProjectionSpec) error {
-	s := spec.Schema
+func reconcileBase(app core.App, spec *ProjectionSpec, s *SchemaSpec) error {
 	col, err := app.FindCollectionByNameOrId(s.Collection)
 	if err != nil {
 		return createCollection(app, s)
@@ -154,8 +158,7 @@ func reconcileBase(app core.App, spec *ProjectionSpec) error {
 // reconcileRelations is pass 2: missing relation fields are added (the
 // target collection id is resolved by name — every declared collection
 // exists by now) along with the key index.
-func reconcileRelations(app core.App, spec *ProjectionSpec) error {
-	s := spec.Schema
+func reconcileRelations(app core.App, spec *ProjectionSpec, s *SchemaSpec) error {
 	col, err := app.FindCollectionByNameOrId(s.Collection)
 	if err != nil {
 		return fmt.Errorf("schema reconcile: collection %s missing after base pass: %w", s.Collection, err)

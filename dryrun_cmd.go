@@ -134,29 +134,40 @@ func newDryrunCommand(c *components) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cmd.Printf("Simulated %q over %d event(s): %d upsert(s), %d delete(s), %d final row(s).\n",
-				res.Name, res.Events, res.Upserts, res.Deletes, len(res.Rows))
+			totalRows := 0
+			for _, rows := range res.Rows {
+				totalRows += len(rows)
+			}
+			cmd.Printf("Simulated %q over %d event(s): %d upsert(s), %d delete(s), %d final row(s) across %d collection(s).\n",
+				res.Name, res.Events, res.Upserts, res.Deletes, totalRows, len(spec.Schemas))
 
 			diff, _ := cmd.Flags().GetBool("diff")
 			if !diff {
 				return nil
 			}
-			live, err := c.app.FindRecordsByFilter(spec.Schema.Collection, "", "", -1, 0)
-			if err != nil {
-				return err
+			totalDiffs := 0
+			for _, s := range spec.Schemas {
+				live, err := c.app.FindRecordsByFilter(s.Collection, "", "", -1, 0)
+				if err != nil {
+					return err
+				}
+				liveRows := make([]map[string]any, 0, len(live))
+				for _, rec := range live {
+					liveRows = append(liveRows, rec.PublicExport())
+				}
+				diffs := functions.DiffRows(res.Rows[s.Collection], liveRows, s.Key)
+				if len(diffs) == 0 {
+					cmd.Printf("No differences in %s: simulation matches the live collection.\n", s.Collection)
+					continue
+				}
+				totalDiffs += len(diffs)
+				cmd.Printf("%d difference(s) in %s vs the live collection:\n", len(diffs), s.Collection)
+				for _, d := range diffs {
+					cmd.Println("  " + d)
+				}
 			}
-			liveRows := make([]map[string]any, 0, len(live))
-			for _, rec := range live {
-				liveRows = append(liveRows, rec.PublicExport())
-			}
-			diffs := functions.DiffRows(res.Rows, liveRows, spec.Schema.Key)
-			if len(diffs) == 0 {
-				cmd.Println("No differences: simulation matches the live collection.")
-				return nil
-			}
-			cmd.Printf("%d difference(s) vs the live collection:\n", len(diffs))
-			for _, d := range diffs {
-				cmd.Println("  " + d)
+			if totalDiffs == 0 && len(spec.Schemas) > 1 {
+				cmd.Println("All collections match.")
 			}
 			return nil
 		},

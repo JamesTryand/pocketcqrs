@@ -79,7 +79,7 @@ func TestReconcileSchemasRelations(t *testing.T) {
 	mk := func(collection, key string, fields ...FieldSpec) *ProjectionSpec {
 		return &ProjectionSpec{
 			Name:    collection,
-			Schema:  &SchemaSpec{Collection: collection, Key: key, Fields: fields},
+			Schemas: []*SchemaSpec{{Collection: collection, Key: key, Fields: fields}},
 			runtime: rt,
 		}
 	}
@@ -154,10 +154,10 @@ func TestReconcileSchemasRelationTargetMissing(t *testing.T) {
 	rt := NewGojaRuntime(nil)
 	specs := []*ProjectionSpec{{
 		Name: "broken",
-		Schema: &SchemaSpec{Collection: "broken", Key: "ref", Fields: []FieldSpec{
+		Schemas: []*SchemaSpec{{Collection: "broken", Key: "ref", Fields: []FieldSpec{
 			{Name: "ref", Type: "text"},
 			{Name: "ghost", Type: "relation", RelationTarget: "no_such_collection"},
-		}},
+		}}},
 		runtime: rt,
 	}}
 	if err := ReconcileSchemas(app, specs); err == nil {
@@ -194,9 +194,21 @@ func TestNormalizeOps(t *testing.T) {
 		t.Fatalf("array: ops=%v err=%v", ops, err)
 	}
 
+	// collection attribute routes (both op kinds)
+	ops, err = normalizeOps([]any{
+		map[string]any{"collection": "c1", "upsert": map[string]any{"key": "a", "fields": map[string]any{}}},
+		map[string]any{"collection": "c2", "delete": "b"},
+	})
+	if err != nil || len(ops) != 2 || ops[0].collection != "c1" || ops[1].collection != "c2" {
+		t.Fatalf("collection: ops=%v err=%v", ops, err)
+	}
+
 	// malformed
 	if _, err = normalizeOps(map[string]any{"upsert": "nope"}); err == nil {
 		t.Fatal("expected malformed upsert error")
+	}
+	if _, err = normalizeOps(map[string]any{"collection": 42, "delete": "b"}); err == nil {
+		t.Fatal("expected non-string collection error")
 	}
 }
 

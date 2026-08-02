@@ -14,14 +14,25 @@ import (
 	"pocketcqrs/writeguard"
 )
 
-// ProjectionSpec is a JS projection: its trigger, output schema and code.
+// ProjectionSpec is a JS projection: its trigger, output schemas and code.
+// A projection may declare several //@schema blocks (multi-collection);
+// its row ops then route by their "collection" attribute.
 type ProjectionSpec struct {
 	Name       string
 	EventTypes []string
-	Schema     *SchemaSpec
+	Schemas    []*SchemaSpec
 	Prog       *goja.Program
 	runtime    *GojaRuntime
 	app        core.App
+}
+
+// Collections lists the guarded collections this projection owns.
+func (spec *ProjectionSpec) Collections() []string {
+	out := make([]string, 0, len(spec.Schemas))
+	for _, s := range spec.Schemas {
+		out = append(out, s.Collection)
+	}
+	return out
 }
 
 // JSProjection is a checkpointed consumer running a user-defined
@@ -36,7 +47,7 @@ func (spec *ProjectionSpec) Consumer() *JSProjection { return &JSProjection{spec
 func (p *JSProjection) Name() string { return p.spec.Name }
 
 // Collections lists the guarded collections this projection owns.
-func (p *JSProjection) Collections() []string { return []string{p.spec.Schema.Collection} }
+func (p *JSProjection) Collections() []string { return p.spec.Collections() }
 
 // Apply runs project(event) and applies the returned ops. VM errors and op
 // failures are returned: a failing projection blocks at the failing event
@@ -58,7 +69,11 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 
 	ctx = writeguard.MarkInternal(ctx)
 	for _, op := range ops {
-		if err := p.spec.applyOp(ctx, op); err != nil {
+		s, err := p.spec.resolveSchema(op)
+		if err != nil {
+			return fmt.Errorf("projection %s: %w", p.spec.Name, err)
+		}
+		if err := p.spec.applyOp(ctx, s, op); err != nil {
 			return fmt.Errorf("projection %s: %w", p.spec.Name, err)
 		}
 	}
@@ -135,15 +150,18 @@ func seedRandom(vm *goja.Runtime, seed int64) {
 // ---------------------------------------------------------------------
 
 // rowOp is one declarative row operation returned by project(event).
+// collection names the target schema; empty routes to the projection's
+// only schema (ambiguous and rejected when several are declared).
 type rowOp struct {
-	delete bool
-	key    any
-	fields map[string]any
+	collection string
+	delete     bool
+	key        any
+	fields     map[string]any
 }
 
 // normalizeOps converts the project() return value into row ops:
 // undefined/null -> none; {upsert:{key,fields}} / {delete:key} -> one;
-// an array of those -> many.
+// an array of those -> many. Each op may carry a "collection" attribute.
 func normalizeOps(result any) ([]rowOp, error) {
 	if result == nil {
 		return nil, nil
@@ -173,8 +191,16 @@ func normalizeOp(v any) (rowOp, bool, error) {
 	if !ok {
 		return rowOp{}, false, fmt.Errorf("op must be an object, got %T", v)
 	}
+	var collection string
+	if c, ok := m["collection"]; ok {
+		if s, ok := c.(string); ok {
+			collection = s
+		} else {
+			return rowOp{}, false, fmt.Errorf("op collection must be a string, got %T", c)
+		}
+	}
 	if del, ok := m["delete"]; ok {
-		return rowOp{delete: true, key: del}, true, nil
+		return rowOp{collection: collection, delete: true, key: del}, true, nil
 	}
 	if up, ok := m["upsert"]; ok {
 		um, ok := up.(map[string]any)
@@ -182,22 +208,40 @@ func normalizeOp(v any) (rowOp, bool, error) {
 			return rowOp{}, false, fmt.Errorf("upsert must be {key, fields}, got %T", up)
 		}
 		fields, _ := um["fields"].(map[string]any)
-		return rowOp{key: um["key"], fields: fields}, true, nil
+		return rowOp{collection: collection, key: um["key"], fields: fields}, true, nil
 	}
 	return rowOp{}, false, nil
+}
+
+// resolveSchema determines which declared schema an op targets: an explicit
+// op.collection must name a declared schema; without one the projection
+// must declare exactly one schema.
+func (spec *ProjectionSpec) resolveSchema(op rowOp) (*SchemaSpec, error) {
+	if op.collection != "" {
+		for _, s := range spec.Schemas {
+			if s.Collection == op.collection {
+				return s, nil
+			}
+		}
+		return nil, fmt.Errorf("op targets undeclared collection %q", op.collection)
+	}
+	if len(spec.Schemas) == 1 {
+		return spec.Schemas[0], nil
+	}
+	return nil, fmt.Errorf("op is ambiguous: projection declares %d schemas, set the op's \"collection\"", len(spec.Schemas))
 }
 
 // reservedRowFields may not be set by projection ops.
 var reservedRowFields = map[string]bool{"id": true, "created": true, "updated": true}
 
-// applyOp applies one row op to the declared collection with the internal
+// applyOp applies one row op to the schema's collection with the internal
 // writeguard marker. Upserts are keyed (idempotent); deletes are no-ops
 // when the row is absent.
-func (spec *ProjectionSpec) applyOp(ctx context.Context, op rowOp) error {
+func (spec *ProjectionSpec) applyOp(ctx context.Context, s *SchemaSpec, op rowOp) error {
 	app := spec.app
-	keyField := spec.Schema.Key
+	keyField := s.Key
 
-	rec, err := app.FindFirstRecordByData(spec.Schema.Collection, keyField, op.key)
+	rec, err := app.FindFirstRecordByData(s.Collection, keyField, op.key)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -210,7 +254,7 @@ func (spec *ProjectionSpec) applyOp(ctx context.Context, op rowOp) error {
 	}
 
 	if rec == nil {
-		col, err := app.FindCollectionByNameOrId(spec.Schema.Collection)
+		col, err := app.FindCollectionByNameOrId(s.Collection)
 		if err != nil {
 			return err
 		}

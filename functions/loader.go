@@ -27,7 +27,12 @@ type LoadResult struct {
 //	//@trigger projection <name> on <EventTypes> -> checkpointed JS projection;
 //	//@schema <collection> <field>:<type> ...       requires //@schema + //@key;
 //	//@key <field>                                  type: text|number|bool|date|json
-//	                                                or relation(<collection>)
+//	                                                or relation(<collection>).
+//	                                                Repeat //@schema (+ its //@key)
+//	                                                to write multiple collections;
+//	                                                ops then need a "collection".
+//	                                                Each //@key pairs with the most
+//	                                                recent //@schema.
 //	//@trigger decider <aggregate>               -> JS decider (tier 3);
 //	//@handles <EventTypes...>                      requires //@handles
 //	//@transform <Type> <from> <to>              -> upcaster fn transform_<Type>_<from>_to_<to>
@@ -87,7 +92,7 @@ func LoadDir(rt *GojaRuntime, app core.App, dir string) (*LoadResult, error) {
 				return nil, err
 			}
 			result.Projections = append(result.Projections, spec)
-			rt.logger("JS projection registered", "name", spec.Name, "collection", spec.Schema.Collection)
+			rt.logger("JS projection registered", "name", spec.Name, "collections", spec.Collections())
 
 		case t.decider != "":
 			spec, err := buildDeciderSpec(rt, entry.Name(), src, t)
@@ -125,12 +130,21 @@ func LoadDir(rt *GojaRuntime, app core.App, dir string) (*LoadResult, error) {
 }
 
 func buildProjectionSpec(rt *GojaRuntime, app core.App, filename, src string, t triggers) (*ProjectionSpec, error) {
-	if t.schemaRaw == "" {
+	if len(t.schemas) == 0 {
 		return nil, fmt.Errorf("functions: %s: projection %q is missing its //@schema directive", filename, t.projection)
 	}
-	schema, err := parseSchemaDirective(t.schemaRaw, t.key)
-	if err != nil {
-		return nil, fmt.Errorf("functions: %s: %w", filename, err)
+	schemas := make([]*SchemaSpec, 0, len(t.schemas))
+	seen := map[string]bool{}
+	for _, rs := range t.schemas {
+		s, err := parseSchemaDirective(rs.raw, rs.key)
+		if err != nil {
+			return nil, fmt.Errorf("functions: %s: %w", filename, err)
+		}
+		if seen[s.Collection] {
+			return nil, fmt.Errorf("functions: %s: duplicate //@schema for collection %q", filename, s.Collection)
+		}
+		seen[s.Collection] = true
+		schemas = append(schemas, s)
 	}
 	prog, err := goja.Compile(filename, src, false)
 	if err != nil {
@@ -139,7 +153,7 @@ func buildProjectionSpec(rt *GojaRuntime, app core.App, filename, src string, t 
 	return &ProjectionSpec{
 		Name:       t.projection,
 		EventTypes: t.projectionOn,
-		Schema:     schema,
+		Schemas:    schemas,
 		Prog:       prog,
 		runtime:    rt,
 		app:        app,
@@ -166,6 +180,13 @@ func buildDeciderSpec(rt *GojaRuntime, filename, src string, t triggers) (*Decid
 	}, nil
 }
 
+// rawSchema is one //@schema directive and the //@key paired with it
+// (a //@key belongs to the most recent //@schema).
+type rawSchema struct {
+	raw string
+	key string
+}
+
 // triggers holds the parsed //@ directives of one function file.
 type triggers struct {
 	eventTypes   []string // //@trigger event ...
@@ -173,16 +194,15 @@ type triggers struct {
 	cron         string   // //@trigger cron <schedule>
 	projection   string   // //@trigger projection <name> on ...
 	projectionOn []string
-	schemaRaw    string // //@schema ...
-	key          string // //@key ...
-	decider      string   // //@trigger decider <aggregate>
-	handles      []string // //@handles ...
+	schemas      []rawSchema // //@schema ... (+ its //@key), repeatable
+	decider      string      // //@trigger decider <aggregate>
+	handles      []string    // //@handles ...
 	transforms   []TransformSpec
 }
 
 func (t triggers) empty() bool {
-	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && t.schemaRaw == "" &&
-		t.key == "" && t.decider == "" && len(t.handles) == 0 && len(t.transforms) == 0
+	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && len(t.schemas) == 0 &&
+		t.decider == "" && len(t.handles) == 0 && len(t.transforms) == 0
 }
 
 // parseTriggers scans the leading comment lines for //@ directives.
@@ -234,12 +254,21 @@ func parseTriggers(src string) (triggers, error) {
 				return t, fmt.Errorf("unknown //@trigger kind %q", fields[1])
 			}
 		case "schema":
-			t.schemaRaw = strings.TrimSpace(strings.TrimPrefix(rest, "schema"))
+			t.schemas = append(t.schemas, rawSchema{
+				raw: strings.TrimSpace(strings.TrimPrefix(rest, "schema")),
+			})
 		case "key":
 			if len(fields) != 2 {
 				return t, fmt.Errorf("//@key wants exactly one field name")
 			}
-			t.key = fields[1]
+			if len(t.schemas) == 0 {
+				return t, fmt.Errorf("//@key requires a preceding //@schema")
+			}
+			last := &t.schemas[len(t.schemas)-1]
+			if last.key != "" {
+				return t, fmt.Errorf("duplicate //@key for one //@schema")
+			}
+			last.key = fields[1]
 		case "handles":
 			t.handles = append(t.handles, fields[1:]...)
 		case "transform":

@@ -114,6 +114,83 @@ func TestDryRunDecide(t *testing.T) {
 	}
 }
 
+func TestDryRunProjectionMultiCollection(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	if _, err := store.Append(ctx, "sale", "s1", 0, []events.NewEvent{
+		{Type: "SalePlaced", Data: json.RawMessage(`{"cust":"c1","sku":"p1","qty":2}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := NewGojaRuntime(nil)
+	src := `//@trigger projection sales on SalePlaced
+//@schema customers cust:text total:number
+//@key cust
+//@schema products sku:text sold:number
+//@key sku
+function project(event) {
+	return [
+		{ collection: "customers", upsert: { key: event.data.cust, fields: { total: event.data.qty } } },
+		{ collection: "products", upsert: { key: event.data.sku, fields: { sold: event.data.qty } } },
+	];
+}
+`
+	spec, err := LoadProjectionFile(rt, nil, writeTempFn(t, "sales.js", src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := DryRunProjection(store, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Upserts != 2 || len(res.Rows) != 2 {
+		t.Fatalf("unexpected simulation: %+v", res)
+	}
+	if res.Rows["customers"]["c1"]["total"] != int64(2) && res.Rows["customers"]["c1"]["total"] != float64(2) {
+		t.Fatalf("unexpected customers rows: %+v", res.Rows["customers"])
+	}
+	if res.Rows["products"]["p1"]["sold"] == nil {
+		t.Fatalf("unexpected products rows: %+v", res.Rows["products"])
+	}
+
+	// an op without collection is ambiguous for a multi-schema projection
+	ambSrc := `//@trigger projection amb on SalePlaced
+//@schema customers cust:text
+//@key cust
+//@schema products sku:text
+//@key sku
+function project(event) { return { upsert: { key: "x", fields: {} } }; }
+`
+	ambSpec, err := LoadProjectionFile(rt, nil, writeTempFn(t, "amb.js", ambSrc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DryRunProjection(store, ambSpec); err == nil {
+		t.Fatal("expected ambiguity error")
+	}
+
+	// an op naming an undeclared collection is rejected
+	undSrc := `//@trigger projection und on SalePlaced
+//@schema customers cust:text
+//@key cust
+function project(event) { return { collection: "nope", upsert: { key: "x", fields: {} } }; }
+`
+	undSpec, err := LoadProjectionFile(rt, nil, writeTempFn(t, "und.js", undSrc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DryRunProjection(store, undSpec); err == nil {
+		t.Fatal("expected undeclared collection error")
+	}
+}
+
 func TestDryRunProjectionAndDiff(t *testing.T) {
 	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {
@@ -152,21 +229,21 @@ function project(event) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Events != 2 || res.Upserts != 2 || len(res.Rows) != 2 {
+	if res.Events != 2 || res.Upserts != 2 || len(res.Rows["counts"]) != 2 {
 		t.Fatalf("unexpected simulation: %+v", res)
 	}
 
 	// diff: identical
-	diffs := DiffRows(res.Rows, []map[string]any{
-		{"customerRef": "c0", "n": res.Rows["c0"]["n"]},
-		{"customerRef": "c1", "n": res.Rows["c1"]["n"]},
+	diffs := DiffRows(res.Rows["counts"], []map[string]any{
+		{"customerRef": "c0", "n": res.Rows["counts"]["c0"]["n"]},
+		{"customerRef": "c1", "n": res.Rows["counts"]["c1"]["n"]},
 	}, "customerRef")
 	if len(diffs) != 0 {
 		t.Fatalf("expected no diffs, got %v", diffs)
 	}
 
 	// diff: missing, changed, extra rows
-	diffs = DiffRows(res.Rows, []map[string]any{
+	diffs = DiffRows(res.Rows["counts"], []map[string]any{
 		{"customerRef": "c0", "n": 99},
 		{"customerRef": "cX", "n": 1},
 	}, "customerRef")

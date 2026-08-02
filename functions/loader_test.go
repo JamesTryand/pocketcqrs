@@ -59,14 +59,67 @@ function project(event) { return; }
 	if p.Name != "orders_by_customer" {
 		t.Fatalf("unexpected name: %s", p.Name)
 	}
-	if p.Schema.Collection != "orders_by_customer" || p.Schema.Key != "customerRef" {
-		t.Fatalf("unexpected schema: %+v", p.Schema)
+	if len(p.Schemas) != 1 || p.Schemas[0].Collection != "orders_by_customer" || p.Schemas[0].Key != "customerRef" {
+		t.Fatalf("unexpected schemas: %+v", p.Schemas)
 	}
-	if len(p.Schema.Fields) != 2 || p.Schema.Fields[1].Type != "number" {
-		t.Fatalf("unexpected fields: %+v", p.Schema.Fields)
+	if len(p.Schemas[0].Fields) != 2 || p.Schemas[0].Fields[1].Type != "number" {
+		t.Fatalf("unexpected fields: %+v", p.Schemas[0].Fields)
 	}
 	if !slices.Equal(p.EventTypes, []string{"OrderPlaced"}) {
 		t.Fatalf("unexpected event types: %v", p.EventTypes)
+	}
+}
+
+func TestLoadDirProjectionMultiSchema(t *testing.T) {
+	dir := t.TempDir()
+	writeFn(t, dir, "rollup.js", `//@trigger projection sales on SalePlaced
+//@schema customers cust:text total:number
+//@key cust
+//@schema products sku:text sold:number
+//@key sku
+function project(event) { return; }
+`)
+
+	rt := NewGojaRuntime(nil)
+	loaded, err := LoadDir(rt, nil, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Projections) != 1 {
+		t.Fatalf("expected 1 projection, got %d", len(loaded.Projections))
+	}
+	p := loaded.Projections[0]
+	if len(p.Schemas) != 2 {
+		t.Fatalf("expected 2 schemas, got %+v", p.Schemas)
+	}
+	if p.Schemas[0].Collection != "customers" || p.Schemas[0].Key != "cust" ||
+		p.Schemas[1].Collection != "products" || p.Schemas[1].Key != "sku" {
+		t.Fatalf("keys mis-paired: %+v", p.Schemas)
+	}
+	if got := p.Collections(); !slices.Equal(got, []string{"customers", "products"}) {
+		t.Fatalf("unexpected collections: %v", got)
+	}
+}
+
+func TestLoadDirProjectionSchemaKeyPairingRejections(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"key before schema", "//@trigger projection p on E1\n//@key k\n//@schema c k:text\nfunction project(event) {}\n"},
+		{"duplicate key for one schema", "//@trigger projection p on E1\n//@schema c k:text\n//@key k\n//@key k\nfunction project(event) {}\n"},
+		{"second schema missing key", "//@trigger projection p on E1\n//@schema c k:text\n//@key k\n//@schema d x:number\nfunction project(event) {}\n"},
+		{"duplicate collection", "//@trigger projection p on E1\n//@schema c k:text\n//@key k\n//@schema c x:number\n//@key x\nfunction project(event) {}\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFn(t, dir, "bad.js", tc.src)
+			rt := NewGojaRuntime(nil)
+			if _, err := LoadDir(rt, nil, dir); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
 	}
 }
 
@@ -119,7 +172,8 @@ func TestParseTriggers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tr.projection != "p" || !slices.Equal(tr.projectionOn, []string{"E1", "E2"}) || tr.schemaRaw != "c k:text" || tr.key != "k" {
+	if tr.projection != "p" || !slices.Equal(tr.projectionOn, []string{"E1", "E2"}) ||
+		len(tr.schemas) != 1 || tr.schemas[0].raw != "c k:text" || tr.schemas[0].key != "k" {
 		t.Fatalf("got %+v", tr)
 	}
 
