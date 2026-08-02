@@ -90,4 +90,5 @@ func Task() *decider.Decider[TaskState] {
 // RegisterAll registers every domain decider with the registry.
 func RegisterAll(r *decider.Registry) {
 	decider.Register(r, TaskAggregate, Task())
+	decider.Register(r, OrderAggregate, Order())
 }

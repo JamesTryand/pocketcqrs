@@ -16,6 +16,7 @@ import (
 	"pocketcqrs/functions"
 	"pocketcqrs/gateway"
 	"pocketcqrs/projections"
+	"pocketcqrs/reactors"
 	"pocketcqrs/writeguard"
 
 	_ "pocketcqrs/migrations"
@@ -81,6 +82,10 @@ func main() {
 		for _, p := range projs {
 			c.engine.Register(p)
 		}
+
+		// sagas: reactors dispatch follow-up commands through the registry
+		c.engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.registry,
+			func(msg string, args ...any) { logger.Info(msg, args...) }))
 
 		// write-guard: no out-of-band writes on projection-owned collections
 		writeguard.Register(e.App, projections.GuardedCollections(projs...)...)

@@ -18,6 +18,7 @@ import (
 func allProjections(app core.App) []projections.Projection {
 	return []projections.Projection{
 		projections.NewTasks(app),
+		projections.NewOrders(app),
 	}
 }
 
