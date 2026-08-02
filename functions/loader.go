@@ -25,8 +25,9 @@ type LoadResult struct {
 //	//@trigger event TaskCreated TaskCompleted   -> durable event function
 //	//@trigger http                              -> served at /api/fn/{basename}
 //	//@trigger projection <name> on <EventTypes> -> checkpointed JS projection;
-//	//@schema <collection> <field>:<type> ...       requires //@schema + //@key
-//	//@key <field>
+//	//@schema <collection> <field>:<type> ...       requires //@schema + //@key;
+//	//@key <field>                                  type: text|number|bool|date|json
+//	                                                or relation(<collection>)
 //	//@trigger decider <aggregate>               -> JS decider (tier 3);
 //	//@handles <EventTypes...>                      requires //@handles
 //	//@transform <Type> <from> <to>              -> upcaster fn transform_<Type>_<from>_to_<to>

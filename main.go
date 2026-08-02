@@ -80,6 +80,14 @@ func main() {
 		}
 		c.app = e.App
 
+		// collections-as-DDL: apply the shipped app migrations now. Serve
+		// would run them later (apis.Serve), which is too late for
+		// ReconcileSchemas — relation targets may be migration-created
+		// collections. Idempotent; system migrations already ran in e.Next().
+		if err := e.App.RunAppMigrations(); err != nil {
+			return err
+		}
+
 		// event store (source of truth) next to PocketBase's data.db
 		store, err := events.Open(filepath.Join(dataDir, "events.db"))
 		if err != nil {

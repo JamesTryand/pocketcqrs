@@ -12,7 +12,9 @@ import (
 // FieldSpec is one declared projection field.
 type FieldSpec struct {
 	Name string
-	Type string // text | number | bool | date | json
+	Type string // text | number | bool | date | json | relation
+	// RelationTarget names the related collection when Type is "relation".
+	RelationTarget string
 }
 
 // SchemaSpec is the declared output schema of a JS projection.
@@ -23,6 +25,8 @@ type SchemaSpec struct {
 }
 
 // schemaFieldTypes maps directive types to PocketBase field constructors.
+// "relation" is deliberately absent: a relation field needs its target
+// collection's id, resolved during the second reconcile pass.
 var schemaFieldTypes = map[string]func(name string) core.Field{
 	"text":   func(n string) core.Field { return &core.TextField{Name: n} },
 	"number": func(n string) core.Field { return &core.NumberField{Name: n} },
@@ -30,6 +34,10 @@ var schemaFieldTypes = map[string]func(name string) core.Field{
 	"date":   func(n string) core.Field { return &core.DateField{Name: n} },
 	"json":   func(n string) core.Field { return &core.JSONField{Name: n} },
 }
+
+// relationTypePattern matches relation(<collection>) type strings; the
+// capture group is already restricted to validName-conformant names.
+var relationTypePattern = regexp.MustCompile(`^relation\(([a-zA-Z][a-zA-Z0-9_]*)\)$`)
 
 // validName restricts collection/field names: they are interpolated into
 // index DDL, so anything beyond a simple identifier is rejected outright.
@@ -52,13 +60,19 @@ func parseSchemaDirective(rest string, key string) (*SchemaSpec, error) {
 		if !ok || !validName.MatchString(name) {
 			return nil, fmt.Errorf("invalid field spec %q (want name:type)", f)
 		}
+		field := FieldSpec{Name: name, Type: typ}
 		if _, ok := schemaFieldTypes[typ]; !ok {
-			return nil, fmt.Errorf("invalid field type %q in %q (want text|number|bool|date|json)", typ, f)
+			m := relationTypePattern.FindStringSubmatch(typ)
+			if m == nil {
+				return nil, fmt.Errorf("invalid field type %q in %q (want text|number|bool|date|json|relation(<collection>))", typ, f)
+			}
+			field.Type = "relation"
+			field.RelationTarget = m[1]
 		}
 		if name == key {
 			keySeen = true
 		}
-		spec.Fields = append(spec.Fields, FieldSpec{Name: name, Type: typ})
+		spec.Fields = append(spec.Fields, field)
 	}
 	if key == "" {
 		return nil, fmt.Errorf("schema for %s is missing its //@key directive", spec.Collection)
@@ -80,20 +94,33 @@ func (s *SchemaSpec) uniqueIndexSQL() string {
 // ReconcileSchemas materializes declared schemas into PocketBase collections
 // at boot time (a restart IS the maintenance window).
 //
+// Two passes: the first creates/extends collections with their non-relation
+// fields, the second adds missing relation fields and the key indexes.
+// Relation targets may be collections declared by other specs (in any
+// order) or pre-existing ones (e.g. migration-created or auth collections),
+// so no relation is wired before every declared collection exists.
+//
 // Reconciliation is additive-only, mirroring the append-only event rule:
 // missing collections are created, missing fields and the key index are
 // added — existing fields are never removed, retyped, or renamed (a
 // declared/actual type mismatch is logged and kept as-is).
 func ReconcileSchemas(app core.App, specs []*ProjectionSpec) error {
 	for _, spec := range specs {
-		if err := reconcileOne(app, spec); err != nil {
+		if err := reconcileBase(app, spec); err != nil {
+			return err
+		}
+	}
+	for _, spec := range specs {
+		if err := reconcileRelations(app, spec); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func reconcileOne(app core.App, spec *ProjectionSpec) error {
+// reconcileBase is pass 1: the collection exists and carries all declared
+// non-relation fields.
+func reconcileBase(app core.App, spec *ProjectionSpec) error {
 	s := spec.Schema
 	col, err := app.FindCollectionByNameOrId(s.Collection)
 	if err != nil {
@@ -102,6 +129,9 @@ func reconcileOne(app core.App, spec *ProjectionSpec) error {
 
 	changed := false
 	for _, f := range s.Fields {
+		if f.Type == "relation" {
+			continue // pass 2
+		}
 		existing := col.Fields.GetByName(f.Name)
 		if existing == nil {
 			col.Fields.Add(schemaFieldTypes[f.Type](f.Name))
@@ -113,6 +143,44 @@ func reconcileOne(app core.App, spec *ProjectionSpec) error {
 				"collection", s.Collection, "field", f.Name,
 				"declared", f.Type, "actual", existing.Type())
 		}
+	}
+
+	if !changed {
+		return nil
+	}
+	return app.Save(col)
+}
+
+// reconcileRelations is pass 2: missing relation fields are added (the
+// target collection id is resolved by name — every declared collection
+// exists by now) along with the key index.
+func reconcileRelations(app core.App, spec *ProjectionSpec) error {
+	s := spec.Schema
+	col, err := app.FindCollectionByNameOrId(s.Collection)
+	if err != nil {
+		return fmt.Errorf("schema reconcile: collection %s missing after base pass: %w", s.Collection, err)
+	}
+
+	changed := false
+	for _, f := range s.Fields {
+		if f.Type != "relation" {
+			continue
+		}
+		if existing := col.Fields.GetByName(f.Name); existing != nil {
+			if existing.Type() != "relation" {
+				spec.runtime.logger("schema field type mismatch, keeping existing",
+					"collection", s.Collection, "field", f.Name,
+					"declared", f.Type, "actual", existing.Type())
+			}
+			continue
+		}
+		target, err := app.FindCollectionByNameOrId(f.RelationTarget)
+		if err != nil {
+			return fmt.Errorf("schema %s: relation field %s: target collection %q not found: %w",
+				s.Collection, f.Name, f.RelationTarget, err)
+		}
+		col.Fields.Add(&core.RelationField{Name: f.Name, CollectionId: target.Id, MaxSelect: 1})
+		changed = true
 	}
 
 	idx := s.uniqueIndexSQL()
@@ -140,6 +208,9 @@ func createCollection(app core.App, s *SchemaSpec) error {
 	col.ListRule = types.Pointer("")
 	col.ViewRule = types.Pointer("")
 	for _, f := range s.Fields {
+		if f.Type == "relation" {
+			continue // pass 2: the target collection may not exist yet
+		}
 		field := schemaFieldTypes[f.Type](f.Name)
 		if f.Name == s.Key {
 			if tf, ok := field.(*core.TextField); ok {
@@ -148,6 +219,5 @@ func createCollection(app core.App, s *SchemaSpec) error {
 		}
 		col.Fields.Add(field)
 	}
-	col.Indexes = types.JSONArray[string]{s.uniqueIndexSQL()}
 	return app.Save(col)
 }

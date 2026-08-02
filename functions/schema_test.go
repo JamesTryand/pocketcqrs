@@ -3,6 +3,9 @@ package functions
 import (
 	"reflect"
 	"testing"
+
+	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tests"
 )
 
 func TestParseSchemaDirective(t *testing.T) {
@@ -18,6 +21,23 @@ func TestParseSchemaDirective(t *testing.T) {
 	}
 }
 
+func TestParseSchemaDirectiveRelation(t *testing.T) {
+	spec, err := parseSchemaDirective("order_summaries customer:text order:relation(orders) total:number", "customer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Fields) != 3 {
+		t.Fatalf("unexpected fields: %+v", spec.Fields)
+	}
+	rel := spec.Fields[1]
+	if rel.Type != "relation" || rel.RelationTarget != "orders" {
+		t.Fatalf("unexpected relation field: %+v", rel)
+	}
+	if spec.Fields[2].Type != "number" || spec.Fields[2].RelationTarget != "" {
+		t.Fatalf("unexpected plain field: %+v", spec.Fields[2])
+	}
+}
+
 func TestParseSchemaDirectiveRejections(t *testing.T) {
 	cases := []struct {
 		name, rest, key string
@@ -29,6 +49,10 @@ func TestParseSchemaDirectiveRejections(t *testing.T) {
 		{"missing type", "c a", "a"},
 		{"sql-ish collection", "c); DROP TABLE events;-- a:text", "a"},
 		{"sql-ish field", "c `x`:text", "`x`"},
+		{"empty relation target", "c k:text a:relation()", "k"},
+		{"unclosed relation", "c k:text a:relation(orders", "k"},
+		{"invalid relation target", "c k:text a:relation(1orders)", "k"},
+		{"trailing junk after relation", "c k:text a:relation(orders)x", "k"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -36,6 +60,108 @@ func TestParseSchemaDirectiveRejections(t *testing.T) {
 				t.Fatal("expected rejection")
 			}
 		})
+	}
+}
+
+func TestReconcileSchemasRelations(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	// a pre-existing collection created outside any spec (migration-style)
+	if err := app.Save(core.NewBaseCollection("existing_orders")); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := NewGojaRuntime(nil)
+	mk := func(collection, key string, fields ...FieldSpec) *ProjectionSpec {
+		return &ProjectionSpec{
+			Name:    collection,
+			Schema:  &SchemaSpec{Collection: collection, Key: key, Fields: fields},
+			runtime: rt,
+		}
+	}
+	specs := []*ProjectionSpec{
+		// declared BEFORE its relation targets — the two passes must wire it anyway
+		mk("child_rows", "ref",
+			FieldSpec{Name: "ref", Type: "text"},
+			FieldSpec{Name: "parent", Type: "relation", RelationTarget: "parent_rows"},
+			FieldSpec{Name: "order", Type: "relation", RelationTarget: "existing_orders"},
+		),
+		mk("parent_rows", "ref",
+			FieldSpec{Name: "ref", Type: "text"},
+		),
+	}
+	if err := ReconcileSchemas(app, specs); err != nil {
+		t.Fatal(err)
+	}
+
+	child, err := app.FindCollectionByNameOrId("child_rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := app.FindCollectionByNameOrId("parent_rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing, err := app.FindCollectionByNameOrId("existing_orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, want := range map[string]string{"parent": parent.Id, "order": existing.Id} {
+		f, ok := child.Fields.GetByName(name).(*core.RelationField)
+		if !ok {
+			t.Fatalf("field %s is not a relation: %+v", name, child.Fields.GetByName(name))
+		}
+		if f.CollectionId != want || f.MaxSelect != 1 {
+			t.Fatalf("field %s: got collectionId=%s maxSelect=%d, want %s/1", name, f.CollectionId, f.MaxSelect, want)
+		}
+	}
+
+	foundIdx := false
+	for _, idx := range child.Indexes {
+		if idx == "CREATE UNIQUE INDEX idx_child_rows_ref ON child_rows (ref)" {
+			foundIdx = true
+		}
+	}
+	if !foundIdx {
+		t.Fatalf("key index missing: %v", child.Indexes)
+	}
+
+	// idempotent: a second reconcile adds nothing and keeps the wiring
+	if err := ReconcileSchemas(app, specs); err != nil {
+		t.Fatal(err)
+	}
+	again, err := app.FindCollectionByNameOrId("child_rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel, ok := again.Fields.GetByName("parent").(*core.RelationField); !ok || rel.CollectionId != parent.Id {
+		t.Fatalf("relation lost on second reconcile: %+v", again.Fields.GetByName("parent"))
+	}
+}
+
+func TestReconcileSchemasRelationTargetMissing(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	rt := NewGojaRuntime(nil)
+	specs := []*ProjectionSpec{{
+		Name: "broken",
+		Schema: &SchemaSpec{Collection: "broken", Key: "ref", Fields: []FieldSpec{
+			{Name: "ref", Type: "text"},
+			{Name: "ghost", Type: "relation", RelationTarget: "no_such_collection"},
+		}},
+		runtime: rt,
+	}}
+	if err := ReconcileSchemas(app, specs); err == nil {
+		t.Fatal("expected missing relation target error")
 	}
 }
 
