@@ -28,6 +28,10 @@ type NewEvent struct {
 	Type     string          `json:"type"`
 	Data     json.RawMessage `json:"data"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
+	// Version is the event schema version (0 is normalized to 1).
+	// See the versioning contract: append-only property evolution,
+	// transforms/upcasters between versions, new type for divergent shapes.
+	Version int64 `json:"version,omitempty"`
 }
 
 // Event is a committed event envelope.
@@ -40,6 +44,7 @@ type Event struct {
 	Type        string          `json:"type"`
 	Data        json.RawMessage `json:"data"`
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	Version     int64           `json:"version"`
 	Created     string          `json:"created"`
 }
 
@@ -77,6 +82,9 @@ type Store struct {
 }
 
 // Open opens (creating if necessary) the event store at path.
+//
+// The store self-migrates (tracked with PRAGMA user_version):
+// v1 adds the version column to pre-versioning databases.
 func Open(path string) (*Store, error) {
 	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)", path)
 	db, err := sql.Open("sqlite", dsn)
@@ -89,7 +97,28 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("events: init schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("events: migrate: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+// migrate applies store schema migrations idempotently.
+func migrate(db *sql.DB) error {
+	// v1: version column (absent in pre-versioning databases)
+	var hasVersion int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'version'`).Scan(&hasVersion); err != nil {
+		return err
+	}
+	if hasVersion == 0 {
+		if _, err := db.Exec(`ALTER TABLE events ADD COLUMN version INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return err
+		}
+	}
+	_, err := db.Exec(`PRAGMA user_version = 1`)
+	return err
 }
 
 // Close closes the underlying database.
@@ -139,11 +168,15 @@ func (s *Store) Append(ctx context.Context, aggregate, aggregateID string, expec
 			Type:        ne.Type,
 			Data:        ne.Data,
 			Metadata:    meta,
+			Version:     ne.Version,
+		}
+		if ev.Version <= 0 {
+			ev.Version = 1
 		}
 		err = tx.QueryRowContext(ctx,
-			`INSERT INTO events (id, aggregate, aggregate_id, sequence, type, data, metadata)
-			 VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING position, created`,
-			ev.ID, ev.Aggregate, ev.AggregateID, ev.Sequence, ev.Type, string(ev.Data), string(ev.Metadata),
+			`INSERT INTO events (id, aggregate, aggregate_id, sequence, type, data, metadata, version)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING position, created`,
+			ev.ID, ev.Aggregate, ev.AggregateID, ev.Sequence, ev.Type, string(ev.Data), string(ev.Metadata), ev.Version,
 		).Scan(&ev.Position, &ev.Created)
 		if err != nil {
 			return nil, err
@@ -164,7 +197,7 @@ func (s *Store) Append(ctx context.Context, aggregate, aggregateID string, expec
 // LoadStream returns all events of one stream in sequence order.
 func (s *Store) LoadStream(ctx context.Context, aggregate, aggregateID string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT position, id, aggregate, aggregate_id, sequence, type, data, metadata, created
+		`SELECT position, id, aggregate, aggregate_id, sequence, type, data, metadata, version, created
 		 FROM events WHERE aggregate = ? AND aggregate_id = ? ORDER BY sequence`,
 		aggregate, aggregateID,
 	)
@@ -175,10 +208,30 @@ func (s *Store) LoadStream(ctx context.Context, aggregate, aggregateID string) (
 	return scanEvents(rows)
 }
 
+// ListStreams returns the ids of all streams of an aggregate
+// (used by boot-time decider validation).
+func (s *Store) ListStreams(ctx context.Context, aggregate string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT aggregate_id FROM events WHERE aggregate = ? ORDER BY aggregate_id`, aggregate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // Poll returns up to limit events with position > after, in position order.
 func (s *Store) Poll(ctx context.Context, after int64, limit int) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT position, id, aggregate, aggregate_id, sequence, type, data, metadata, created
+		`SELECT position, id, aggregate, aggregate_id, sequence, type, data, metadata, version, created
 		 FROM events WHERE position > ? ORDER BY position LIMIT ?`,
 		after, limit,
 	)
@@ -236,7 +289,7 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 		var ev Event
 		var data, meta string
 		if err := rows.Scan(&ev.Position, &ev.ID, &ev.Aggregate, &ev.AggregateID,
-			&ev.Sequence, &ev.Type, &data, &meta, &ev.Created); err != nil {
+			&ev.Sequence, &ev.Type, &data, &meta, &ev.Version, &ev.Created); err != nil {
 			return nil, err
 		}
 		ev.Data = json.RawMessage(data)

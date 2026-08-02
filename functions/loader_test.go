@@ -22,7 +22,7 @@ func TestLoadDir(t *testing.T) {
 	writeFn(t, dir, "notes.txt", "not a function\n")
 
 	rt := NewGojaRuntime(nil)
-	httpReg, projs, err := LoadDir(rt, nil, dir)
+	loaded, err := LoadDir(rt, nil, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,11 +30,11 @@ func TestLoadDir(t *testing.T) {
 	if got := len(rt.Consumers()); got != 1 {
 		t.Fatalf("expected 1 event consumer, got %d", got)
 	}
-	if names := httpReg.Names(); !slices.Equal(names, []string{"hello"}) {
+	if names := loaded.HTTP.Names(); !slices.Equal(names, []string{"hello"}) {
 		t.Fatalf("unexpected http functions: %v", names)
 	}
-	if len(projs) != 0 {
-		t.Fatalf("unexpected projections: %v", projs)
+	if len(loaded.Projections) != 0 || len(loaded.Deciders) != 0 {
+		t.Fatalf("unexpected specs: %+v", loaded)
 	}
 }
 
@@ -47,10 +47,11 @@ function project(event) { return; }
 `)
 
 	rt := NewGojaRuntime(nil)
-	_, projs, err := LoadDir(rt, nil, dir)
+	loaded, err := LoadDir(rt, nil, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	projs := loaded.Projections
 	if len(projs) != 1 {
 		t.Fatalf("expected 1 projection, got %d", len(projs))
 	}
@@ -78,7 +79,7 @@ func TestLoadDirProjectionMixedRejected(t *testing.T) {
 function project(event) {}
 `)
 	rt := NewGojaRuntime(nil)
-	if _, _, err := LoadDir(rt, nil, dir); err == nil {
+	if _, err := LoadDir(rt, nil, dir); err == nil {
 		t.Fatal("expected projection-only error")
 	}
 }
@@ -89,18 +90,18 @@ func TestLoadDirProjectionMissingSchema(t *testing.T) {
 function project(event) {}
 `)
 	rt := NewGojaRuntime(nil)
-	if _, _, err := LoadDir(rt, nil, dir); err == nil {
+	if _, err := LoadDir(rt, nil, dir); err == nil {
 		t.Fatal("expected missing schema error")
 	}
 }
 
 func TestLoadDirMissing(t *testing.T) {
 	rt := NewGojaRuntime(nil)
-	reg, projs, err := LoadDir(rt, nil, filepath.Join(t.TempDir(), "nope"))
+	loaded, err := LoadDir(rt, nil, filepath.Join(t.TempDir(), "nope"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reg.Names()) != 0 || len(projs) != 0 {
+	if len(loaded.HTTP.Names()) != 0 || len(loaded.Projections) != 0 || len(loaded.Deciders) != 0 {
 		t.Fatal("expected empty results")
 	}
 }

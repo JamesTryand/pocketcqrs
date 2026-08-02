@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -115,5 +116,87 @@ func TestPollAndCheckpoints(t *testing.T) {
 	}
 	if len(rest) != 1 {
 		t.Fatalf("expected 1 remaining event, got %d", len(rest))
+	}
+}
+
+func TestListStreams(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	for _, id := range []string{"b1", "a1", "a2"} {
+		if _, err := s.Append(ctx, "note", id, 0, []NewEvent{
+			{Type: "NoteCreated", Data: json.RawMessage(`{}`)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a different aggregate must not leak in
+	if _, err := s.Append(ctx, "task", "t1", 0, []NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := s.ListStreams(ctx, "note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 3 || ids[0] != "a1" || ids[1] != "a2" || ids[2] != "b1" {
+		t.Fatalf("unexpected streams: %v", ids)
+	}
+}
+
+func TestStoreMigratesPreVersioningDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.db")
+
+	// create a pre-versioning schema (no version column) with one row
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE events (
+			position     INTEGER PRIMARY KEY AUTOINCREMENT,
+			id           TEXT NOT NULL UNIQUE,
+			aggregate    TEXT NOT NULL,
+			aggregate_id TEXT NOT NULL,
+			sequence     INTEGER NOT NULL,
+			type         TEXT NOT NULL,
+			data         TEXT NOT NULL,
+			metadata     TEXT NOT NULL DEFAULT '{}',
+			created      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%fZ', 'now')),
+			UNIQUE (aggregate, aggregate_id, sequence)
+		);
+		INSERT INTO events (id, aggregate, aggregate_id, sequence, type, data)
+		VALUES ('e1', 'note', 'n1', 1, 'NoteCreated', '{}');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// opening migrates it: old rows read as version 1, new appends work
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	stream, err := s.LoadStream(ctx, "note", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stream) != 1 || stream[0].Version != 1 {
+		t.Fatalf("expected migrated row at version 1, got %+v", stream)
+	}
+
+	appended, err := s.Append(ctx, "note", "n1", 1, []NewEvent{
+		{Type: "NoteArchived", Data: json.RawMessage(`{}`), Version: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appended[0].Version != 2 {
+		t.Fatalf("expected version 2, got %d", appended[0].Version)
 	}
 }

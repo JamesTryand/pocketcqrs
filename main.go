@@ -95,22 +95,40 @@ func main() {
 		rt := functions.NewGojaRuntime(
 			func(msg string, args ...any) { logger.Info(msg, args...) })
 		rt.SetReader(functions.NewAppReader(e.App))
-		httpFns, jsProjSpecs, err := functions.LoadDir(rt, e.App, functionsDir)
+		loaded, err := functions.LoadDir(rt, e.App, functionsDir)
 		if err != nil {
 			return err
 		}
-		c.httpFns = httpFns
+		c.httpFns = loaded.HTTP
+
+		// JS deciders (tier 3): dry-run validated against existing history
+		// at boot, then registered alongside the Go deciders. Failures are
+		// refused loudly — the rest of the system keeps serving.
+		for _, spec := range loaded.Deciders {
+			if c.registry.Has(spec.Aggregate) {
+				logger.Error("JS decider aggregate collides with an existing decider, skipped",
+					"aggregate", spec.Aggregate)
+				continue
+			}
+			if err := functions.ValidateDeciderSpec(store, spec); err != nil {
+				logger.Error("JS decider failed validation, NOT registered",
+					"aggregate", spec.Aggregate, "error", err)
+				continue
+			}
+			c.registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
+			logger.Info("JS decider active", "aggregate", spec.Aggregate)
+		}
 
 		// JS projection schemas are materialized at boot (a restart IS the
 		// maintenance window), additively: create/extend, never drop
-		if err := functions.ReconcileSchemas(e.App, jsProjSpecs); err != nil {
+		if err := functions.ReconcileSchemas(e.App, loaded.Projections); err != nil {
 			return err
 		}
 
 		// engine registration order matters: Go projections first, then JS
 		// projections (which may read Go-maintained collections), then
 		// reactors and effect functions
-		for _, spec := range jsProjSpecs {
+		for _, spec := range loaded.Projections {
 			c.jsProjs = append(c.jsProjs, spec.Consumer())
 		}
 		for _, p := range c.jsProjs {

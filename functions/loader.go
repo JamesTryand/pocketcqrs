@@ -10,6 +10,13 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 )
 
+// LoadResult bundles everything found in a functions dir.
+type LoadResult struct {
+	HTTP        *HTTPRegistry
+	Projections []*ProjectionSpec
+	Deciders    []*DeciderSpec
+}
+
 // LoadDir loads functions from dir (PocketBase pb_hooks precedent).
 //
 // Files ending in .js declare their triggers via directives in the first
@@ -20,20 +27,22 @@ import (
 //	//@trigger projection <name> on <EventTypes> -> checkpointed JS projection;
 //	//@schema <collection> <field>:<type> ...       requires //@schema + //@key
 //	//@key <field>
+//	//@trigger decider <aggregate>               -> JS decider (tier 3);
+//	//@handles <EventTypes...>                      requires //@handles
+//	//@transform <Type> <from> <to>              -> upcaster fn transform_<Type>_<from>_to_<to>
 //
-// Event/http files may combine freely; a projection file must be
-// projection-only. Files without directives are ignored (logged).
+// Event/http files may combine freely; projection and decider files must
+// be single-purpose. Files without directives are ignored (logged).
 // A missing dir is not an error: functions are optional.
-func LoadDir(rt *GojaRuntime, app core.App, dir string) (*HTTPRegistry, []*ProjectionSpec, error) {
-	httpReg := NewHTTPRegistry(rt)
-	var projs []*ProjectionSpec
+func LoadDir(rt *GojaRuntime, app core.App, dir string) (*LoadResult, error) {
+	result := &LoadResult{HTTP: NewHTTPRegistry(rt)}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return httpReg, projs, nil
+			return result, nil
 		}
-		return nil, nil, err
+		return nil, err
 	}
 
 	for _, entry := range entries {
@@ -43,12 +52,12 @@ func LoadDir(rt *GojaRuntime, app core.App, dir string) (*HTTPRegistry, []*Proje
 		path := filepath.Join(dir, entry.Name())
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		src := string(raw)
 		t, err := parseTriggers(src)
 		if err != nil {
-			return nil, nil, fmt.Errorf("functions: %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("functions: %s: %w", entry.Name(), err)
 		}
 
 		if t.empty() {
@@ -56,36 +65,56 @@ func LoadDir(rt *GojaRuntime, app core.App, dir string) (*HTTPRegistry, []*Proje
 			continue
 		}
 
+		kinds := 0
+		if len(t.eventTypes) > 0 || t.isHTTP {
+			kinds++
+		}
 		if t.projection != "" {
-			if len(t.eventTypes) > 0 || t.isHTTP {
-				return nil, nil, fmt.Errorf("functions: %s: a projection file must be projection-only", entry.Name())
-			}
-			spec, err := buildProjectionSpec(rt, app, entry.Name(), src, t)
-			if err != nil {
-				return nil, nil, err
-			}
-			projs = append(projs, spec)
-			rt.logger("JS projection registered", "name", spec.Name, "collection", spec.Schema.Collection)
-			continue
+			kinds++
+		}
+		if t.decider != "" {
+			kinds++
+		}
+		if kinds > 1 {
+			return nil, fmt.Errorf("functions: %s: projection and decider files must be single-purpose", entry.Name())
 		}
 
-		if len(t.eventTypes) > 0 {
-			if err := rt.RegisterEventFunction(t.eventTypes, entry.Name(), src); err != nil {
-				return nil, nil, err
-			}
-		}
-		if t.isHTTP {
-			prog, err := goja.Compile(entry.Name(), src, false)
+		switch {
+		case t.projection != "":
+			spec, err := buildProjectionSpec(rt, app, entry.Name(), src, t)
 			if err != nil {
-				return nil, nil, fmt.Errorf("functions: compile %s: %w", entry.Name(), err)
+				return nil, err
 			}
-			name := strings.TrimSuffix(entry.Name(), ".js")
-			httpReg.register(name, prog)
-			rt.logger("HTTP function registered", "name", name, "path", "/api/fn/"+name)
+			result.Projections = append(result.Projections, spec)
+			rt.logger("JS projection registered", "name", spec.Name, "collection", spec.Schema.Collection)
+
+		case t.decider != "":
+			spec, err := buildDeciderSpec(rt, entry.Name(), src, t)
+			if err != nil {
+				return nil, err
+			}
+			result.Deciders = append(result.Deciders, spec)
+			rt.logger("JS decider registered", "aggregate", spec.Aggregate)
+
+		default:
+			if len(t.eventTypes) > 0 {
+				if err := rt.RegisterEventFunction(t.eventTypes, entry.Name(), src); err != nil {
+					return nil, err
+				}
+			}
+			if t.isHTTP {
+				prog, err := goja.Compile(entry.Name(), src, false)
+				if err != nil {
+					return nil, fmt.Errorf("functions: compile %s: %w", entry.Name(), err)
+				}
+				name := strings.TrimSuffix(entry.Name(), ".js")
+				result.HTTP.register(name, prog)
+				rt.logger("HTTP function registered", "name", name, "path", "/api/fn/"+name)
+			}
 		}
 	}
 
-	return httpReg, projs, nil
+	return result, nil
 }
 
 func buildProjectionSpec(rt *GojaRuntime, app core.App, filename, src string, t triggers) (*ProjectionSpec, error) {
@@ -110,6 +139,26 @@ func buildProjectionSpec(rt *GojaRuntime, app core.App, filename, src string, t 
 	}, nil
 }
 
+func buildDeciderSpec(rt *GojaRuntime, filename, src string, t triggers) (*DeciderSpec, error) {
+	if len(t.handles) == 0 {
+		return nil, fmt.Errorf("functions: %s: decider %q is missing its //@handles directive", filename, t.decider)
+	}
+	if !validName.MatchString(t.decider) {
+		return nil, fmt.Errorf("functions: %s: invalid aggregate name %q", filename, t.decider)
+	}
+	prog, err := goja.Compile(filename, src, false)
+	if err != nil {
+		return nil, fmt.Errorf("functions: compile %s: %w", filename, err)
+	}
+	return &DeciderSpec{
+		Aggregate:  t.decider,
+		Handles:    t.handles,
+		Transforms: t.transforms,
+		Prog:       prog,
+		runtime:    rt,
+	}, nil
+}
+
 // triggers holds the parsed //@ directives of one function file.
 type triggers struct {
 	eventTypes   []string // //@trigger event ...
@@ -118,10 +167,14 @@ type triggers struct {
 	projectionOn []string
 	schemaRaw    string // //@schema ...
 	key          string // //@key ...
+	decider      string   // //@trigger decider <aggregate>
+	handles      []string // //@handles ...
+	transforms   []TransformSpec
 }
 
 func (t triggers) empty() bool {
-	return len(t.eventTypes) == 0 && !t.isHTTP && t.projection == "" && t.schemaRaw == "" && t.key == ""
+	return len(t.eventTypes) == 0 && !t.isHTTP && t.projection == "" && t.schemaRaw == "" &&
+		t.key == "" && t.decider == "" && len(t.handles) == 0 && len(t.transforms) == 0
 }
 
 // parseTriggers scans the leading comment lines for //@ directives.
@@ -156,6 +209,11 @@ func parseTriggers(src string) (triggers, error) {
 				}
 				t.projection = fields[2]
 				t.projectionOn = fields[4:]
+			case "decider":
+				if len(fields) != 3 {
+					return t, fmt.Errorf("//@trigger decider wants: decider <aggregate>")
+				}
+				t.decider = fields[2]
 			default:
 				return t, fmt.Errorf("unknown //@trigger kind %q", fields[1])
 			}
@@ -166,7 +224,30 @@ func parseTriggers(src string) (triggers, error) {
 				return t, fmt.Errorf("//@key wants exactly one field name")
 			}
 			t.key = fields[1]
+		case "handles":
+			t.handles = append(t.handles, fields[1:]...)
+		case "transform":
+			if len(fields) != 4 {
+				return t, fmt.Errorf("//@transform wants: transform <Type> <from> <to>")
+			}
+			from, err := parseVersion(fields[2])
+			if err != nil {
+				return t, fmt.Errorf("//@transform from-version: %w", err)
+			}
+			to, err := parseVersion(fields[3])
+			if err != nil {
+				return t, fmt.Errorf("//@transform to-version: %w", err)
+			}
+			t.transforms = append(t.transforms, TransformSpec{Type: fields[1], From: from, To: to})
 		}
 	}
 	return t, nil
+}
+
+func parseVersion(s string) (int64, error) {
+	var v int64
+	if _, err := fmt.Sscan(s, &v); err != nil || v <= 0 {
+		return 0, fmt.Errorf("invalid version %q", s)
+	}
+	return v, nil
 }

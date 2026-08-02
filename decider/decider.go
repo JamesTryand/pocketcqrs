@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"pocketcqrs/events"
 )
@@ -42,8 +43,16 @@ type Registry struct {
 // erased is a type-erased Decider[S].
 type erased struct {
 	initial func() any
-	decide  func(Command, any) ([]events.NewEvent, error)
+	decide  func(Command, any, map[string]any) ([]events.NewEvent, error)
 	evolve  func(any, events.Event) (any, error)
+}
+
+// Untyped is a type-erased decider contract, used by adapters whose state
+// has no static Go type (e.g. JavaScript deciders).
+type Untyped struct {
+	Initial func() any
+	Decide  func(cmd Command, state any, meta map[string]any) ([]events.NewEvent, error)
+	Evolve  func(state any, ev events.Event) (any, error)
 }
 
 // NewRegistry creates a Registry executing commands against store.
@@ -55,13 +64,18 @@ func NewRegistry(store *events.Store) *Registry {
 func Register[S any](r *Registry, aggregate string, d *Decider[S]) {
 	r.deciders[aggregate] = erased{
 		initial: func() any { return d.InitialState() },
-		decide: func(cmd Command, state any) ([]events.NewEvent, error) {
+		decide: func(cmd Command, state any, _ map[string]any) ([]events.NewEvent, error) {
 			return d.Decide(cmd, state.(S))
 		},
 		evolve: func(state any, ev events.Event) (any, error) {
 			return d.Evolve(state.(S), ev)
 		},
 	}
+}
+
+// RegisterUntyped adds an adapter-provided decider (e.g. a JavaScript one).
+func (r *Registry) RegisterUntyped(aggregate string, d Untyped) {
+	r.deciders[aggregate] = erased{initial: d.Initial, decide: d.Decide, evolve: d.Evolve}
 }
 
 // Has reports whether an aggregate is registered.
@@ -82,10 +96,22 @@ func (r *Registry) Handle(ctx context.Context, aggregate, id string, cmd Command
 // HandleWithMeta is Handle with caller-supplied metadata (e.g. the
 // authenticated actor) merged into every appended event's metadata.
 // Caller-supplied keys win over decider-supplied ones.
+//
+// The registry stamps "now" (UTC, PocketBase timestamp format) into meta
+// if absent, before deciding: deciders receive it as part of the command
+// context, and it is recorded in the produced events — the time the
+// decider saw is part of history.
 func (r *Registry) HandleWithMeta(ctx context.Context, aggregate, id string, cmd Command, meta map[string]any) ([]events.Event, error) {
 	d, ok := r.deciders[aggregate]
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAggregate, aggregate)
+	}
+
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	if _, ok := meta["now"]; !ok {
+		meta["now"] = time.Now().UTC().Format("2006-01-02 15:04:05.000Z")
 	}
 
 	stream, err := r.store.LoadStream(ctx, aggregate, id)
@@ -100,7 +126,7 @@ func (r *Registry) HandleWithMeta(ctx context.Context, aggregate, id string, cmd
 		}
 	}
 
-	newEvents, err := d.decide(cmd, state)
+	newEvents, err := d.decide(cmd, state, meta)
 	if err != nil {
 		return nil, err
 	}
@@ -108,10 +134,8 @@ func (r *Registry) HandleWithMeta(ctx context.Context, aggregate, id string, cmd
 		return nil, nil
 	}
 
-	if len(meta) > 0 {
-		for i := range newEvents {
-			newEvents[i].Metadata = mergeMeta(newEvents[i].Metadata, meta)
-		}
+	for i := range newEvents {
+		newEvents[i].Metadata = mergeMeta(newEvents[i].Metadata, meta)
 	}
 
 	return r.store.Append(ctx, aggregate, id, int64(len(stream)), newEvents)
