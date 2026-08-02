@@ -79,6 +79,11 @@ type Store struct {
 
 	subsMu sync.RWMutex
 	subs   []func(Event)
+
+	// upcaster is the read-path event upcaster (see SetUpcaster); guarded
+	// so it can be swapped (e.g. on function reload) while readers poll.
+	upcastMu sync.RWMutex
+	upcaster func(Event) (Event, error)
 }
 
 // Open opens (creating if necessary) the event store at path.
@@ -211,7 +216,11 @@ func (s *Store) LoadStream(ctx context.Context, aggregate, aggregateID string) (
 		return nil, err
 	}
 	defer rows.Close()
-	return scanEvents(rows)
+	evs, err := scanEvents(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.upcastEvents(evs)
 }
 
 // ListStreams returns the ids of all streams of an aggregate
@@ -245,7 +254,43 @@ func (s *Store) Poll(ctx context.Context, after int64, limit int) ([]Event, erro
 		return nil, err
 	}
 	defer rows.Close()
-	return scanEvents(rows)
+	evs, err := scanEvents(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.upcastEvents(evs)
+}
+
+// SetUpcaster installs the read-path upcaster: every event handed out by
+// LoadStream and Poll is passed through it, so all consumers — deciders,
+// projections, functions, reactors — see events at their latest schema
+// version. The stored row is never rewritten: upcasting is a read-time
+// view, consistent with the append-only log. A nil upcaster disables it.
+func (s *Store) SetUpcaster(fn func(Event) (Event, error)) {
+	s.upcastMu.Lock()
+	defer s.upcastMu.Unlock()
+	s.upcaster = fn
+}
+
+// upcastEvents passes a freshly scanned batch through the installed
+// upcaster (if any). A failure fails the whole read: consumers must never
+// see an event in a shape its transform chain could not produce.
+func (s *Store) upcastEvents(evs []Event) ([]Event, error) {
+	s.upcastMu.RLock()
+	upcaster := s.upcaster
+	s.upcastMu.RUnlock()
+	if upcaster == nil {
+		return evs, nil
+	}
+	for i := range evs {
+		up, err := upcaster(evs[i])
+		if err != nil {
+			return nil, fmt.Errorf("events: upcast %s/%s#%d (%s v%d): %w",
+				evs[i].Aggregate, evs[i].AggregateID, evs[i].Sequence, evs[i].Type, evs[i].Version, err)
+		}
+		evs[i] = up
+	}
+	return evs, nil
 }
 
 // Subscribe registers fn to be called (best-effort, in-process) with each

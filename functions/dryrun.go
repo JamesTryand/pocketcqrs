@@ -80,6 +80,14 @@ func DryRunDecider(store *events.Store, spec *DeciderSpec, streamID string) (*De
 		}
 		state := d.Initial()
 		for _, ev := range stream {
+			// upcast explicitly with the CANDIDATE spec: new transforms
+			// under test must fire even if the store's upcaster (built
+			// from the deployed specs) does not know them yet (idempotent
+			// otherwise — transforms fire only on exact version match)
+			if ev, err = spec.upcast(ev); err != nil {
+				return nil, fmt.Errorf("dryrun: upcasting %s/%s failed at %s#%d: %w",
+					spec.Aggregate, id, ev.Type, ev.Sequence, err)
+			}
 			if !contains(spec.Handles, ev.Type) {
 				return nil, fmt.Errorf("dryrun: stream %s contains %s which is not declared in //@handles",
 					id, ev.Type)
@@ -115,6 +123,10 @@ func DryRunDecide(store *events.Store, spec *DeciderSpec, streamID string, cmd d
 	}
 	state := d.Initial()
 	for _, ev := range stream {
+		if ev, err = spec.upcast(ev); err != nil {
+			return nil, fmt.Errorf("dryrun: upcasting %s/%s failed at %s#%d: %w",
+				spec.Aggregate, streamID, ev.Type, ev.Sequence, err)
+		}
 		if state, err = d.Evolve(state, ev); err != nil {
 			return nil, fmt.Errorf("dryrun: folding %s/%s failed at %s#%d: %w",
 				spec.Aggregate, streamID, ev.Type, ev.Sequence, err)

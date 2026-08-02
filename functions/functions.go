@@ -223,6 +223,7 @@ func (r *GojaRuntime) runEvent(name string, prog *goja.Program, ev events.Event)
 			"sequence":    ev.Sequence,
 			"type":        ev.Type,
 			"data":        data,
+			"version":     ev.Version,
 			"created":     ev.Created,
 		},
 	})

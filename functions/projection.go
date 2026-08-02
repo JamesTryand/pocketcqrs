@@ -107,6 +107,7 @@ func (r *GojaRuntime) runProjection(spec *ProjectionSpec, ev events.Event) (resu
 		"sequence":    ev.Sequence,
 		"type":        ev.Type,
 		"data":        data,
+		"version":     ev.Version,
 		"created":     ev.Created,
 	}
 	vm.Set("event", event)

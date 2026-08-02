@@ -30,6 +30,13 @@ type TransformSpec struct {
 }
 
 // UntypedDecider adapts the spec to the decider registry's Untyped contract.
+//
+// Events handed to Evolve are expected to be upcast already: the store's
+// read path applies the transform chains (see BuildUpcaster), and every
+// production/validation/dry-run fold reads through the store. Validation
+// and dry-run additionally apply spec.upcast themselves so they stay
+// correct regardless of how the store's upcaster is currently wired
+// (idempotent: a transform only fires on an exact From == version match).
 func (spec *DeciderSpec) UntypedDecider() decider.Untyped {
 	return decider.Untyped{
 		Initial: func() any {
@@ -46,11 +53,7 @@ func (spec *DeciderSpec) UntypedDecider() decider.Untyped {
 			return spec.runtime.runDecide(spec, cmd, state, meta)
 		},
 		Evolve: func(state any, ev events.Event) (any, error) {
-			upcast, err := spec.upcast(ev)
-			if err != nil {
-				return state, err
-			}
-			return spec.runtime.runEvolve(spec, state, upcast)
+			return spec.runtime.runEvolve(spec, state, ev)
 		},
 	}
 }
@@ -200,6 +203,27 @@ func (r *GojaRuntime) runEvolve(spec *DeciderSpec, state any, ev events.Event) (
 // transforms (upcasters)
 // ---------------------------------------------------------------------
 
+// BuildUpcaster composes the per-decider transform chains into one
+// store-level upcaster (events.Store.SetUpcaster): events route by
+// aggregate to their decider's chain; events of aggregates without a JS
+// decider pass through untouched. Returns nil when there are no specs.
+func BuildUpcaster(specs []*DeciderSpec) func(events.Event) (events.Event, error) {
+	if len(specs) == 0 {
+		return nil
+	}
+	byAggregate := make(map[string]*DeciderSpec, len(specs))
+	for _, spec := range specs {
+		byAggregate[spec.Aggregate] = spec
+	}
+	return func(ev events.Event) (events.Event, error) {
+		spec, ok := byAggregate[ev.Aggregate]
+		if !ok {
+			return ev, nil
+		}
+		return spec.upcast(ev)
+	}
+}
+
 // upcast applies the declared transform chain to bring ev to the latest
 // version of its type before evolve sees it.
 func (spec *DeciderSpec) upcast(ev events.Event) (events.Event, error) {
@@ -302,6 +326,12 @@ func ValidateDeciderSpec(store *events.Store, spec *DeciderSpec) error {
 		}
 		state := d.Initial()
 		for _, ev := range stream {
+			// upcast explicitly: validation must not depend on how the
+			// store's upcaster is wired (idempotent if it already fired)
+			if ev, err = spec.upcast(ev); err != nil {
+				return fmt.Errorf("validation: decider %s: upcasting stream %s failed at %s#%d: %w",
+					spec.Aggregate, id, ev.Type, ev.Sequence, err)
+			}
 			if !contains(spec.Handles, ev.Type) {
 				return fmt.Errorf("validation: decider %s: stream %s contains %s which is not declared in //@handles",
 					spec.Aggregate, id, ev.Type)

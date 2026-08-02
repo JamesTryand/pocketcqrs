@@ -127,6 +127,7 @@ func main() {
 		// at boot, then registered alongside the Go deciders. Failures are
 		// refused loudly — the rest of the system keeps serving, unless
 		// --cqrsStrictBoot is set (boot aborts instead).
+		var validatedDeciders []*functions.DeciderSpec
 		for _, spec := range loaded.Deciders {
 			if c.registry.Has(spec.Aggregate) {
 				if strictBoot {
@@ -145,8 +146,15 @@ func main() {
 				continue
 			}
 			c.registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
+			validatedDeciders = append(validatedDeciders, spec)
 			logger.Info("JS decider active", "aggregate", spec.Aggregate)
 		}
+
+		// store-level upcasting: the validated deciders' transform chains
+		// compose into the store's read path, so every consumer (deciders,
+		// projections, functions, reactors) sees events at their latest
+		// schema version. Only validated specs contribute.
+		c.store.SetUpcaster(functions.BuildUpcaster(validatedDeciders))
 
 		// JS projection schemas are materialized at boot (a restart IS the
 		// maintenance window), additively: create/extend, never drop

@@ -147,15 +147,32 @@ func TestTransformUpcast(t *testing.T) {
 	d := spec.UntypedDecider()
 	registry.RegisterUntyped(spec.Aggregate, d)
 
+	// upcasting lives at the store read path: the decider's transform
+	// chain composes into the store upcaster, so every consumer of the
+	// log (this fold included) sees the latest event version
+	store.SetUpcaster(BuildUpcaster([]*DeciderSpec{spec}))
+
 	// a historical v1 event (without priority) lives in the store
 	if _, err := store.Append(context.Background(), "note", "n1", 0,
 		[]events.NewEvent{{Type: "NoteCreated", Data: json.RawMessage(`{"text":"old"}`), Version: 1}}); err != nil {
 		t.Fatal(err)
 	}
 
-	// evolve sees the upcast (v2) shape
-	state := d.Initial()
+	// the stored row is untouched (append-only), but reads are upcast
 	stream, _ := store.LoadStream(context.Background(), "note", "n1")
+	if stream[0].Version != 2 {
+		t.Fatalf("expected upcast version 2, got %d", stream[0].Version)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(stream[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := data["priority"]; !ok {
+		t.Fatalf("expected upcast data shape, got %v", data)
+	}
+
+	// evolve sees the upcast (v2) shape through the store read path
+	state := d.Initial()
 	state, err := d.Evolve(state, stream[0])
 	if err != nil {
 		t.Fatal(err)
@@ -163,6 +180,16 @@ func TestTransformUpcast(t *testing.T) {
 	m := state.(map[string]any)
 	if m["text"] != "old" || fmt.Sprint(m["priority"]) != "0" {
 		t.Fatalf("unexpected upcast state: %v", m)
+	}
+
+	// events of aggregates without a JS decider pass through untouched
+	if _, err := store.Append(context.Background(), "task", "t1", 0,
+		[]events.NewEvent{{Type: "TaskCreated", Data: json.RawMessage(`{"title":"x"}`), Version: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := store.LoadStream(context.Background(), "task", "t1")
+	if other[0].Version != 1 {
+		t.Fatalf("unrelated aggregate should pass through, got version %d", other[0].Version)
 	}
 }
 

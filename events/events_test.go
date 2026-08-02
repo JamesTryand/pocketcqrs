@@ -56,6 +56,66 @@ func TestAppendAndLoadStream(t *testing.T) {
 	}
 }
 
+func TestStoreUpcaster(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	if _, err := s.Append(ctx, "note", "n1", 0, []NewEvent{
+		{Type: "NoteCreated", Data: json.RawMessage(`{"text":"old"}`), Version: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// no upcaster installed: reads pass through untouched
+	stream, err := s.LoadStream(ctx, "note", "n1")
+	if err != nil || stream[0].Version != 1 {
+		t.Fatalf("unexpected stream: %+v (err=%v)", stream, err)
+	}
+
+	// install an upcaster: LoadStream and Poll both see the upcast view
+	s.SetUpcaster(func(ev Event) (Event, error) {
+		if ev.Type == "NoteCreated" && ev.Version == 1 {
+			ev.Data = json.RawMessage(`{"text":"old","priority":0}`)
+			ev.Version = 2
+		}
+		return ev, nil
+	})
+
+	stream, err = s.LoadStream(ctx, "note", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream[0].Version != 2 || string(stream[0].Data) != `{"text":"old","priority":0}` {
+		t.Fatalf("LoadStream not upcast: %+v", stream[0])
+	}
+
+	polled, err := s.Poll(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(polled) != 1 || polled[0].Version != 2 {
+		t.Fatalf("Poll not upcast: %+v", polled)
+	}
+
+	// a failing upcaster fails the read (consumers must not see raw shapes)
+	s.SetUpcaster(func(ev Event) (Event, error) {
+		return ev, errors.New("boom")
+	})
+	if _, err := s.LoadStream(ctx, "note", "n1"); err == nil {
+		t.Fatal("expected upcast error")
+	}
+	if _, err := s.Poll(ctx, 0, 10); err == nil {
+		t.Fatal("expected upcast error")
+	}
+
+	// disabling restores pass-through
+	s.SetUpcaster(nil)
+	stream, err = s.LoadStream(ctx, "note", "n1")
+	if err != nil || stream[0].Version != 1 {
+		t.Fatalf("unexpected stream after disable: %+v (err=%v)", stream, err)
+	}
+}
+
 func TestAppendConcurrencyConflict(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
