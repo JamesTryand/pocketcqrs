@@ -76,6 +76,13 @@ func (r *Registry) Has(aggregate string) bool {
 // Domain errors from Decide are returned wrapped; events.ErrConcurrency is
 // returned if the stream changed between load and append.
 func (r *Registry) Handle(ctx context.Context, aggregate, id string, cmd Command) ([]events.Event, error) {
+	return r.HandleWithMeta(ctx, aggregate, id, cmd, nil)
+}
+
+// HandleWithMeta is Handle with caller-supplied metadata (e.g. the
+// authenticated actor) merged into every appended event's metadata.
+// Caller-supplied keys win over decider-supplied ones.
+func (r *Registry) HandleWithMeta(ctx context.Context, aggregate, id string, cmd Command, meta map[string]any) ([]events.Event, error) {
 	d, ok := r.deciders[aggregate]
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAggregate, aggregate)
@@ -101,5 +108,25 @@ func (r *Registry) Handle(ctx context.Context, aggregate, id string, cmd Command
 		return nil, nil
 	}
 
+	if len(meta) > 0 {
+		for i := range newEvents {
+			newEvents[i].Metadata = mergeMeta(newEvents[i].Metadata, meta)
+		}
+	}
+
 	return r.store.Append(ctx, aggregate, id, int64(len(stream)), newEvents)
+}
+
+// mergeMeta overlays extra onto the event's existing metadata (existing keys
+// are kept unless also present in extra).
+func mergeMeta(existing json.RawMessage, extra map[string]any) json.RawMessage {
+	m := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &m)
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	out, _ := json.Marshal(m)
+	return out
 }

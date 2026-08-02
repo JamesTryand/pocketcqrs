@@ -31,6 +31,15 @@ func main() {
 	app := pocketbase.New()
 	c := &components{}
 
+	var gatewayCfg gateway.Config
+	app.RootCmd.PersistentFlags().BoolVar(
+		&gatewayCfg.AllowAnonymous,
+		"cqrsAllowAnonymous",
+		false,
+		"allow anonymous CQRS command execution (dev only; no actor metadata is stamped)",
+	)
+	app.RootCmd.ParseFlags(os.Args[1:])
+
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
 		dataDir := e.App.DataDir()
 		if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
@@ -70,7 +79,7 @@ func main() {
 	})
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
-		gateway.RegisterRoutes(e, c.registry)
+		gateway.RegisterRoutes(e, c.registry, gatewayCfg)
 		c.engine.Start(context.Background())
 		return e.Next()
 	})
