@@ -23,6 +23,7 @@ import (
 
 // components is filled during bootstrap, before the server starts.
 type components struct {
+	app      core.App
 	store    *events.Store
 	registry *decider.Registry
 	engine   *consumers.Engine
@@ -48,6 +49,7 @@ func main() {
 		"pb_functions",
 		"the directory with the user defined JS functions",
 	)
+	app.RootCmd.AddCommand(newProjectionCommand(c))
 	app.RootCmd.ParseFlags(os.Args[1:])
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
@@ -55,6 +57,7 @@ func main() {
 		if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
 			return err
 		}
+		c.app = e.App
 
 		// event store (source of truth) next to PocketBase's data.db
 		store, err := events.Open(filepath.Join(dataDir, "events.db"))
@@ -74,7 +77,7 @@ func main() {
 			func(msg string, args ...any) { logger.Warn(msg, args...) })
 
 		// read side: projections into PocketBase collections
-		projs := []projections.Projection{projections.NewTasks(e.App)}
+		projs := allProjections(e.App)
 		for _, p := range projs {
 			c.engine.Register(p)
 		}
