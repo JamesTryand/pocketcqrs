@@ -1,10 +1,11 @@
 {{define "content"}}
-<nav class="wa-cluster wa-gap-xs wa-caption-m" aria-label="Breadcrumb">
-  <a href="/aggregates">Aggregates</a> <span aria-hidden="true">/</span>
-  <a href="/aggregates/{{.Aggregate}}">{{.Aggregate}}</a> <span aria-hidden="true">/</span> <span>{{.StreamID}}</span>
-</nav>
+<wa-breadcrumb>
+  <wa-breadcrumb-item href="/aggregates">Aggregates</wa-breadcrumb-item>
+  <wa-breadcrumb-item href="/aggregates/{{.Aggregate}}">{{.Aggregate}}</wa-breadcrumb-item>
+  <wa-breadcrumb-item>{{.StreamID}}</wa-breadcrumb-item>
+</wa-breadcrumb>
 
-<div class="wa-split">
+<div class="wa-split wa-align-items-baseline">
   <h1>{{.Aggregate}}/{{.StreamID}}</h1>
   <span class="wa-caption-m">{{len .Events}} event{{if ne (len .Events) 1}}s{{end}} shown, oldest first</span>
 </div>
@@ -14,7 +15,7 @@
   {{range .Events}}
   <li>
     <article class="postit postit-event">
-      <header class="wa-split">
+      <header class="wa-split wa-align-items-baseline">
         <h2 class="wa-heading-s">{{.Type}}</h2>
         <span class="wa-caption-s">v{{.Version}}</span>
       </header>
@@ -36,7 +37,7 @@
   {{end}}
 </ol>
 {{else}}
-<wa-card><p class="wa-caption-m">No events in this range.</p></wa-card>
+<wa-card><p class="wa-caption-m">No events in this range &mdash; this stream may be shorter than the page you asked for, or the aggregate id may not exist.</p></wa-card>
 {{end}}
 
 {{template "pager" .}}

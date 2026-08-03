@@ -3,9 +3,11 @@
 <html lang="en" class="wa-theme-default wa-palette-default wa-light">
 <head>{{template "head" .}}</head>
 <body>
-  <div class="auth-screen wa-stack wa-align-items-center wa-justify-content-center">
+  {{/* a landmark of its own: this page is not inside the wa-page shell, so
+       nothing else supplies one */}}
+  <main class="auth-screen wa-stack wa-align-items-center wa-justify-content-center">
     <wa-card class="auth-card">
-      <div class="wa-stack wa-gap-l">
+      <div class="wa-stack wa-gap-m">
         <div class="wa-stack wa-gap-2xs">
           <h1 class="wa-heading-l">PocketCQRS</h1>
           <span class="wa-caption-m">Sign in with a PocketBase superuser account</span>
@@ -24,7 +26,7 @@
       </div>
     </wa-card>
     <span class="wa-caption-m">backend: {{.BackendURL}}</span>
-  </div>
+  </main>
 </body>
 </html>
 {{end}}

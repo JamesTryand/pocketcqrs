@@ -1,5 +1,5 @@
 {{define "content"}}
-<div class="wa-split">
+<div class="wa-split wa-align-items-baseline">
   <h1>Consumers</h1>
   <span class="wa-caption-m">head of log: position {{.MaxPosition}}</span>
 </div>
@@ -12,8 +12,9 @@
 <wa-card>
   <h2 slot="header">Checkpoints</h2>
   {{if .Consumers}}
-  <wa-scroller class="table-scroller">
+  <wa-scroller>
     <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <caption class="wa-visually-hidden">Consumers, their checkpoints and how far each is behind the head of the log</caption>
       <thead>
         <tr>
           <th scope="col">Consumer</th>
@@ -28,6 +29,9 @@
         {{range .Consumers}}
         <tr>
           <th scope="row">{{.Name}}</th>
+          {{/* reactors carry the warning hue on purpose — it matches the
+               dashed warning-coloured reactor edges in the catalog explorer,
+               so the two views name the same thing the same way */}}
           <td><wa-tag size="s" variant="{{if eq .Kind "reactor"}}warning{{else}}neutral{{end}}">{{.Kind}}</wa-tag></td>
           <td>
             {{range .EventTypes}}<wa-tag size="s" appearance="outlined">{{.}}</wa-tag> {{else}}<span class="wa-caption-m">&mdash;</span>{{end}}
@@ -65,8 +69,9 @@
   </div>
 
   {{if .DeadLetters}}
-  <wa-scroller class="table-scroller">
+  <wa-scroller>
     <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <caption class="wa-visually-hidden">Dead-lettered function deliveries</caption>
       <thead>
         <tr>
           <th scope="col" class="wa-text-end">ID</th>
@@ -97,7 +102,7 @@
             {{end}}
           </td>
           <td>
-            <wa-details summary="error">
+            <wa-details summary="Error details">
               <p class="wa-body-s">{{.Error}}</p>
               <p class="wa-caption-s">event payload</p>
               <pre class="payload"><code>{{.Event.Payload}}</code></pre>

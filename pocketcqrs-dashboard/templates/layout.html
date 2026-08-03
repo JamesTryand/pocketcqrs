@@ -34,7 +34,9 @@
 <html lang="en" class="wa-theme-default wa-palette-default wa-light">
 <head>{{template "head" .}}</head>
 <body>
-<wa-page>
+{{/* wider than the 768px default: a 15rem sidebar next to seven-column
+     tables is cramped well before that */}}
+<wa-page mobile-breakpoint="1024">
   <header slot="header" class="wa-split">
     <div class="wa-cluster">
       <wa-button data-toggle-nav appearance="plain">Menu</wa-button>
@@ -42,14 +44,18 @@
       <span class="wa-caption-m">ops dashboard</span>
     </div>
     <div class="wa-cluster">
-      <wa-button href="{{.BackendURL}}/_/" target="_blank" rel="noopener" appearance="outlined" size="s">PocketBase admin</wa-button>
+      <wa-button href="{{.BackendURL}}/_/" target="_blank" rel="noopener" appearance="outlined" size="s">PocketBase admin<span class="wa-visually-hidden"> (opens in a new tab)</span></wa-button>
       <form method="post" action="/logout">
         <wa-button type="submit" appearance="plain" size="s">Sign out</wa-button>
       </form>
     </div>
   </header>
 
-  <nav slot="navigation" class="wa-stack wa-gap-2xs">
+  {{/* navigation-header doubles as the mobile drawer's label — without it the
+       drawer dialog is announced unnamed */}}
+  <strong slot="navigation-header">PocketCQRS</strong>
+  {{/* named because pages carry other nav landmarks (breadcrumbs, the pager) */}}
+  <nav slot="navigation" aria-label="Main" class="wa-stack wa-gap-2xs">
     {{range .Nav}}
     <a href="{{.Href}}" data-drawer="close" class="wa-cluster wa-gap-xs{{if .Current}} nav-active{{end}}" {{if .Current}}aria-current="page"{{end}}><wa-icon name="{{.Icon}}" library="system"></wa-icon> {{.Label}}</a>
     {{end}}

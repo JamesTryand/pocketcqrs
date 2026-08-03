@@ -1,17 +1,19 @@
 {{define "content"}}
-<nav class="wa-cluster wa-gap-xs wa-caption-m" aria-label="Breadcrumb">
-  <a href="/aggregates">Aggregates</a> <span aria-hidden="true">/</span> <span>{{.Aggregate}}</span>
-</nav>
+<wa-breadcrumb>
+  <wa-breadcrumb-item href="/aggregates">Aggregates</wa-breadcrumb-item>
+  <wa-breadcrumb-item>{{.Aggregate}}</wa-breadcrumb-item>
+</wa-breadcrumb>
 
-<div class="wa-split">
+<div class="wa-split wa-align-items-baseline">
   <h1>{{.Aggregate}}</h1>
   <span class="wa-caption-m">{{len .Streams}} stream{{if ne (len .Streams) 1}}s{{end}}</span>
 </div>
 
 <wa-card>
   {{if .Streams}}
-  <wa-scroller class="table-scroller">
+  <wa-scroller>
     <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <caption class="wa-visually-hidden">Streams of the {{.Aggregate}} aggregate</caption>
       <thead>
         <tr>
           <th scope="col">Stream</th>

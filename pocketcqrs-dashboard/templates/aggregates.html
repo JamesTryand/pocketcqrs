@@ -1,13 +1,14 @@
 {{define "content"}}
-<div class="wa-split">
+<div class="wa-split wa-align-items-baseline">
   <h1>Aggregates</h1>
   <span class="wa-caption-m">{{len .Aggregates}} registered</span>
 </div>
 
 <wa-card>
   {{if .Aggregates}}
-  <wa-scroller class="table-scroller">
+  <wa-scroller>
     <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <caption class="wa-visually-hidden">Registered aggregates, their origin, stream count and observed event types</caption>
       <thead>
         <tr>
           <th scope="col">Aggregate</th>
@@ -21,7 +22,9 @@
         {{range .Aggregates}}
         <tr>
           <th scope="row"><a href="/aggregates/{{.Name}}">{{.Name}}</a></th>
-          <td><wa-tag size="s" variant="{{if eq .Origin "js"}}warning{{else}}brand{{end}}">{{.Origin}}</wa-tag></td>
+          {{/* neutral, not warning: a JS decider is a classification, not a
+               problem state */}}
+          <td><wa-tag size="s" variant="{{if eq .Origin "js"}}neutral{{else}}brand{{end}}">{{.Origin}}</wa-tag></td>
           <td class="wa-text-end">{{.Streams}}</td>
           <td>
             {{range .Events}}<wa-tag size="s" appearance="outlined">{{.Type}} &times;{{.Count}}</wa-tag> {{else}}<span class="wa-caption-m">none yet</span>{{end}}
@@ -37,7 +40,7 @@
     </table>
   </wa-scroller>
   {{else}}
-  <p class="wa-caption-m">No aggregates are registered yet.</p>
+  <p class="wa-caption-m">No aggregates are registered yet &mdash; register a decider in Go, or drop a <code>//@trigger decider</code> file into the functions directory.</p>
   {{end}}
   <p slot="footer" class="wa-caption-s">Event types and stream counts are empirical &mdash; read from the log, not declared. &ldquo;Declared&rdquo; shows what the decider itself states.</p>
 </wa-card>

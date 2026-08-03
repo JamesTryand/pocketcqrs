@@ -27,15 +27,18 @@ wa-page[view='mobile'] {
 [slot='navigation'] a.nav-active {
   background-color: var(--wa-color-brand-fill-quiet);
   color: var(--wa-color-brand-on-quiet);
-  font-weight: 600;
+  font-weight: var(--wa-font-weight-bold);
 }
 
 /* overview totals */
 .totals-grid {
   --min-column-size: 11rem;
 }
+/* text on the page surface, so this is the tuned on- pairing rather than a
+   fill token: on-quiet re-resolves per colour scheme (danger-40 light,
+   danger-60 dark), where fill-loud is danger-50 in both */
 .stat-danger {
-  color: var(--wa-color-danger-fill-loud);
+  color: var(--wa-color-danger-on-quiet);
 }
 
 /* catalog explorer */
@@ -78,12 +81,6 @@ wa-page[view='mobile'] {
   font-size: var(--wa-font-size-s);
   background-color: var(--wa-color-surface-lowered);
   border-radius: var(--wa-border-radius-m);
-}
-
-/* browsing tables — wa-scroller's shadow defaults to the page surface, but
-   every table here sits inside a wa-card, which is a raised surface */
-.table-scroller {
-  --shadow-color: var(--wa-color-surface-raised);
 }
 
 /* ---- stream timeline: the event-modeling post-it convention ----
@@ -168,7 +165,8 @@ wa-page[view='mobile'] {
   margin: 0;
 }
 
-/* JSON payloads (event data, metadata, dead-letter envelopes) */
+/* JSON payloads (event data, metadata, dead-letter envelopes). On a card
+   these follow the theme, which is what you want. */
 .payload {
   margin: 0;
   padding: var(--wa-space-s);
@@ -177,6 +175,13 @@ wa-page[view='mobile'] {
   color: var(--wa-color-text-normal);
   background-color: var(--wa-color-surface-lowered);
   border-radius: var(--wa-border-radius-m);
+}
+/* Inside a post-it they must not: the note is scheme-fixed, so a themed
+   payload would put a near-black slab with white text inside a pale orange
+   card in dark mode. Same reasoning as the wa-details part pin above. */
+.postit .payload {
+  color: var(--wa-color-gray-05);
+  background-color: var(--wa-color-orange-95);
 }
 
 /* login */
