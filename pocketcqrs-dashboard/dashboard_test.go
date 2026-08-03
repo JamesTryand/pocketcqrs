@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -222,6 +224,7 @@ func TestVendoredAssetsServed(t *testing.T) {
 		"/assets/explorer.js",
 		"/assets/webawesome/webawesome.loader.js",
 		"/assets/webawesome/styles/themes/default.css",
+		"/assets/webawesome/components/input/input.js",
 		"/assets/vendor/htmx.min.js",
 		"/assets/vendor/cytoscape.min.js",
 	} {
@@ -233,6 +236,34 @@ func TestVendoredAssetsServed(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s: expected 200, got %s", path, resp.Status)
 		}
+	}
+}
+
+// TestVendoredWebAwesomeHasNoBareImports guards the self-contained
+// frontend: the npm `dist/` build of Web Awesome contains bare module
+// specifiers ("@shoelace-style/animations", "lit", …) that browsers cannot
+// resolve — only the `dist-cdn/` build is importable directly. Scan every
+// embedded webawesome JS file so a wrong-tree vendor fails loudly.
+func TestVendoredWebAwesomeHasNoBareImports(t *testing.T) {
+	bare := regexp.MustCompile(`(?:from\s+["']|import\s*\(\s*["']|import\s+["'])(?:@|lit)`)
+	err := fs.WalkDir(assetsFS, "assets/webawesome", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".js") {
+			return nil
+		}
+		raw, err := assetsFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if m := bare.Find(raw); m != nil {
+			t.Errorf("%s: bare module specifier near %q — vendor from dist-cdn/, not dist/", path, m)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

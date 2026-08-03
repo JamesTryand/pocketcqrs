@@ -1,12 +1,14 @@
 /*! Copyright 2026 Fonticons, Inc. - https://webawesome.com/license */
 import {
   WaResizeObserver
-} from "../../chunks/chunk.YQ2KR5FP.js";
+} from "../../chunks/chunk.7HGYKBWW.js";
 import "../../chunks/chunk.DP5YIFD7.js";
-import "../../chunks/chunk.DVCOR4TS.js";
+import "../../chunks/chunk.FV2UJLMK.js";
 import "../../chunks/chunk.PZAN6FPN.js";
-import "../../chunks/chunk.AOKMSJXD.js";
-import "../../chunks/chunk.7VGCIHDG.js";
+import "../../chunks/chunk.LBLI4KS5.js";
+import "../../chunks/chunk.TLFIX76K.js";
+import "../../chunks/chunk.BKE5EYM3.js";
+import "../../chunks/chunk.JHZRD2LV.js";
 export {
   WaResizeObserver as default
 };

@@ -5,12 +5,18 @@ re-installing from npm and re-copying the same paths.
 
 | path | package | version | license |
 | --- | --- | --- | --- |
-| `webawesome/` | `@awesome.me/webawesome` (`dist/webawesome.loader.js`, `dist/chunks/`, `dist/components/`, `dist/styles/`) | 3.11.0 | MIT |
+| `webawesome/` | `@awesome.me/webawesome` (**`dist-cdn/`**: `webawesome.loader.js`, `chunks/`, `components/`, `styles/`) | 3.11.0 | MIT |
 | `vendor/htmx.min.js` | `htmx.org` (`dist/htmx.min.js`) | 4.0.0-beta6 | BSD-0-Clause |
 | `vendor/cytoscape.min.js` | `cytoscape` (`dist/cytoscape.min.js`) | 3.34.0 | MIT |
 
 Notes:
 
+- **Use `dist-cdn/`, never `dist/`.** The npm `dist/` build is bundler-oriented
+  and contains bare module specifiers (`@shoelace-style/animations`, `lit`, …)
+  that browsers cannot resolve; `dist-cdn/` rewrites everything to relative
+  imports and is what the Web Awesome CDN itself serves. A regression test
+  (`TestVendoredWebAwesomeHasNoBareImports`) scans the embedded JS for bare
+  imports.
 - `webawesome.loader.js` auto-discovers `<wa-*>` tags and lazy-loads from
   `components/` and `chunks/` relative to its own URL — preserve the
   directory layout under `webawesome/`.

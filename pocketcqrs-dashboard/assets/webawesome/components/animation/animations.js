@@ -1,12 +1,12 @@
 /*! Copyright 2026 Fonticons, Inc. - https://webawesome.com/license */
 import {
-  animations,
+  dist_exports,
   getAnimationNames,
   getEasingNames
-} from "../../chunks/chunk.46TQDRI6.js";
-import "../../chunks/chunk.7VGCIHDG.js";
+} from "../../chunks/chunk.LN7M2NWC.js";
+import "../../chunks/chunk.JHZRD2LV.js";
 export {
-  animations,
+  dist_exports as animations,
   getAnimationNames,
   getEasingNames
 };
