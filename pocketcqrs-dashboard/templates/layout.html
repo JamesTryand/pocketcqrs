@@ -16,6 +16,19 @@
 <script src="/assets/vendor/htmx.min.js" defer></script>
 {{end}}
 
+{{/* Feed pagination. Older walks back down the log (before=), Newer walks
+     up it (after=); an empty link means that direction is exhausted. A
+     wa-button honours `disabled` even with an href, so each direction is
+     one element rather than an enabled/disabled pair. */}}
+{{define "pager"}}
+{{if or .Older .Newer}}
+<nav class="wa-cluster wa-gap-s" aria-label="Pagination">
+  <wa-button appearance="outlined" size="s" {{if .Older}}href="{{.Older}}"{{else}}disabled{{end}}><wa-icon slot="start" name="chevron-left" library="system"></wa-icon> Older</wa-button>
+  <wa-button appearance="outlined" size="s" {{if .Newer}}href="{{.Newer}}"{{else}}disabled{{end}}>Newer <wa-icon slot="end" name="chevron-right" library="system"></wa-icon></wa-button>
+</nav>
+{{end}}
+{{end}}
+
 {{define "layout"}}
 <!doctype html>
 <html lang="en" class="wa-theme-default wa-palette-default wa-light">

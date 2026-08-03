@@ -53,7 +53,12 @@
   <h2 slot="header">Catalog explorer</h2>
   <span slot="header-actions" class="wa-caption-m">click a node for details</span>
   <div id="explorer" role="application" aria-label="Interactive graph of the platform catalog"></div>
-  <p class="wa-caption-s legend">rectangle: aggregate &middot; ellipse: consumer (dashed: reactor) &middot; barrel: read-model collection &middot; dashed edges: empirical reactor flows &middot; edge labels: event types</p>
+  <p class="wa-caption-s legend">
+    Event-modeling notation, drawn from the log: <span class="key key-event">orange</span> rounded notes are events
+    &middot; <span class="key key-model">green</span> rectangles are read models &middot; grey rectangles are aggregates
+    &middot; ellipses are consumers (dashed: reactor) &middot; dashed edges are empirical reactor flows.
+    Blue is reserved for commands (M13); screens are not modelled until M14.
+  </p>
   <div id="explorer-details" class="wa-caption-m">Select a node for details.</div>
 </wa-card>
 

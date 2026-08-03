@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="wa-split">
+  <h1>Events</h1>
+  <span class="wa-caption-m">{{len .Events}} shown, oldest first</span>
+</div>
+
+{{/* A plain GET form: Web Awesome controls are form-associated, so they
+     submit their name/value pairs like native ones and the resulting URL is
+     shareable. An empty select submits an empty filter, which the feed reads
+     as "unfiltered" — hence placeholder + with-clear rather than an
+     all-events option. */}}
+<wa-card>
+  <form method="get" action="/events" class="wa-cluster wa-gap-s wa-align-items-end">
+    <wa-select name="aggregate" label="Aggregate" placeholder="All aggregates" value="{{.Filter.Aggregate}}" size="s" with-clear>
+      {{range .Aggregates}}<wa-option value="{{.Name}}">{{.Name}}</wa-option>{{end}}
+    </wa-select>
+    <wa-select name="type" label="Event type" placeholder="All types" value="{{.Filter.Type}}" size="s" with-clear>
+      {{range .Types}}<wa-option value="{{.}}">{{.}}</wa-option>{{end}}
+    </wa-select>
+    <wa-number-input name="limit" label="Per page" min="1" max="1000" value="{{.Filter.Limit}}" size="s" without-steppers></wa-number-input>
+    <wa-button type="submit" variant="brand" size="s">Apply</wa-button>
+    <wa-button href="/events" appearance="plain" size="s">Reset</wa-button>
+  </form>
+</wa-card>
+
+<wa-card>
+  {{if .Events}}
+  <wa-scroller class="table-scroller">
+    <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <thead>
+        <tr>
+          <th scope="col" class="wa-text-end">Pos</th>
+          <th scope="col">Type</th>
+          <th scope="col">Stream</th>
+          <th scope="col" class="wa-text-end">Seq</th>
+          <th scope="col">Actor</th>
+          <th scope="col">Created</th>
+          <th scope="col">Payload</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Events}}
+        <tr>
+          <th scope="row" class="wa-text-end">{{.Position}}</th>
+          <td><wa-tag size="s" appearance="outlined">{{.Type}}</wa-tag></td>
+          <td><a href="/aggregates/{{.Aggregate}}/{{.AggregateID}}">{{.Aggregate}}/{{.AggregateID}}</a></td>
+          <td class="wa-text-end">{{.Sequence}}</td>
+          <td class="wa-caption-m">{{with .Actor}}{{.}}{{else}}&mdash;{{end}}</td>
+          <td class="wa-caption-m">{{.Created}}</td>
+          <td>
+            <wa-details summary="v{{.Version}}">
+              <pre class="payload"><code>{{.Payload}}</code></pre>
+            </wa-details>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </wa-scroller>
+  {{else}}
+  <p class="wa-caption-m">No events match this filter.</p>
+  {{end}}
+</wa-card>
+
+{{template "pager" .}}
+{{end}}

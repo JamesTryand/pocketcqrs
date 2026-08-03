@@ -1,0 +1,44 @@
+{{define "content"}}
+<div class="wa-split">
+  <h1>Aggregates</h1>
+  <span class="wa-caption-m">{{len .Aggregates}} registered</span>
+</div>
+
+<wa-card>
+  {{if .Aggregates}}
+  <wa-scroller class="table-scroller">
+    <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <thead>
+        <tr>
+          <th scope="col">Aggregate</th>
+          <th scope="col">Origin</th>
+          <th scope="col" class="wa-text-end">Streams</th>
+          <th scope="col">Event types (observed)</th>
+          <th scope="col">Declared</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Aggregates}}
+        <tr>
+          <th scope="row"><a href="/aggregates/{{.Name}}">{{.Name}}</a></th>
+          <td><wa-tag size="s" variant="{{if eq .Origin "js"}}warning{{else}}brand{{end}}">{{.Origin}}</wa-tag></td>
+          <td class="wa-text-end">{{.Streams}}</td>
+          <td>
+            {{range .Events}}<wa-tag size="s" appearance="outlined">{{.Type}} &times;{{.Count}}</wa-tag> {{else}}<span class="wa-caption-m">none yet</span>{{end}}
+          </td>
+          <td class="wa-caption-m">
+            {{if .Handles}}handles: {{range $i, $h := .Handles}}{{if $i}}, {{end}}{{$h}}{{end}}{{end}}
+            {{if .Transforms}}<br>transforms: {{range $i, $t := .Transforms}}{{if $i}}, {{end}}{{$t}}{{end}}{{end}}
+            {{if not (or .Handles .Transforms)}}&mdash;{{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </wa-scroller>
+  {{else}}
+  <p class="wa-caption-m">No aggregates are registered yet.</p>
+  {{end}}
+  <p slot="footer" class="wa-caption-s">Event types and stream counts are empirical &mdash; read from the log, not declared. &ldquo;Declared&rdquo; shows what the decider itself states.</p>
+</wa-card>
+{{end}}

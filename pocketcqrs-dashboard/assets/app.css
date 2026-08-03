@@ -48,6 +48,21 @@ wa-page[view='mobile'] {
 .legend {
   margin-block: var(--wa-space-xs) 0;
 }
+/* legend swatches: the same fixed notation tints the graph nodes use, so
+   the words "orange" and "green" are shown rather than only named */
+.key {
+  padding-inline: var(--wa-space-2xs);
+  border-radius: var(--wa-border-radius-s);
+  color: var(--wa-color-gray-05);
+}
+.key-event {
+  background-color: var(--wa-color-orange-90);
+  border: var(--wa-border-width-s) solid var(--wa-color-orange-70);
+}
+.key-model {
+  background-color: var(--wa-color-green-90);
+  border: var(--wa-border-width-s) solid var(--wa-color-green-70);
+}
 #explorer-details {
   min-block-size: 1.5em;
   margin-block-start: var(--wa-space-s);
@@ -61,6 +76,105 @@ wa-page[view='mobile'] {
   padding: var(--wa-space-m);
   overflow: auto;
   font-size: var(--wa-font-size-s);
+  background-color: var(--wa-color-surface-lowered);
+  border-radius: var(--wa-border-radius-m);
+}
+
+/* browsing tables — wa-scroller's shadow defaults to the page surface, but
+   every table here sits inside a wa-card, which is a raised surface */
+.table-scroller {
+  --shadow-color: var(--wa-color-surface-raised);
+}
+
+/* ---- stream timeline: the event-modeling post-it convention ----
+
+   Events are pastel-orange notes because that is what the notation says an
+   event is (view models green, commands blue at M13) — the hue carries
+   meaning across the tool, the docs and the whiteboard, so it must NOT flip
+   between light and dark mode. Semantic tokens re-resolve per scheme, which
+   is exactly wrong here, so these use palette tints deliberately and there
+   is intentionally NO .wa-dark override: the "dark-mode cost" of a palette
+   tint is the property being bought.
+
+   Because the fill carries text, the text colour is pinned to a fixed dark
+   tint rather than paired with an -on- token (there is no -on- pair for a
+   raw tint). #101219 on #ffdfca is ~15:1, comfortably past WCAG AA in
+   either scheme. Everything else — spacing, radii, borders — is tokens. */
+.timeline {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.timeline > li {
+  position: relative;
+  padding-inline-start: var(--wa-space-xl);
+  border-inline-start: var(--wa-border-width-m) solid var(--wa-color-surface-border);
+}
+/* the rail should stop at the last note, not run past it */
+.timeline > li:last-child {
+  border-inline-start-color: transparent;
+}
+.timeline > li::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: calc(var(--wa-space-xs) * -1);
+  inset-block-start: var(--wa-space-m);
+  inline-size: var(--wa-space-s);
+  block-size: var(--wa-space-s);
+  border-radius: var(--wa-border-radius-circle);
+  background-color: var(--wa-color-surface-border);
+}
+
+.postit {
+  padding: var(--wa-space-m);
+  border-radius: var(--wa-border-radius-m);
+  box-shadow: var(--wa-shadow-s);
+  color: var(--wa-color-gray-05);
+}
+.postit-event {
+  background-color: var(--wa-color-orange-90);
+  border: var(--wa-border-width-s) solid var(--wa-color-orange-70);
+}
+.postit h2 {
+  margin: 0;
+}
+/* the note's own caption text, on the fixed post-it fill rather than the
+   page surface, so it can't inherit the theme's quiet colour */
+.postit .wa-caption-s,
+.postit .wa-caption-m {
+  color: inherit;
+  opacity: 0.75;
+}
+
+/* wa-details sets `color: var(--wa-color-text-normal)` on its `details`
+   part, so it does NOT inherit the post-it's pinned text colour — in dark
+   mode that resolves to near-white on the pale orange fill. Pin it through
+   the documented part to the same fixed tint the note uses. */
+.postit wa-details::part(details) {
+  color: var(--wa-color-gray-05);
+}
+
+/* label/value pairs inside a post-it */
+.postit-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--wa-space-3xs) var(--wa-space-s);
+  margin-block: var(--wa-space-s);
+}
+.postit-facts dt {
+  font-weight: var(--wa-font-weight-semibold);
+}
+.postit-facts dd {
+  margin: 0;
+}
+
+/* JSON payloads (event data, metadata, dead-letter envelopes) */
+.payload {
+  margin: 0;
+  padding: var(--wa-space-s);
+  overflow: auto;
+  font-size: var(--wa-font-size-s);
+  color: var(--wa-color-text-normal);
   background-color: var(--wa-color-surface-lowered);
   border-radius: var(--wa-border-radius-m);
 }

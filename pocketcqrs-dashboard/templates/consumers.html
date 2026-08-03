@@ -1,0 +1,118 @@
+{{define "content"}}
+<div class="wa-split">
+  <h1>Consumers</h1>
+  <span class="wa-caption-m">head of log: position {{.MaxPosition}}</span>
+</div>
+
+{{/* One row per checkpointed consumer, whatever its kind: Consumer.Name() is
+     the durable checkpoint key for go-projections, js-projections, reactors
+     and effect functions alike, so behind-by resolves uniformly. It is
+     measured against the head of the log rather than the event count —
+     position is AUTOINCREMENT and conflict retries burn values. */}}
+<wa-card>
+  <h2 slot="header">Checkpoints</h2>
+  {{if .Consumers}}
+  <wa-scroller class="table-scroller">
+    <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <thead>
+        <tr>
+          <th scope="col">Consumer</th>
+          <th scope="col">Kind</th>
+          <th scope="col">Triggers</th>
+          <th scope="col">Collections</th>
+          <th scope="col" class="wa-text-end">Checkpoint</th>
+          <th scope="col">Behind by</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Consumers}}
+        <tr>
+          <th scope="row">{{.Name}}</th>
+          <td><wa-tag size="s" variant="{{if eq .Kind "reactor"}}warning{{else}}neutral{{end}}">{{.Kind}}</wa-tag></td>
+          <td>
+            {{range .EventTypes}}<wa-tag size="s" appearance="outlined">{{.}}</wa-tag> {{else}}<span class="wa-caption-m">&mdash;</span>{{end}}
+          </td>
+          <td class="wa-caption-m">
+            {{range $i, $c := .Collections}}{{if $i}}, {{end}}{{$c}}{{else}}&mdash;{{end}}
+          </td>
+          <td class="wa-text-end">{{.Checkpoint}}</td>
+          <td>
+            {{if gt .Behind 0}}
+            <wa-tag size="s" variant="danger"><wa-icon name="clock" library="system"></wa-icon> {{.Behind}} to go</wa-tag>
+            {{else}}
+            <wa-tag size="s" variant="success" appearance="outlined"><wa-icon name="check" library="system"></wa-icon> caught up</wa-tag>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </wa-scroller>
+  {{else}}
+  <p class="wa-caption-m">No consumers are registered &mdash; nothing is projecting or reacting to the log yet.</p>
+  {{end}}
+  <p slot="footer" class="wa-caption-s">Behind-by counts log positions between a consumer&rsquo;s checkpoint and the head, so it settles at zero once the consumer catches up. Projections block on failure; effect functions dead-letter instead.</p>
+</wa-card>
+
+<wa-card>
+  <h2 slot="header">Dead letters</h2>
+  <div slot="header-actions" class="wa-cluster wa-gap-xs">
+    {{if .IncludeResolved}}
+    <wa-button href="/consumers" appearance="outlined" size="s">Pending only</wa-button>
+    {{else}}
+    <wa-button href="/consumers?all=1" appearance="outlined" size="s">Include resolved</wa-button>
+    {{end}}
+  </div>
+
+  {{if .DeadLetters}}
+  <wa-scroller class="table-scroller">
+    <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <thead>
+        <tr>
+          <th scope="col" class="wa-text-end">ID</th>
+          <th scope="col">Consumer</th>
+          <th scope="col">Event</th>
+          <th scope="col" class="wa-text-end">Attempts</th>
+          <th scope="col">Last failed</th>
+          <th scope="col">Status</th>
+          <th scope="col">Failure</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .DeadLetters}}
+        <tr>
+          <th scope="row" class="wa-text-end">{{.ID}}</th>
+          <td>{{.Consumer}}</td>
+          <td>
+            <a href="/aggregates/{{.Event.Aggregate}}/{{.Event.AggregateID}}">{{.Event.Type}}</a>
+            <span class="wa-caption-s">@{{.EventPos}}</span>
+          </td>
+          <td class="wa-text-end">{{.Attempts}}</td>
+          <td class="wa-caption-m">{{.LastFailed}}</td>
+          <td>
+            {{if .Resolved}}
+            <wa-tag size="s" variant="success" appearance="outlined"><wa-icon name="check" library="system"></wa-icon> resolved</wa-tag>
+            {{else}}
+            <wa-tag size="s" variant="danger"><wa-icon name="circle-xmark" library="system"></wa-icon> pending</wa-tag>
+            {{end}}
+          </td>
+          <td>
+            <wa-details summary="error">
+              <p class="wa-body-s">{{.Error}}</p>
+              <p class="wa-caption-s">event payload</p>
+              <pre class="payload"><code>{{.Event.Payload}}</code></pre>
+            </wa-details>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </wa-scroller>
+  {{else}}
+  <p class="wa-caption-m">
+    {{if .IncludeResolved}}Nothing has ever been dead-lettered.{{else}}No pending dead letters &mdash; every effect-function delivery has succeeded or been resolved.{{end}}
+  </p>
+  {{end}}
+  <p slot="footer" class="wa-caption-s">Failed effect-function deliveries are captured with their whole event envelope; the checkpoint still advances, so a poison message never blocks the log. Retry and dismiss run from the CLI (<code>pocketcqrs deadletter retry &lt;id|all&gt;</code>) until DASH.4 brings them here.</p>
+</wa-card>
+{{end}}

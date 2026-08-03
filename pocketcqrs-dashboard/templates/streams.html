@@ -1,0 +1,39 @@
+{{define "content"}}
+<nav class="wa-cluster wa-gap-xs wa-caption-m" aria-label="Breadcrumb">
+  <a href="/aggregates">Aggregates</a> <span aria-hidden="true">/</span> <span>{{.Aggregate}}</span>
+</nav>
+
+<div class="wa-split">
+  <h1>{{.Aggregate}}</h1>
+  <span class="wa-caption-m">{{len .Streams}} stream{{if ne (len .Streams) 1}}s{{end}}</span>
+</div>
+
+<wa-card>
+  {{if .Streams}}
+  <wa-scroller class="table-scroller">
+    <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <thead>
+        <tr>
+          <th scope="col">Stream</th>
+          <th scope="col" class="wa-text-end">Events</th>
+          <th scope="col" class="wa-text-end">Last position</th>
+          <th scope="col">Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Streams}}
+        <tr>
+          <th scope="row"><a href="/aggregates/{{.Aggregate}}/{{.AggregateID}}">{{.AggregateID}}</a></th>
+          <td class="wa-text-end">{{.Events}}</td>
+          <td class="wa-text-end">{{.LastPosition}}</td>
+          <td class="wa-caption-m">{{.Updated}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </wa-scroller>
+  {{else}}
+  <p class="wa-caption-m">No streams for <strong>{{.Aggregate}}</strong> yet &mdash; nothing has been appended to this aggregate.</p>
+  {{end}}
+</wa-card>
+{{end}}
