@@ -1,0 +1,75 @@
+/* PocketCQRS ops dashboard — page styles on top of Web Awesome tokens. */
+
+html,
+body {
+  min-height: 100%;
+  padding: 0;
+  margin: 0;
+}
+
+wa-page {
+  --menu-width: 15rem;
+}
+wa-page[view='mobile'] {
+  --menu-width: auto;
+}
+
+/* side navigation (slot content is light DOM — plain anchors + wa-icons) */
+[slot='navigation'] a {
+  padding: var(--wa-space-2xs) var(--wa-space-xs);
+  border-radius: var(--wa-border-radius-m);
+  color: var(--wa-color-text-normal);
+  text-decoration: none;
+}
+[slot='navigation'] a:hover {
+  background-color: var(--wa-color-neutral-fill-quiet);
+}
+[slot='navigation'] a.nav-active {
+  background-color: var(--wa-color-brand-fill-quiet);
+  color: var(--wa-color-brand-on-quiet);
+  font-weight: 600;
+}
+
+/* overview totals */
+.totals-grid {
+  --min-column-size: 11rem;
+}
+.stat-danger {
+  color: var(--wa-color-danger-fill-loud);
+}
+
+/* catalog explorer */
+#explorer {
+  block-size: 26rem;
+  border: var(--wa-border-width-s) solid var(--wa-color-surface-border);
+  border-radius: var(--wa-border-radius-m);
+  background-color: var(--wa-color-surface-lowered);
+}
+.legend {
+  margin-block: var(--wa-space-xs) 0;
+}
+#explorer-details {
+  min-block-size: 1.5em;
+  margin-block-start: var(--wa-space-s);
+  padding-block-start: var(--wa-space-s);
+  border-block-start: var(--wa-border-width-s) solid var(--wa-color-surface-border);
+}
+
+/* mermaid source panel */
+.mermaid-src {
+  margin: 0;
+  padding: var(--wa-space-m);
+  overflow: auto;
+  font-size: var(--wa-font-size-s);
+  background-color: var(--wa-color-surface-lowered);
+  border-radius: var(--wa-border-radius-m);
+}
+
+/* login */
+.auth-screen {
+  min-height: 100vh;
+}
+.auth-card {
+  width: 100%;
+  max-width: 24rem;
+}

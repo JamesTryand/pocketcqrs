@@ -1,0 +1,7 @@
+{{define "content"}}
+<h1>{{.Heading}}</h1>
+<wa-callout variant="{{.Variant}}">
+  <wa-icon slot="icon" name="{{if eq .Variant "danger"}}circle-xmark{{else}}clock{{end}}" library="system"></wa-icon>
+  {{.Text}}
+</wa-callout>
+{{end}}

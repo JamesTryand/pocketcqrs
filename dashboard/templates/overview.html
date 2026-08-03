@@ -1,0 +1,69 @@
+{{define "content"}}
+<div class="wa-split">
+  <h1>Overview</h1>
+  <span class="wa-caption-m">generated {{.Generated}}</span>
+</div>
+
+{{if eq .Mode "maintenance"}}
+<wa-callout variant="warning">
+  <wa-icon slot="icon" name="gear" library="system"></wa-icon>
+  <strong>Maintenance mode.</strong> The gateway rejects domain commands; schema-bearing function reloads are allowed.
+</wa-callout>
+{{else}}
+<wa-callout variant="success">
+  <wa-icon slot="icon" name="check" library="system"></wa-icon>
+  <strong>Running.</strong> The gateway is accepting commands.
+</wa-callout>
+{{end}}
+
+<div class="wa-grid wa-gap-l totals-grid">
+  <wa-card>
+    <div class="wa-stack wa-gap-2xs">
+      <span class="wa-caption-m">Events in log</span>
+      <strong class="wa-heading-2xl">{{.Totals.Events}}</strong>
+    </div>
+  </wa-card>
+  <wa-card>
+    <div class="wa-stack wa-gap-2xs">
+      <span class="wa-caption-m">Streams</span>
+      <strong class="wa-heading-2xl">{{.Totals.Streams}}</strong>
+    </div>
+  </wa-card>
+  <wa-card>
+    <div class="wa-stack wa-gap-2xs">
+      <span class="wa-caption-m">Aggregates</span>
+      <strong class="wa-heading-2xl">{{.Aggregates}}</strong>
+    </div>
+  </wa-card>
+  <wa-card>
+    <div class="wa-stack wa-gap-2xs">
+      <span class="wa-caption-m">Consumers</span>
+      <strong class="wa-heading-2xl">{{.Consumers}}</strong>
+    </div>
+  </wa-card>
+  <wa-card>
+    <div class="wa-stack wa-gap-2xs">
+      <span class="wa-caption-m">Dead letters pending</span>
+      <strong class="wa-heading-2xl{{if gt .Totals.DeadLettersPending 0}} stat-danger{{end}}">{{.Totals.DeadLettersPending}}</strong>
+    </div>
+  </wa-card>
+</div>
+
+<wa-card>
+  <h2 slot="header">Catalog explorer</h2>
+  <span slot="header-actions" class="wa-caption-m">click a node for details</span>
+  <div id="explorer" role="application" aria-label="Interactive graph of the platform catalog"></div>
+  <p class="wa-caption-s legend">rectangle: aggregate &middot; ellipse: consumer (dashed: reactor) &middot; barrel: read-model collection &middot; dashed edges: empirical reactor flows &middot; edge labels: event types</p>
+  <div id="explorer-details" class="wa-caption-m">Select a node for details.</div>
+</wa-card>
+
+<wa-card>
+  <h2 slot="header">Diagram</h2>
+  <span slot="header-actions" class="wa-caption-m">mermaid source &mdash; paste into docs or GitHub to render</span>
+  <pre class="mermaid-src"><code>{{.Mermaid}}</code></pre>
+</wa-card>
+
+<script id="catalog-data" type="application/json">{{.CatalogJSON}}</script>
+<script src="/assets/vendor/cytoscape.min.js"></script>
+<script src="/assets/explorer.js" defer></script>
+{{end}}

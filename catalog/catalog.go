@@ -35,6 +35,11 @@ type Catalog struct {
 	Collections []Collection    `json:"collections"`
 	Functions   Functions       `json:"functions"`
 	Flows       []Flow          `json:"flows"`
+	// Diagram is the platform flowchart as Mermaid source (the same
+	// rendering the CLI embeds in Markdown). API consumers — e.g. the
+	// ops dashboard — can show the diagram without reimplementing the
+	// renderer.
+	Diagram string `json:"mermaid"`
 }
 
 // Totals are log-wide counters.
@@ -273,6 +278,8 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 			Count:   f.Count,
 		})
 	}
+
+	c.Diagram = c.Mermaid()
 
 	return c, nil
 }

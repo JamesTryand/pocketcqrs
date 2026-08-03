@@ -96,7 +96,10 @@ GET /api/cqrs/catalog
 Returns the platform catalog as JSON — the same document the
 [`catalog` CLI](cli.md#catalog) renders as Markdown: aggregates, empirical
 event types, consumers with checkpoints, guarded collections, functions and
-reactor flows, plus mode and log totals.
+reactor flows, plus mode and log totals. The `mermaid` field carries the
+platform flowchart as Mermaid source (the same rendering the CLI embeds in
+Markdown), so consumers can show the diagram without reimplementing the
+renderer.
 
 ## Operations
 

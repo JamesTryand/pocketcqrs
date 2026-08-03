@@ -1,0 +1,30 @@
+{{define "login"}}
+<!doctype html>
+<html lang="en" class="wa-theme-default wa-palette-default wa-light">
+<head>{{template "head" .}}</head>
+<body>
+  <div class="auth-screen wa-stack wa-align-items-center wa-justify-content-center">
+    <wa-card class="auth-card">
+      <div class="wa-stack wa-gap-l">
+        <div class="wa-stack wa-gap-2xs">
+          <h1 class="wa-heading-l">PocketCQRS</h1>
+          <span class="wa-caption-m">Sign in with a PocketBase superuser account</span>
+        </div>
+        {{if .Error}}
+        <wa-callout variant="danger">
+          <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+          {{.Error}}
+        </wa-callout>
+        {{end}}
+        <form method="post" action="/login" class="wa-stack wa-gap-m">
+          <wa-input label="Email" name="identity" type="email" required autocomplete="username" autofocus></wa-input>
+          <wa-input label="Password" name="password" type="password" required autocomplete="current-password" password-toggle></wa-input>
+          <wa-button type="submit" variant="brand">Sign in</wa-button>
+        </form>
+      </div>
+    </wa-card>
+    <span class="wa-caption-m">backend: {{.BackendURL}}</span>
+  </div>
+</body>
+</html>
+{{end}}
