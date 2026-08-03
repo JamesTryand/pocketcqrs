@@ -310,6 +310,78 @@ func TestQueryEvents(t *testing.T) {
 	assert(EventQuery{After: 0, Limit: 10, Aggregate: "task", Type: "TaskCreated"}, []int64{1, 4})
 	// a zero limit falls back to the default batch size
 	assert(EventQuery{}, []int64{1, 2, 3, 4})
+
+	// AggregateID narrows to a single stream (t1 and t2 are both "task")
+	assert(EventQuery{Limit: 10, Aggregate: "task", AggregateID: "t1"}, []int64{1, 2})
+	assert(EventQuery{Limit: 10, Aggregate: "task", AggregateID: "t2"}, []int64{4})
+	assert(EventQuery{Limit: 10, AggregateID: "n1"}, []int64{3})
+	assert(EventQuery{Limit: 10, Aggregate: "task", AggregateID: "t1", Type: "TaskCompleted"}, []int64{2})
+	assert(EventQuery{Limit: 10, AggregateID: "nope"}, nil)
+}
+
+// TestQueryEventsBefore covers backwards paging: Before takes the batch from
+// the top of the range and the result still comes back ascending.
+func TestQueryEventsBefore(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	seed := []struct{ aggregate, id, typ string }{
+		{"task", "t1", "TaskCreated"},   // pos 1
+		{"task", "t1", "TaskCompleted"}, // pos 2
+		{"note", "n1", "NoteCreated"},   // pos 3
+		{"task", "t2", "TaskCreated"},   // pos 4
+		{"note", "n1", "NoteArchived"},  // pos 5
+	}
+	seqs := map[string]int64{}
+	for _, e := range seed {
+		key := e.aggregate + "/" + e.id
+		if _, err := s.Append(ctx, e.aggregate, e.id, seqs[key], []NewEvent{
+			{Type: e.typ, Data: json.RawMessage(`{}`)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		seqs[key]++
+	}
+
+	assert := func(q EventQuery, want []int64) {
+		t.Helper()
+		evs, err := s.QueryEvents(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]int64, len(evs))
+		for i, ev := range evs {
+			got[i] = ev.Position
+		}
+		if len(got) != len(want) {
+			t.Fatalf("query %+v: expected positions %v, got %v", q, want, got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("query %+v: expected positions %v, got %v", q, want, got)
+			}
+		}
+	}
+
+	// Before is exclusive, and the batch comes back ascending even though
+	// the scan runs descending.
+	assert(EventQuery{Before: 6, Limit: 10}, []int64{1, 2, 3, 4, 5})
+	assert(EventQuery{Before: 3, Limit: 10}, []int64{1, 2})
+	assert(EventQuery{Before: 1, Limit: 10}, nil)
+
+	// the batch is taken from the Before end, not the start of the log
+	assert(EventQuery{Before: 6, Limit: 2}, []int64{4, 5})
+	assert(EventQuery{Before: 4, Limit: 2}, []int64{2, 3})
+
+	// filters still apply while paging backwards
+	assert(EventQuery{Before: 6, Limit: 2, Aggregate: "task"}, []int64{2, 4})
+	assert(EventQuery{Before: 6, Limit: 10, AggregateID: "n1"}, []int64{3, 5})
+
+	// both bounds set: After is a floor guard, NOT the start of the window —
+	// the range 2..5 exceeds the limit, so the top of it wins.
+	assert(EventQuery{After: 1, Before: 6, Limit: 2}, []int64{4, 5})
+	// ...and After still excludes what is below it
+	assert(EventQuery{After: 3, Before: 6, Limit: 10}, []int64{4, 5})
 }
 
 func TestListStreamInfos(t *testing.T) {

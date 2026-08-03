@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+// TestMaxPositionEmptyLog pins the zero case: a fresh store has no head, and
+// behind-by against it must be 0, not an error or a NULL scan failure.
+func TestMaxPositionEmptyLog(t *testing.T) {
+	s := openTest(t)
+	max, err := s.MaxPosition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if max != 0 {
+		t.Fatalf("expected 0 on an empty log, got %d", max)
+	}
+}
+
 func TestStats(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
@@ -67,6 +80,15 @@ func TestStats(t *testing.T) {
 	}
 	if events != 5 || streams != 4 {
 		t.Fatalf("unexpected totals: events=%d streams=%d", events, streams)
+	}
+
+	// the head of the log — what behind-by is measured against
+	max, err := s.MaxPosition(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if max != 5 {
+		t.Fatalf("expected max position 5, got %d", max)
 	}
 
 	sc, err := s.StreamCounts(ctx)

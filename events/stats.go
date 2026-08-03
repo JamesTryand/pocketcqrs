@@ -63,6 +63,19 @@ func (s *Store) LogTotals(ctx context.Context) (events int64, streams int64, err
 	return events, streams, err
 }
 
+// MaxPosition returns the highest position in the log (0 when empty).
+//
+// This is the head of the log and the correct base for a consumer's
+// behind-by: checkpoints record a POSITION, so they must be compared against
+// a position. An event count is not interchangeable — position is
+// AUTOINCREMENT, so any value that is allocated but never committed leaves
+// the count permanently below the head.
+func (s *Store) MaxPosition(ctx context.Context) (int64, error) {
+	var max int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), 0) FROM events`).Scan(&max)
+	return max, err
+}
+
 // StreamCounts returns the number of distinct streams per aggregate.
 func (s *Store) StreamCounts(ctx context.Context) (map[string]int64, error) {
 	rows, err := s.db.QueryContext(ctx,

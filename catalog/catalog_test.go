@@ -144,6 +144,12 @@ function project(event) { return { upsert: { key: event.aggregateId, fields: {} 
 		t.Fatal(err)
 	}
 
+	// totals: 4 appended events, and the head of the log to measure
+	// consumer lag against
+	if cat.Totals.Events != 4 || cat.Totals.MaxPosition != 4 || cat.Totals.Streams != 4 {
+		t.Fatalf("unexpected totals: %+v", cat.Totals)
+	}
+
 	// aggregates: note (js), task (go)
 	if len(cat.Aggregates) != 2 {
 		t.Fatalf("expected 2 aggregates, got %+v", cat.Aggregates)

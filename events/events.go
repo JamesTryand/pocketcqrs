@@ -330,17 +330,31 @@ func (s *Store) Poll(ctx context.Context, after int64, limit int) ([]Event, erro
 type EventQuery struct {
 	// After returns events with position > After (0 = from the start).
 	After int64
+	// Before returns events with position < Before (0 = no upper bound).
+	// It also flips the scan: the batch is taken from the Before end, so a
+	// caller can page backwards. See QueryEvents for what that means when
+	// both bounds are set.
+	Before int64
 	// Limit caps the batch (<= 0 defaults to 100).
 	Limit int
 	// Aggregate restricts to one aggregate type ("" = all).
 	Aggregate string
+	// AggregateID restricts to one stream ("" = all). Pair it with
+	// Aggregate: stream identity is (aggregate, aggregateId).
+	AggregateID string
 	// Type restricts to one event type ("" = all).
 	Type string
 }
 
-// QueryEvents returns the events matching q in position order. Like Poll,
-// results pass through the installed upcaster: feed consumers see events at
-// their latest schema version.
+// QueryEvents returns the events matching q, always in ascending position
+// order. Like Poll, results pass through the installed upcaster: feed
+// consumers see events at their latest schema version.
+//
+// After and Before compose as bounds, but only Before decides which end the
+// Limit is taken from. With Before set the scan runs descending and the
+// batch is the Limit events immediately BELOW Before — After is then a floor
+// guard, not the start of the window. (Paging backwards cannot be expressed
+// as "after − limit": under a filter the matching positions are sparse.)
 func (s *Store) QueryEvents(ctx context.Context, q EventQuery) ([]Event, error) {
 	if q.Limit <= 0 {
 		q.Limit = 100
@@ -348,15 +362,27 @@ func (s *Store) QueryEvents(ctx context.Context, q EventQuery) ([]Event, error) 
 	query := `SELECT position, id, aggregate, aggregate_id, sequence, type, data, metadata, version, created
 		 FROM events WHERE position > ?`
 	args := []any{q.After}
+	if q.Before > 0 {
+		query += ` AND position < ?`
+		args = append(args, q.Before)
+	}
 	if q.Aggregate != "" {
 		query += ` AND aggregate = ?`
 		args = append(args, q.Aggregate)
+	}
+	if q.AggregateID != "" {
+		query += ` AND aggregate_id = ?`
+		args = append(args, q.AggregateID)
 	}
 	if q.Type != "" {
 		query += ` AND type = ?`
 		args = append(args, q.Type)
 	}
-	query += ` ORDER BY position LIMIT ?`
+	if q.Before > 0 {
+		query += ` ORDER BY position DESC LIMIT ?`
+	} else {
+		query += ` ORDER BY position LIMIT ?`
+	}
 	args = append(args, q.Limit)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -367,6 +393,12 @@ func (s *Store) QueryEvents(ctx context.Context, q EventQuery) ([]Event, error) 
 	evs, err := scanEvents(rows)
 	if err != nil {
 		return nil, err
+	}
+	if q.Before > 0 {
+		// scanned newest-first; hand back ascending like every other read
+		for i, j := 0, len(evs)-1; i < j; i, j = i+1, j-1 {
+			evs[i], evs[j] = evs[j], evs[i]
+		}
 	}
 	return s.upcastEvents(evs)
 }

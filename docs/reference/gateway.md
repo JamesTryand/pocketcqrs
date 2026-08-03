@@ -96,10 +96,16 @@ GET /api/cqrs/catalog
 Returns the platform catalog as JSON — the same document the
 [`catalog` CLI](cli.md#catalog) renders as Markdown: aggregates, empirical
 event types, consumers with checkpoints, guarded collections, functions and
-reactor flows, plus mode and log totals. The `mermaid` field carries the
-platform flowchart as Mermaid source (the same rendering the CLI embeds in
-Markdown), so consumers can show the diagram without reimplementing the
-renderer.
+reactor flows, plus mode and log totals.
+
+`totals` carries `events`, `maxPosition`, `streams` and
+`deadLettersPending`. Measure consumer lag against **`maxPosition`**, not
+`events`: checkpoints record a position, and positions are `AUTOINCREMENT`,
+so an event count is not interchangeable with the head of the log.
+
+The `mermaid` field carries the platform flowchart as Mermaid source (the
+same rendering the CLI embeds in Markdown), so consumers can show the
+diagram without reimplementing the renderer.
 
 ## Operations
 
@@ -110,13 +116,28 @@ require a superuser token (`401` otherwise); all reads see events at their
 latest schema version (store-level upcasting).
 
 ```
-GET /api/cqrs/events?after=&limit=&aggregate=&type=
+GET /api/cqrs/events?after=&before=&limit=&aggregate=&aggregateId=&type=
 ```
 
-The log feed, in global position order. `after` is exclusive (0 = from the
-start); `limit` defaults to 100 and caps at 1000; `aggregate` and `type`
-filter. Response: `{ "events": [...] }` — page by re-requesting with
-`after` = the last seen position.
+The log feed, always returned in ascending global position order. `limit`
+defaults to 100 and caps at 1000. Response: `{ "events": [...] }`.
+
+Filters: `aggregate` and `type`; `aggregateId` narrows to a single stream
+(pair it with `aggregate` — stream identity is aggregate + id).
+
+Bounds: `after` is exclusive (0 = from the start), `before` is exclusive
+(0 = no upper bound). Page **forward** with `after` = the last seen position;
+page **backward** with `before` = the first seen position.
+
+`before` is not sugar for `after − limit`: under a filter the matching
+positions are sparse, so the previous page cannot be computed by
+subtraction. When `before` is set the batch is taken from the `before` end
+of the range, so if both bounds are given, `after` acts as a floor guard
+rather than the start of the window.
+
+The catalog's `totals.maxPosition` is the companion to this feed: it is the
+head of the log, so `maxPosition − checkpoint` is how far a consumer is
+behind. See [Catalog](#catalog) above.
 
 ```
 GET /api/cqrs/streams?aggregate=

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -115,6 +117,86 @@ func (c *BackendClient) Catalog(ctx context.Context, token string) (*Catalog, er
 	return &cat, nil
 }
 
+// Streams lists one row per stream (GET /api/cqrs/streams). An empty
+// aggregate lists streams of every aggregate type.
+func (c *BackendClient) Streams(ctx context.Context, token, aggregate string) ([]StreamInfo, error) {
+	q := url.Values{}
+	if aggregate != "" {
+		q.Set("aggregate", aggregate)
+	}
+	var out struct {
+		Streams []StreamInfo `json:"streams"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/cqrs/streams?"+q.Encode(), token, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Streams, nil
+}
+
+// EventFilter is the query behind GET /api/cqrs/events. Zero values are
+// omitted, so the zero filter is "the first page of the whole log".
+type EventFilter struct {
+	Aggregate   string
+	AggregateID string
+	Type        string
+	After       int64
+	Before      int64
+	Limit       int
+}
+
+// Query renders the filter as the feed's query string. Kept separate from
+// Events so page templates can reuse it for pagination links.
+func (f EventFilter) Query() url.Values {
+	q := url.Values{}
+	if f.Aggregate != "" {
+		q.Set("aggregate", f.Aggregate)
+	}
+	if f.AggregateID != "" {
+		q.Set("aggregateId", f.AggregateID)
+	}
+	if f.Type != "" {
+		q.Set("type", f.Type)
+	}
+	if f.After > 0 {
+		q.Set("after", strconv.FormatInt(f.After, 10))
+	}
+	if f.Before > 0 {
+		q.Set("before", strconv.FormatInt(f.Before, 10))
+	}
+	if f.Limit > 0 {
+		q.Set("limit", strconv.Itoa(f.Limit))
+	}
+	return q
+}
+
+// Events reads the log feed (GET /api/cqrs/events). Results always come
+// back in ascending position order, whichever direction was paged.
+func (c *BackendClient) Events(ctx context.Context, token string, f EventFilter) ([]Event, error) {
+	var out struct {
+		Events []Event `json:"events"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/cqrs/events?"+f.Query().Encode(), token, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Events, nil
+}
+
+// DeadLetters lists failed function deliveries (GET /api/cqrs/deadletters),
+// pending only unless includeResolved.
+func (c *BackendClient) DeadLetters(ctx context.Context, token string, includeResolved bool) ([]DeadLetter, error) {
+	path := "/api/cqrs/deadletters"
+	if includeResolved {
+		path += "?all=1"
+	}
+	var out struct {
+		DeadLetters []DeadLetter `json:"deadLetters"`
+	}
+	if err := c.do(ctx, http.MethodGet, path, token, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.DeadLetters, nil
+}
+
 // ---- the public catalog JSON contract (mirror of the API document) ----
 
 type Catalog struct {
@@ -130,7 +212,10 @@ type Catalog struct {
 }
 
 type Totals struct {
-	Events             int64 `json:"events"`
+	Events int64 `json:"events"`
+	// MaxPosition is the head of the log — the base for behind-by, since
+	// checkpoints record a position rather than a count.
+	MaxPosition        int64 `json:"maxPosition"`
 	Streams            int64 `json:"streams"`
 	DeadLettersPending int64 `json:"deadLettersPending"`
 }
@@ -182,4 +267,80 @@ type Flow struct {
 	Cause   string `json:"cause"`
 	Target  string `json:"target"`
 	Count   int64  `json:"count"`
+}
+
+// ---- the operational API JSON contract (log feed, streams, dead letters) ----
+
+// Event is one committed event envelope as the feed hands it out (already
+// upcast to its latest schema version by the backend).
+type Event struct {
+	Position    int64           `json:"position"`
+	ID          string          `json:"id"`
+	Aggregate   string          `json:"aggregate"`
+	AggregateID string          `json:"aggregateId"`
+	Sequence    int64           `json:"sequence"`
+	Type        string          `json:"type"`
+	Data        json.RawMessage `json:"data"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	Version     int64           `json:"version"`
+	Created     string          `json:"created"`
+}
+
+// Actor reports who caused the event, from the envelope metadata
+// ("reactor:<name>" for reactions, an auth record id for commands). Returns
+// "" when the metadata carries no actor. html/template cannot index into
+// raw JSON, so pages call this rather than reaching into Metadata.
+func (e Event) Actor() string {
+	if len(e.Metadata) == 0 {
+		return ""
+	}
+	var meta struct {
+		Actor string `json:"actor"`
+	}
+	if err := json.Unmarshal(e.Metadata, &meta); err != nil {
+		return ""
+	}
+	return meta.Actor
+}
+
+// Payload renders the event body as indented JSON for display. Templates
+// cannot print a json.RawMessage usefully (it is a []byte), so pages call
+// this instead of reaching into Data.
+func (e Event) Payload() string { return indentJSON(e.Data) }
+
+// MetadataJSON renders the envelope metadata the same way as Payload.
+func (e Event) MetadataJSON() string { return indentJSON(e.Metadata) }
+
+func indentJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err != nil {
+		return string(raw) // not valid JSON — show it as it arrived
+	}
+	return buf.String()
+}
+
+// StreamInfo describes one stream: length, head position, last write.
+type StreamInfo struct {
+	Aggregate    string `json:"aggregate"`
+	AggregateID  string `json:"aggregateId"`
+	Events       int64  `json:"events"`
+	LastPosition int64  `json:"lastPosition"`
+	Updated      string `json:"updated"`
+}
+
+// DeadLetter is a failed function delivery, captured with the event that
+// caused it.
+type DeadLetter struct {
+	ID          int64  `json:"id"`
+	Consumer    string `json:"consumer"`
+	EventPos    int64  `json:"eventPos"`
+	Event       Event  `json:"event"`
+	Error       string `json:"error"`
+	Attempts    int64  `json:"attempts"`
+	FirstFailed string `json:"firstFailed"`
+	LastFailed  string `json:"lastFailed"`
+	Resolved    bool   `json:"resolved"`
 }

@@ -14,7 +14,7 @@ import (
 
 // registerOpsRoutes binds the superuser-only operational API:
 //
-//	GET  /api/cqrs/events?after=&limit=&aggregate=&type=
+//	GET  /api/cqrs/events?after=&before=&limit=&aggregate=&aggregateId=&type=
 //	GET  /api/cqrs/streams?aggregate=
 //	GET  /api/cqrs/deadletters?all=
 //	GET  /api/cqrs/admin/mode
@@ -29,6 +29,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 	e.Router.GET("/api/cqrs/events", func(re *core.RequestEvent) error {
 		qv := re.Request.URL.Query()
 		after, _ := strconv.ParseInt(qv.Get("after"), 10, 64)
+		before, _ := strconv.ParseInt(qv.Get("before"), 10, 64)
 		limit, _ := strconv.Atoi(qv.Get("limit"))
 		if limit <= 0 {
 			limit = 100
@@ -37,10 +38,12 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			limit = 1000
 		}
 		evs, err := c.store.QueryEvents(re.Request.Context(), events.EventQuery{
-			After:     after,
-			Limit:     limit,
-			Aggregate: qv.Get("aggregate"),
-			Type:      qv.Get("type"),
+			After:       after,
+			Before:      before,
+			Limit:       limit,
+			Aggregate:   qv.Get("aggregate"),
+			AggregateID: qv.Get("aggregateId"),
+			Type:        qv.Get("type"),
 		})
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)

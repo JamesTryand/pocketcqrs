@@ -44,7 +44,11 @@ type Catalog struct {
 
 // Totals are log-wide counters.
 type Totals struct {
-	Events             int64 `json:"events"`
+	Events int64 `json:"events"`
+	// MaxPosition is the head of the log. It is >= Events: positions are
+	// AUTOINCREMENT and rolled back appends burn values, so this — not
+	// Events — is what a consumer's checkpoint should be compared against.
+	MaxPosition        int64 `json:"maxPosition"`
 	Streams            int64 `json:"streams"`
 	DeadLettersPending int64 `json:"deadLettersPending"`
 }
@@ -146,6 +150,10 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 		return nil, err
 	}
 	c.Totals.Events, c.Totals.Streams, err = in.Store.LogTotals(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.Totals.MaxPosition, err = in.Store.MaxPosition(ctx)
 	if err != nil {
 		return nil, err
 	}
