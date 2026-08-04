@@ -21,10 +21,10 @@ import (
 // triggers, like the real ones).
 type stubProjection struct{}
 
-func (stubProjection) Name() string                                  { return "tasks" }
-func (stubProjection) Collections() []string                         { return []string{"tasks"} }
-func (stubProjection) EventTypes() []string                          { return []string{"TaskCreated"} }
-func (stubProjection) Apply(context.Context, events.Event) error     { return nil }
+func (stubProjection) Name() string                              { return "tasks" }
+func (stubProjection) Collections() []string                     { return []string{"tasks"} }
+func (stubProjection) EventTypes() []string                      { return []string{"TaskCreated"} }
+func (stubProjection) Apply(context.Context, events.Event) error { return nil }
 
 func TestBuildAndRender(t *testing.T) {
 	ctx := context.Background()

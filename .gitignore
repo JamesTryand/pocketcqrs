@@ -13,3 +13,8 @@ pocketcqrs
 # Editor
 .vscode/
 .idea/
+
+# Browser-probe dependencies (see pocketcqrs-dashboard/probe/README.md).
+# The probes are checked in; the browser driver they need is not.
+node_modules/
+package-lock.json

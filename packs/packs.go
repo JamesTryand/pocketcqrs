@@ -25,10 +25,10 @@ import (
 
 // Manifest describes a domain pack.
 type Manifest struct {
-	Name        string   `json:"name"`
-	Version     string   `json:"version"`
-	Description string   `json:"description,omitempty"`
-	GeneratedAt string   `json:"generatedAt"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description,omitempty"`
+	GeneratedAt string `json:"generatedAt"`
 	// Functions lists the pb_functions basenames in the pack.
 	Functions []string `json:"functions"`
 	// Collections lists plain (non-projection-owned) collections whose
@@ -37,15 +37,15 @@ type Manifest struct {
 }
 
 const (
-	manifestFile    = "manifest.json"
-	collectionsFile = "collections.json"
+	manifestFile     = "manifest.json"
+	collectionsFile  = "collections.json"
 	functionsDirName = "pb_functions"
 )
 
 // ExportOptions controls Export.
 type ExportOptions struct {
-	Name        string   // pack name (required)
-	Version     string   // default "0.1.0"
+	Name        string // pack name (required)
+	Version     string // default "0.1.0"
 	Description string
 	Functions   []string // pb_functions basenames; empty = all .js files
 	Collections []string // plain collections to include

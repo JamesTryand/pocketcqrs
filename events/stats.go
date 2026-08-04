@@ -100,12 +100,12 @@ func (s *Store) StreamCounts(ctx context.Context) (map[string]int64, error) {
 // "reactor:<name>") produced target events in response to cause events
 // (metadata.causationId). Empirical, from the log — reactions are events.
 type ReactorFlow struct {
-	Reactor        string `json:"reactor"`
-	CauseAggregate string `json:"causeAggregate"`
-	CauseType      string `json:"causeType"`
+	Reactor         string `json:"reactor"`
+	CauseAggregate  string `json:"causeAggregate"`
+	CauseType       string `json:"causeType"`
 	TargetAggregate string `json:"targetAggregate"`
-	TargetType     string `json:"targetType"`
-	Count          int64  `json:"count"`
+	TargetType      string `json:"targetType"`
+	Count           int64  `json:"count"`
 }
 
 // ReactorFlows aggregates the observed reactor mappings in the log.

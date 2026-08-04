@@ -27,14 +27,14 @@ import (
 
 // Catalog is the full introspection document.
 type Catalog struct {
-	GeneratedAt string          `json:"generatedAt"`
-	Mode        string          `json:"mode"`
-	Totals      Totals          `json:"totals"`
-	Aggregates  []Aggregate     `json:"aggregates"`
-	Consumers   []Consumer      `json:"consumers"`
-	Collections []Collection    `json:"collections"`
-	Functions   Functions       `json:"functions"`
-	Flows       []Flow          `json:"flows"`
+	GeneratedAt string       `json:"generatedAt"`
+	Mode        string       `json:"mode"`
+	Totals      Totals       `json:"totals"`
+	Aggregates  []Aggregate  `json:"aggregates"`
+	Consumers   []Consumer   `json:"consumers"`
+	Collections []Collection `json:"collections"`
+	Functions   Functions    `json:"functions"`
+	Flows       []Flow       `json:"flows"`
 	// Diagram is the platform flowchart as Mermaid source (the same
 	// rendering the CLI embeds in Markdown). API consumers — e.g. the
 	// ops dashboard — can show the diagram without reimplementing the
@@ -103,10 +103,10 @@ type CronJob struct {
 
 // Flow is one empirical reactor mapping edge.
 type Flow struct {
-	Reactor         string `json:"reactor"`
-	Cause           string `json:"cause"`  // "aggregate/Type"
-	Target          string `json:"target"` // "aggregate/Type"
-	Count           int64  `json:"count"`
+	Reactor string `json:"reactor"`
+	Cause   string `json:"cause"`  // "aggregate/Type"
+	Target  string `json:"target"` // "aggregate/Type"
+	Count   int64  `json:"count"`
 }
 
 // Inputs bundles the live system references Build reads.

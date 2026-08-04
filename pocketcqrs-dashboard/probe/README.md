@@ -1,0 +1,91 @@
+# Browser probes
+
+Four headless-browser checks for the things HTTP assertions cannot see. Each
+one exists because it caught a real defect that every other gate passed:
+
+| probe | what it proves | the bug that earned it |
+| --- | --- | --- |
+| `components.mjs` | every `<wa-*>` element actually upgraded (`shadowRoot`), and the event-modeling post-it colours hold in dark mode | the whole vendored tree was the wrong build, so **no** component ever defined — over HTTP the page looked perfect |
+| `live.mjs` | htmx polls fire, swapped-in rows are re-processed, a `<wa-tag>` arriving in a swap upgrades, and an out-of-band rider updates a figure outside the swapped table | polling that stops after one tick, and swapped rows rendering as undefined elements — both silent |
+| `system.mjs` | the System page boots, the reload indicator is hidden while idle, and the report swaps in place | — |
+| `editor.mjs` | CodeMirror attaches, **writes through to the `<textarea>` htmx submits**, re-attaches after a swap, and the typed source is what reaches the backend | a save that landed and was then overwritten by a second request the same click fired; every endpoint's own test passed |
+
+They complement `go test -tags=smoke ./smoke/`, which covers everything
+reachable over HTTP. Anything involving a shadow DOM, a canvas, a timer or a
+synthesised DOM event needs a browser, and belongs here.
+
+## Running them
+
+Start an instance for the probes to drive. From the repo root:
+
+```sh
+go build -o /tmp/pocketcqrs . && go build -o /tmp/pocketcqrs-dashboard ./pocketcqrs-dashboard
+/tmp/pocketcqrs superuser upsert smoketest@example.com smoke-pass-1234 --dir /tmp/probe-data
+/tmp/pocketcqrs serve --http 127.0.0.1:8390 --dir /tmp/probe-data --functionsDir pb_functions &
+/tmp/pocketcqrs-dashboard --backend http://127.0.0.1:8390 --listen 127.0.0.1:8391 &
+```
+
+Give it some history to show — the probes assert against real data, and an
+empty log exercises none of the interesting UI:
+
+```sh
+TOKEN=$(curl -s -X POST http://127.0.0.1:8390/api/collections/_superusers/auth-with-password \
+  -H 'Content-Type: application/json' \
+  -d '{"identity":"smoketest@example.com","password":"smoke-pass-1234"}' | jq -r .token)
+curl -s -X POST http://127.0.0.1:8390/api/cqrs/task/t1/CreateTask \
+  -H "Authorization: $TOKEN" -H 'Content-Type: application/json' -d '{"title":"first"}'
+curl -s -X POST http://127.0.0.1:8390/api/cqrs/task/t1/CompleteTask \
+  -H "Authorization: $TOKEN" -H 'Content-Type: application/json' -d '{}'
+```
+
+Then:
+
+```sh
+cd pocketcqrs-dashboard/probe
+npm install          # puppeteer-core only; it drives a browser you already have
+node components.mjs
+node live.mjs
+node system.mjs
+node editor.mjs
+```
+
+Each exits non-zero on the first failure and prints one `ok`/`FAIL` line per
+check, plus any page error or console warning — a probe that passes but logs
+a console error still fails, because that is usually a component failing
+quietly.
+
+`live.mjs` needs a **poisoned** effect function present so a dead letter can
+appear while the page sits open (that is how it proves the out-of-band swap
+works end to end). Use `pb_functions/` containing:
+
+```js
+//@trigger event TaskCreated
+throw new Error("poison: sink refused " + event.type);
+```
+
+## Configuration
+
+All four read the environment, so they can point at any instance:
+
+| variable | default |
+| --- | --- |
+| `PROBE_BACKEND` | `http://127.0.0.1:8390` |
+| `PROBE_DASHBOARD` | `http://127.0.0.1:8391` |
+| `PROBE_BROWSER` | the system Edge on Windows |
+| `PROBE_USER` / `PROBE_PASS` | `smoketest@example.com` / `smoke-pass-1234` |
+
+`PROBE_BROWSER` takes any Chromium binary (Chrome, Chromium, Edge), which is
+why the dependency is `puppeteer-core` rather than `puppeteer`: no browser is
+downloaded.
+
+## Why these are not in CI
+
+They need a real browser and a running pair of servers. The Go smoke suite
+covers the same flows at the HTTP level and does run in CI; the probes are
+the layer above it, run before shipping UI work. If CI ever grows a browser
+image, `PROBE_BROWSER` is the only thing that needs setting.
+
+**Authenticate by planting the cookie, never by driving the login form.** A
+form-driven probe that mistypes silently stays on the sign-in page and then
+reports that every single component failed — which costs an hour before you
+notice the page it is checking is the wrong one.

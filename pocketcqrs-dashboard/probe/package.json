@@ -1,0 +1,17 @@
+{
+  "name": "pocketcqrs-dashboard-probe",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Headless-browser probes for the PocketCQRS ops dashboard (see README.md)",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "components": "node components.mjs",
+    "live": "node live.mjs",
+    "system": "node system.mjs",
+    "editor": "node editor.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.4.0"
+  }
+}

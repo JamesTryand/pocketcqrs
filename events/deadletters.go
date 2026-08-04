@@ -11,15 +11,15 @@ import (
 // retry. Written by the functions runtime when an effect function fails on
 // an event; retried through the deadletter CLI.
 type DeadLetter struct {
-	ID          int64     `json:"id"`
-	Consumer    string    `json:"consumer"`
-	EventPos    int64     `json:"eventPos"`
-	Event       Event     `json:"event"`
-	Error       string    `json:"error"`
-	Attempts    int64     `json:"attempts"`
-	FirstFailed string    `json:"firstFailed"`
-	LastFailed  string    `json:"lastFailed"`
-	Resolved    bool      `json:"resolved"`
+	ID          int64  `json:"id"`
+	Consumer    string `json:"consumer"`
+	EventPos    int64  `json:"eventPos"`
+	Event       Event  `json:"event"`
+	Error       string `json:"error"`
+	Attempts    int64  `json:"attempts"`
+	FirstFailed string `json:"firstFailed"`
+	LastFailed  string `json:"lastFailed"`
+	Resolved    bool   `json:"resolved"`
 }
 
 const deadLettersSchema = `
