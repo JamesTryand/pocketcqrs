@@ -113,8 +113,15 @@ func fakeBackend(t *testing.T) *httptest.Server {
 			h(w, r)
 		}
 	}
+	// the admin barrier: a real mode value the tests can move. The catalog
+	// reports it too, like the real one — a fixture pinned to "running"
+	// would let a broken mode banner pass.
+	mode := "running"
+
+	// the catalog reports the live mode, like the real one: a fixture pinned
+	// to "running" would let a broken mode banner pass
 	mux.HandleFunc("GET /api/cqrs/catalog", authed(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(sampleCatalog))
+		w.Write([]byte(strings.Replace(sampleCatalog, `"mode": "running"`, `"mode": "`+mode+`"`, 1)))
 	}))
 	mux.HandleFunc("GET /api/cqrs/streams", authed(func(w http.ResponseWriter, r *http.Request) {
 		streams := []StreamInfo{
@@ -152,9 +159,78 @@ func fakeBackend(t *testing.T) *httptest.Server {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"deadLetters": letters})
 	}))
+	mux.HandleFunc("GET /api/cqrs/admin/mode", authed(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"mode": mode})
+	}))
+	mux.HandleFunc("POST /api/cqrs/admin/mode", authed(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Mode string `json:"mode"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Mode != "running" && body.Mode != "maintenance" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"message":"invalid mode"}`))
+			return
+		}
+		mode = body.Mode
+		json.NewEncoder(w).Encode(map[string]string{"mode": mode})
+	}))
+	mux.HandleFunc("POST /api/cqrs/admin/reload", authed(func(w http.ResponseWriter, r *http.Request) {
+		schemaTier := "skipped: not in maintenance"
+		rep := map[string]any{
+			"effectsReloaded": []string{"fn:task_audit.js"},
+			"httpReloaded":    []string{"hello"},
+			"cronReloaded":    []string{"heartbeat.js"},
+		}
+		if mode == "maintenance" {
+			schemaTier = "reloaded"
+			rep["projectionsReloaded"] = []string{"notes"}
+			rep["decidersReloaded"] = []string{"note"}
+			rep["decidersRefused"] = []string{"broken (evolve threw on stream t1)"}
+		}
+		rep["mode"] = mode
+		rep["schemaTier"] = schemaTier
+		json.NewEncoder(w).Encode(rep)
+	}))
+
+	// dead-letter actions; #9 is poison and stays poison, #4 retries clean
+	mux.HandleFunc("POST /api/cqrs/deadletters/{id}/retry", authed(func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") == "9" {
+			json.NewEncoder(w).Encode(DeadLetterResult{ID: 9, Consumer: "fn:task_audit.js",
+				Resolved: false, Attempts: 3, Error: "boom: audit sink refused"})
+			return
+		}
+		json.NewEncoder(w).Encode(DeadLetterResult{ID: 4, Consumer: "fn:task_audit.js", Resolved: true})
+	}))
+	mux.HandleFunc("POST /api/cqrs/deadletters/retry", authed(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"results": []DeadLetterResult{
+			{ID: 9, Resolved: false, Attempts: 3, Error: "boom: audit sink refused"},
+			{ID: 4, Resolved: true},
+		}})
+	}))
+	mux.HandleFunc("POST /api/cqrs/deadletters/{id}/dismiss", authed(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"id": r.PathValue("id"), "resolved": true})
+	}))
+
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// htmxGet issues a request the way htmx does, so handlers take their
+// fragment branch.
+func htmxRequest(t *testing.T, client *http.Client, method, url string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("HX-Request", "true")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
 }
 
 // dashboardClient returns an http.Client that does not follow redirects
@@ -506,6 +582,287 @@ func login(t *testing.T, client *http.Client, dashURL string) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("login failed: %s", resp.Status)
+	}
+}
+
+// ---- DASH.4: actions and live fragments ----
+
+// TestModeToggle drives the barrier from the UI: the page offers the step
+// that comes next, and the toggle is POST-then-redirect so a refresh cannot
+// re-fire it.
+func TestModeToggle(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	body := get(t, client, dash.URL+"/system")
+	for _, want := range []string{"Running.", `value="maintenance"`, "Enter maintenance",
+		"Reload effect functions", "Enter maintenance first"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("running system page missing %q", want)
+		}
+	}
+
+	resp, err := client.PostForm(dash.URL+"/system/mode", url.Values{"mode": {"maintenance"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/system" {
+		t.Fatalf("expected 303 to /system, got %s", resp.Status)
+	}
+
+	body = get(t, client, dash.URL+"/system")
+	for _, want := range []string{"Maintenance mode.", `value="running"`, "Return to running",
+		"Reload all tiers"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("maintenance system page missing %q", want)
+		}
+	}
+	// the overview banner follows the same barrier
+	if !strings.Contains(get(t, client, dash.URL+"/"), "Maintenance mode.") {
+		t.Error("overview did not pick up maintenance mode")
+	}
+}
+
+// TestReloadReport checks both delivery paths of the reload report: the
+// report is rendered, never redirected away.
+func TestReloadReport(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	// running: the schema tier is skipped, and the page says so
+	resp := htmxRequest(t, client, http.MethodPost, dash.URL+"/system/reload")
+	body := readBody(t, resp)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %s", resp.Status)
+	}
+	if strings.Contains(strings.ToLower(body), "<!doctype") {
+		t.Error("htmx reload returned a whole page instead of a fragment")
+	}
+	if resp.Header.Get("Vary") != "HX-Request" {
+		t.Errorf("branching on HX-Request without Vary: got %q", resp.Header.Get("Vary"))
+	}
+	for _, want := range []string{`id="reload-report"`, "Effect tier only", "fn:task_audit.js", "skipped: not in maintenance"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("reload fragment missing %q", want)
+		}
+	}
+
+	// without htmx the same POST re-renders the whole page WITH the report
+	resp, err := client.PostForm(dash.URL+"/system/reload", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with the report inline, got %s", resp.Status)
+	}
+	if !strings.Contains(strings.ToLower(body), "<!doctype") || !strings.Contains(body, `id="reload-report"`) {
+		t.Error("non-htmx reload should re-render the full page with the report")
+	}
+
+	// in maintenance both tiers move, and a refused decider is reported
+	if _, err := client.PostForm(dash.URL+"/system/mode", url.Values{"mode": {"maintenance"}}); err != nil {
+		t.Fatal(err)
+	}
+	resp = htmxRequest(t, client, http.MethodPost, dash.URL+"/system/reload")
+	body = readBody(t, resp)
+	resp.Body.Close()
+	for _, want := range []string{"Reloaded behind the barrier", "Deciders refused", "broken (evolve threw", ">notes<"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("maintenance reload report missing %q", want)
+		}
+	}
+}
+
+// TestDeadLetterActions covers retry, retry-all and dismiss on both paths.
+// A retry that fails again is a RESULT, not an error: the panel comes back
+// with the failure reported and the row still pending.
+func TestDeadLetterActions(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	// still-poison retry, via htmx
+	resp := htmxRequest(t, client, http.MethodPost, dash.URL+"/consumers/deadletters/9/retry")
+	body := readBody(t, resp)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %s", resp.Status)
+	}
+	if strings.Contains(strings.ToLower(body), "<!doctype") {
+		t.Error("dead-letter action returned a page instead of the panel fragment")
+	}
+	for _, want := range []string{`id="deadletters-panel"`, "still failing after 3 attempts", "boom: audit sink refused"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("retry panel missing %q", want)
+		}
+	}
+
+	// a clean retry reports resolution
+	resp = htmxRequest(t, client, http.MethodPost, dash.URL+"/consumers/deadletters/4/retry")
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "re-delivered and resolved") {
+		t.Error("successful retry not reported")
+	}
+
+	// retry-all summarises a mixed batch
+	resp = htmxRequest(t, client, http.MethodPost, dash.URL+"/consumers/deadletters/retry")
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "1 resolved, 1 still failing") {
+		t.Errorf("retry-all summary missing: %s", body)
+	}
+
+	// dismiss, and the filter carries through the swap
+	resp = htmxRequest(t, client, http.MethodPost, dash.URL+"/consumers/deadletters/9/dismiss?all=1")
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "dismissed without retrying") {
+		t.Error("dismiss not reported")
+	}
+	if !strings.Contains(body, "Pending only") {
+		t.Error("the ?all=1 filter was lost across the swap")
+	}
+
+	// without htmx the same action posts and redirects back to the page
+	resp, err := client.PostForm(dash.URL+"/consumers/deadletters/9/retry", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/consumers" {
+		t.Fatalf("expected a 303 back to /consumers, got %s", resp.Status)
+	}
+}
+
+// TestLiveFragments checks the polling contract: pages carry a trigger, the
+// fragments are fragments, and each one renders its OWN trigger — which is
+// what keeps the loop alive, since htmx 4 has no stop-polling status code.
+func TestLiveFragments(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	for _, tc := range []struct{ page, fragment, marker string }{
+		{"/", "/fragments/overview", `id="overview-live"`},
+		{"/consumers", "/fragments/checkpoints", `id="checkpoints-body"`},
+	} {
+		page := get(t, client, dash.URL+tc.page)
+		if !strings.Contains(page, `hx-get="`+tc.fragment+`"`) || !strings.Contains(page, `hx-trigger="`+livePoll+`"`) {
+			t.Errorf("%s does not poll %s", tc.page, tc.fragment)
+		}
+
+		body := get(t, client, dash.URL+tc.fragment)
+		if strings.Contains(strings.ToLower(body), "<!doctype") {
+			t.Errorf("%s returned a whole page", tc.fragment)
+		}
+		if !strings.Contains(body, tc.marker) {
+			t.Errorf("%s missing %q", tc.fragment, tc.marker)
+		}
+		if !strings.Contains(body, `hx-trigger="`+livePoll+`"`) {
+			t.Errorf("%s dropped its own trigger — polling would stop after one tick", tc.fragment)
+		}
+	}
+
+	// the checkpoints fragment carries its out-of-band riders; the page must
+	// NOT (inside a <table> they are invalid markup)
+	frag := get(t, client, dash.URL+"/fragments/checkpoints")
+	for _, want := range []string{`id="log-head" hx-swap-oob="true"`, `id="dl-pending" hx-swap-oob="true"`, "6 to go"} {
+		if !strings.Contains(frag, want) {
+			t.Errorf("checkpoints fragment missing %q", want)
+		}
+	}
+	if strings.Contains(get(t, client, dash.URL+"/consumers"), "hx-swap-oob") {
+		t.Error("the page rendered out-of-band riders inside its own table")
+	}
+
+	// the log browser deliberately does not poll: an unbounded page is the
+	// START of the log, so a timer would re-fetch the same rows forever
+	if strings.Contains(get(t, client, dash.URL+"/events"), "hx-trigger") {
+		t.Error("the log browser should not poll")
+	}
+}
+
+// TestFragmentExpiredSessionRedirectsBrowser is the defect this design
+// exists to avoid: under a 2s poll, a 303 to /login would be followed by
+// htmx's fetch and the whole sign-in page swapped into a table body, every
+// two seconds. htmx honours an HX-Redirect response header instead.
+func TestFragmentExpiredSessionRedirectsBrowser(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+
+	for _, path := range []string{"/fragments/checkpoints", "/fragments/overview", "/fragments/deadletters"} {
+		req, _ := http.NewRequest(http.MethodGet, dash.URL+path, nil)
+		req.Header.Set("HX-Request", "true")
+		req.AddCookie(&http.Cookie{Name: authCookieName, Value: "stale"})
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := readBody(t, resp)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s: expected 401, got %s", path, resp.Status)
+		}
+		if resp.Header.Get("HX-Redirect") != "/login" {
+			t.Errorf("%s: expected HX-Redirect to /login, got %q", path, resp.Header.Get("HX-Redirect"))
+		}
+		if strings.Contains(body, "<form") {
+			t.Errorf("%s: a sign-in page was returned to a fragment request", path)
+		}
+	}
+
+	// a plain navigation still gets the ordinary redirect
+	req, _ := http.NewRequest(http.MethodGet, dash.URL+"/fragments/checkpoints", nil)
+	req.AddCookie(&http.Cookie{Name: authCookieName, Value: "stale"})
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("expected a 303 for a non-htmx request, got %s", resp.Status)
+	}
+}
+
+// TestFragmentBackendOutageKeepsPolling: a backend that is down must not
+// stop the loop, or the panel stays dead after the backend recovers.
+func TestFragmentBackendOutageKeepsPolling(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+	backend.Close() // the backend goes away mid-session
+
+	for _, tc := range []struct{ path, marker string }{
+		{"/fragments/checkpoints", `id="checkpoints-body"`},
+		{"/fragments/overview", `id="overview-live"`},
+	} {
+		body := get(t, client, dash.URL+tc.path)
+		if !strings.Contains(body, tc.marker) || !strings.Contains(body, `hx-trigger="`+livePoll+`"`) {
+			t.Errorf("%s: an outage dropped the polling trigger", tc.path)
+		}
+		if !strings.Contains(body, "Could not reach the pocketcqrs backend") {
+			t.Errorf("%s: the outage is not reported in the fragment", tc.path)
+		}
 	}
 }
 

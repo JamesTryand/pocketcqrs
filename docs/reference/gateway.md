@@ -151,7 +151,32 @@ GET /api/cqrs/deadletters?all=
 ```
 
 Failed function deliveries: `{ "deadLetters": [...] }` — pending only unless
-`all=1`. Retry/dismiss stays with the [`deadletter` CLI](cli.md#deadletter).
+`all=1`.
+
+```
+POST /api/cqrs/deadletters/{id}/retry
+POST /api/cqrs/deadletters/retry             (every pending dead letter)
+POST /api/cqrs/deadletters/{id}/dismiss
+```
+
+`retry` re-delivers the captured event envelope through the **current**
+function code — fix the function, reload it, then retry. It answers
+`200` with
+
+```json
+{ "id": 3, "consumer": "fn:audit", "resolved": false, "attempts": 4, "error": "..." }
+```
+
+A retry that fails again is **not** an HTTP error: a poison event staying
+poison is the ordinary case, and a caller has to tell it apart from a broken
+endpoint. Successes set `resolved: true`; failures record another attempt and
+return the new failure text. `4xx` is reserved for a malformed or unknown id.
+The bulk form answers `{ "results": [...] }` with one entry per pending
+letter, oldest first.
+
+`dismiss` resolves a dead letter without re-delivering it (`404` for an
+unknown id). Both routes adjudicate exactly like the
+[`deadletter` CLI](cli.md#deadletter) — they share one implementation.
 
 ```
 GET  /api/cqrs/admin/mode

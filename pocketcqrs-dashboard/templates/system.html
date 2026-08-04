@@ -1,0 +1,164 @@
+{{/* The reload report. Rendered inline on a plain form post, swapped into
+     the panel by htmx — one {{define}} either way, so the two paths cannot
+     drift. Unlike the mode toggle this action does NOT redirect: the report
+     IS the result, and a redirect would throw it away. */}}
+{{define "reload-report"}}
+<div id="reload-report" class="wa-stack wa-gap-m">
+  {{if .ReloadError}}
+  <wa-callout variant="danger">
+    <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+    <strong>Reload refused.</strong> {{.ReloadError}}
+    <p class="wa-caption-s">Nothing was swapped: the backend compiles and validates every file before it touches a live registration, so the previous code is still serving.</p>
+  </wa-callout>
+  {{end}}
+
+  {{with .Report}}
+  {{if .SchemaSkipped}}
+  <wa-callout variant="warning">
+    <wa-icon slot="icon" name="gear" library="system"></wa-icon>
+    <strong>Effect tier only.</strong> Schema-bearing files (JS projection schemas, JS deciders) were <em>not</em> reloaded &mdash; that tier only moves in maintenance mode.
+  </wa-callout>
+  {{else}}
+  <wa-callout variant="success">
+    <wa-icon slot="icon" name="check" library="system"></wa-icon>
+    <strong>Reloaded behind the barrier.</strong> Both tiers were swapped. Return to running when you have checked the result.
+  </wa-callout>
+  {{end}}
+
+  {{if .DecidersRefused}}
+  <wa-callout variant="danger">
+    <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+    <strong>Deciders refused.</strong> Each of these failed re-validation and kept its previous code:
+    <ul>{{range .DecidersRefused}}<li>{{.}}</li>{{end}}</ul>
+  </wa-callout>
+  {{end}}
+
+  <wa-scroller>
+    <table class="wa-zebra-rows">
+      <caption class="wa-visually-hidden">What the reload swapped</caption>
+      <thead><tr><th scope="col">Tier</th><th scope="col">Reloaded</th></tr></thead>
+      <tbody>
+        <tr>
+          <th scope="row">Effect functions</th>
+          <td>{{range .EffectsReloaded}}<wa-tag size="s" appearance="outlined">{{.}}</wa-tag> {{else}}<span class="wa-caption-m">&mdash;</span>{{end}}</td>
+        </tr>
+        <tr>
+          <th scope="row">HTTP functions</th>
+          <td>{{range .HTTPReloaded}}<wa-tag size="s" appearance="outlined">{{.}}</wa-tag> {{else}}<span class="wa-caption-m">&mdash;</span>{{end}}</td>
+        </tr>
+        <tr>
+          <th scope="row">Cron functions</th>
+          <td>{{range .CronReloaded}}<wa-tag size="s" appearance="outlined">{{.}}</wa-tag> {{else}}<span class="wa-caption-m">&mdash;</span>{{end}}</td>
+        </tr>
+        <tr>
+          <th scope="row">JS projections</th>
+          <td>
+            {{range .Projections}}<wa-tag size="s" appearance="outlined">{{.}}</wa-tag> {{end}}
+            {{range .ProjectionsRemoved}}<wa-tag size="s" variant="warning">removed: {{.}}</wa-tag> {{end}}
+            {{if not (or .Projections .ProjectionsRemoved)}}<span class="wa-caption-m">&mdash;</span>{{end}}
+          </td>
+        </tr>
+        <tr>
+          <th scope="row">JS deciders</th>
+          <td>
+            {{range .DecidersReloaded}}<wa-tag size="s" appearance="outlined">{{.}}</wa-tag> {{end}}
+            {{range .DecidersRemoved}}<wa-tag size="s" variant="warning">removed: {{.}}</wa-tag> {{end}}
+            {{if not (or .DecidersReloaded .DecidersRemoved)}}<span class="wa-caption-m">&mdash;</span>{{end}}
+          </td>
+        </tr>
+        <tr>
+          <th scope="row">Schema tier</th>
+          <td class="wa-caption-m">{{.SchemaTier}}</td>
+        </tr>
+      </tbody>
+    </table>
+  </wa-scroller>
+  {{end}}
+
+  {{if not (or .Report .ReloadError)}}
+  <p class="wa-caption-m">No reload has run in this session. The report appears here.</p>
+  {{end}}
+</div>
+{{end}}
+
+{{define "content"}}
+<h1>System</h1>
+
+{{/* Mode and reload live on one page because the barrier is an ORDERING
+     rule between them, not two unrelated switches: schema-bearing files
+     only move in maintenance, so the sequence is on → reload → off. The
+     page states which step is next rather than hiding the other controls. */}}
+{{if .Maintenance}}
+<wa-callout variant="warning">
+  <wa-icon slot="icon" name="gear" library="system"></wa-icon>
+  <strong>Maintenance mode.</strong> The gateway rejects domain commands with 503 while this holds. Reload now, check the report, then return to running.
+</wa-callout>
+{{else}}
+<wa-callout variant="success">
+  <wa-icon slot="icon" name="check" library="system"></wa-icon>
+  <strong>Running.</strong> The gateway is accepting commands. Reloading now swaps effect, HTTP and cron functions only.
+</wa-callout>
+{{end}}
+
+<wa-card>
+  <h2 slot="header">Mode barrier</h2>
+  <div class="wa-stack wa-gap-m">
+    <p class="wa-body-s">
+      The write side is paused in <strong>maintenance</strong> so schema-bearing code can be swapped without a command landing half-way through the change. Nothing else about the system stops: reads, the query side and the operational API all keep serving.
+    </p>
+    {{/* A plain form, deliberately: POST-then-redirect, so the browser's
+         reload button cannot re-fire the toggle. wa-button copies its own
+         name/value onto the hidden button it submits with, so no JS is
+         involved in sending which mode was chosen. */}}
+    <form method="post" action="/system/mode" class="wa-cluster wa-gap-s wa-align-items-center">
+      <span class="wa-caption-m">Current mode:</span>
+      {{if .Maintenance}}
+      <wa-tag variant="warning"><wa-icon name="gear" library="system"></wa-icon> maintenance</wa-tag>
+      <wa-button type="submit" name="mode" value="running" variant="success">
+        <wa-icon slot="start" name="check" library="system"></wa-icon> Return to running
+      </wa-button>
+      {{else}}
+      <wa-tag variant="success" appearance="outlined"><wa-icon name="check" library="system"></wa-icon> running</wa-tag>
+      <wa-button type="submit" name="mode" value="maintenance" variant="warning">
+        <wa-icon slot="start" name="gear" library="system"></wa-icon> Enter maintenance
+      </wa-button>
+      {{end}}
+    </form>
+  </div>
+  <p slot="footer" class="wa-caption-s">Same barrier as <code>pocketcqrs system maintenance on|off</code>. It is persisted in <code>events.db</code>, so it survives a restart &mdash; a system left in maintenance stays there.</p>
+</wa-card>
+
+<wa-card>
+  <h2 slot="header">Hot reload</h2>
+  <div class="wa-stack wa-gap-m">
+    <p class="wa-body-s">
+      Re-reads the backend&rsquo;s functions directory. Everything compiles and validates <em>before</em> any live registration is touched, so a broken file leaves the previous code serving. Durable checkpoints carry over by consumer name.
+    </p>
+
+    <ol class="wa-stack wa-gap-2xs wa-body-s">
+      <li>Effect, HTTP and cron functions reload in <strong>any</strong> mode &mdash; they add no schema.</li>
+      <li>JS projection schemas and JS deciders reload <strong>only in maintenance</strong>. Reloading them while running is not refused, it is skipped, and the report says so.</li>
+      <li>Deciders are re-validated against real streams on the way in; a refusal keeps the previous code.</li>
+    </ol>
+
+    {{/* Enhanced, not replaced: without scripting this posts and re-renders
+         the whole page with the report in place. */}}
+    <form method="post" action="/system/reload" class="wa-cluster wa-gap-s wa-align-items-center"
+          hx-post="/system/reload" hx-target="#reload-report" hx-swap="outerHTML">
+      <wa-button type="submit" variant="brand">
+        <wa-icon slot="start" name="gear" library="system"></wa-icon>
+        {{if .Maintenance}}Reload all tiers{{else}}Reload effect functions{{end}}
+      </wa-button>
+      <wa-spinner class="htmx-indicator" aria-label="reloading"></wa-spinner>
+      {{if not .Maintenance}}
+      <span class="wa-caption-m">Enter maintenance first to reload projection schemas and deciders.</span>
+      {{end}}
+    </form>
+  </div>
+</wa-card>
+
+<wa-card>
+  <h2 slot="header">Reload report</h2>
+  {{template "reload-report" .}}
+</wa-card>
+{{end}}

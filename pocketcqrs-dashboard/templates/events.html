@@ -1,3 +1,9 @@
+{{/* No polling here, deliberately — unlike the consumer checkpoints and the
+     overview totals. An unbounded page of this feed is the START of the log
+     (ascending positions, no `before`), so a timer would re-fetch the same
+     oldest rows forever. The live control on a log browser is the Newer
+     pager, which is exactly what the bidirectional `before`/`after` bounds
+     were built for. Same reasoning on the per-stream timeline. */}}
 {{define "content"}}
 <div class="wa-split wa-align-items-baseline">
   <h1>Events</h1>

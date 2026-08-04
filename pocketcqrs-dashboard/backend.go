@@ -197,6 +197,73 @@ func (c *BackendClient) DeadLetters(ctx context.Context, token string, includeRe
 	return out.DeadLetters, nil
 }
 
+// Mode reads the system mode barrier (GET /api/cqrs/admin/mode).
+func (c *BackendClient) Mode(ctx context.Context, token string) (string, error) {
+	var out struct {
+		Mode string `json:"mode"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/cqrs/admin/mode", token, nil, &out); err != nil {
+		return "", err
+	}
+	return out.Mode, nil
+}
+
+// SetMode moves the barrier (POST /api/cqrs/admin/mode). The backend
+// validates the value, so an unknown mode comes back as an HTTPError and
+// the current mode is unchanged.
+func (c *BackendClient) SetMode(ctx context.Context, token, mode string) (string, error) {
+	var out struct {
+		Mode string `json:"mode"`
+	}
+	err := c.do(ctx, http.MethodPost, "/api/cqrs/admin/mode", token,
+		map[string]string{"mode": mode}, &out)
+	if err != nil {
+		return "", err
+	}
+	return out.Mode, nil
+}
+
+// Reload hot-reloads the backend's functions directory
+// (POST /api/cqrs/admin/reload) and returns its report. A file that fails to
+// compile or validate is a 400 with the previous code left serving — that
+// arrives here as an *HTTPError carrying the backend's message.
+func (c *BackendClient) Reload(ctx context.Context, token string) (*ReloadReport, error) {
+	var rep ReloadReport
+	if err := c.do(ctx, http.MethodPost, "/api/cqrs/admin/reload", token, nil, &rep); err != nil {
+		return nil, err
+	}
+	return &rep, nil
+}
+
+// RetryDeadLetter re-delivers one dead letter through the backend's current
+// function code. A retry that fails again is a successful call reporting
+// Resolved=false — see DeadLetterResult.
+func (c *BackendClient) RetryDeadLetter(ctx context.Context, token string, id int64) (*DeadLetterResult, error) {
+	var out DeadLetterResult
+	path := "/api/cqrs/deadletters/" + strconv.FormatInt(id, 10) + "/retry"
+	if err := c.do(ctx, http.MethodPost, path, token, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RetryAllDeadLetters re-delivers every pending dead letter, oldest first.
+func (c *BackendClient) RetryAllDeadLetters(ctx context.Context, token string) ([]DeadLetterResult, error) {
+	var out struct {
+		Results []DeadLetterResult `json:"results"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/cqrs/deadletters/retry", token, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Results, nil
+}
+
+// DismissDeadLetter resolves a dead letter without re-delivering it.
+func (c *BackendClient) DismissDeadLetter(ctx context.Context, token string, id int64) error {
+	path := "/api/cqrs/deadletters/" + strconv.FormatInt(id, 10) + "/dismiss"
+	return c.do(ctx, http.MethodPost, path, token, nil, nil)
+}
+
 // ---- the public catalog JSON contract (mirror of the API document) ----
 
 type Catalog struct {
@@ -320,6 +387,39 @@ func indentJSON(raw json.RawMessage) string {
 		return string(raw) // not valid JSON — show it as it arrived
 	}
 	return buf.String()
+}
+
+// ReloadReport is what POST /api/cqrs/admin/reload hands back: what was
+// swapped, and whether the schema-bearing tier was allowed through the
+// maintenance barrier.
+type ReloadReport struct {
+	Mode            string   `json:"mode"`
+	EffectsReloaded []string `json:"effectsReloaded"`
+	HTTPReloaded    []string `json:"httpReloaded"`
+	CronReloaded    []string `json:"cronReloaded"`
+	// SchemaTier is "reloaded" or "skipped: not in maintenance".
+	SchemaTier         string   `json:"schemaTier"`
+	Projections        []string `json:"projectionsReloaded,omitempty"`
+	ProjectionsRemoved []string `json:"projectionsRemoved,omitempty"`
+	DecidersReloaded   []string `json:"decidersReloaded,omitempty"`
+	DecidersRemoved    []string `json:"decidersRemoved,omitempty"`
+	DecidersRefused    []string `json:"decidersRefused,omitempty"`
+}
+
+// SchemaSkipped reports whether the schema-bearing tier was held back by the
+// barrier — i.e. the reload ran while the system was still running.
+func (r ReloadReport) SchemaSkipped() bool {
+	return strings.HasPrefix(r.SchemaTier, "skipped")
+}
+
+// DeadLetterResult is the outcome of one retry or dismissal. Resolved=false
+// with an Error is the ordinary "still poison" case, not a failed call.
+type DeadLetterResult struct {
+	ID       int64  `json:"id"`
+	Consumer string `json:"consumer,omitempty"`
+	Resolved bool   `json:"resolved"`
+	Attempts int64  `json:"attempts,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // StreamInfo describes one stream: length, head position, last write.

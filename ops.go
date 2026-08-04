@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -17,6 +21,9 @@ import (
 //	GET  /api/cqrs/events?after=&before=&limit=&aggregate=&aggregateId=&type=
 //	GET  /api/cqrs/streams?aggregate=
 //	GET  /api/cqrs/deadletters?all=
+//	POST /api/cqrs/deadletters/{id}/retry
+//	POST /api/cqrs/deadletters/{id}/dismiss
+//	POST /api/cqrs/deadletters/retry            (every pending dead letter)
 //	GET  /api/cqrs/admin/mode
 //	POST /api/cqrs/admin/mode   body: {"mode":"running"|"maintenance"}
 //
@@ -71,6 +78,52 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 		return re.JSON(http.StatusOK, map[string]any{"deadLetters": letters})
 	}).Bind(apis.RequireSuperuserAuth())
 
+	// re-deliver one dead letter through the CURRENT function code.
+	//
+	// The route is more specific than the gateway's
+	// POST /api/cqrs/{aggregate}/{id}/{command}, so http.ServeMux (which
+	// PocketBase's router wraps) matches this one first.
+	e.Router.POST("/api/cqrs/deadletters/{id}/retry", func(re *core.RequestEvent) error {
+		id, err := strconv.ParseInt(re.Request.PathValue("id"), 10, 64)
+		if err != nil {
+			return apis.NewBadRequestError("invalid dead letter id", err)
+		}
+		letters, err := c.pendingDeadLetters(re.Request.Context(), id)
+		if err != nil {
+			return err
+		}
+		results, err := c.retryDeadLetters(re.Request.Context(), letters)
+		if err != nil {
+			return apis.NewBadRequestError(err.Error(), err)
+		}
+		return re.JSON(http.StatusOK, results[0])
+	}).Bind(apis.RequireSuperuserAuth())
+
+	// re-deliver every pending dead letter, oldest first
+	e.Router.POST("/api/cqrs/deadletters/retry", func(re *core.RequestEvent) error {
+		letters, err := c.store.DeadLetters(re.Request.Context(), false)
+		if err != nil {
+			return apis.NewBadRequestError(err.Error(), err)
+		}
+		results, err := c.retryDeadLetters(re.Request.Context(), letters)
+		if err != nil {
+			return apis.NewBadRequestError(err.Error(), err)
+		}
+		return re.JSON(http.StatusOK, map[string]any{"results": results})
+	}).Bind(apis.RequireSuperuserAuth())
+
+	// resolve a dead letter without re-delivering it
+	e.Router.POST("/api/cqrs/deadletters/{id}/dismiss", func(re *core.RequestEvent) error {
+		id, err := strconv.ParseInt(re.Request.PathValue("id"), 10, 64)
+		if err != nil {
+			return apis.NewBadRequestError("invalid dead letter id", err)
+		}
+		if err := c.store.ResolveDeadLetter(re.Request.Context(), id); err != nil {
+			return apis.NewNotFoundError(fmt.Sprintf("no dead letter with id %d", id), err)
+		}
+		return re.JSON(http.StatusOK, deadLetterResult{ID: id, Resolved: true})
+	}).Bind(apis.RequireSuperuserAuth())
+
 	// the system mode barrier (running|maintenance); POST wraps SetMode,
 	// so an invalid value is a 400 and the current mode never changes
 	e.Router.GET("/api/cqrs/admin/mode", func(re *core.RequestEvent) error {
@@ -97,4 +150,71 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 		}
 		return re.JSON(http.StatusOK, map[string]string{"mode": body.Mode})
 	}).Bind(apis.RequireSuperuserAuth())
+}
+
+// deadLetterResult reports the outcome of one retry or dismissal.
+//
+// A retry that fails again is NOT an HTTP error: a poison event staying
+// poison is the ordinary case, and the caller needs to tell it apart from
+// "the endpoint is broken". So every adjudicated delivery answers 200 with
+// Resolved=false and the failure text; 4xx is reserved for a malformed or
+// unknown id.
+type deadLetterResult struct {
+	ID       int64  `json:"id"`
+	Consumer string `json:"consumer,omitempty"`
+	Resolved bool   `json:"resolved"`
+	Attempts int64  `json:"attempts,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// pendingDeadLetters returns the single pending dead letter with the given
+// id, or a 404 when there is none.
+func (c *components) pendingDeadLetters(ctx context.Context, id int64) ([]events.DeadLetter, error) {
+	letters, err := c.store.DeadLetters(ctx, false)
+	if err != nil {
+		return nil, apis.NewBadRequestError(err.Error(), err)
+	}
+	letters = filterLetters(letters, id)
+	if len(letters) == 0 {
+		return nil, apis.NewNotFoundError(fmt.Sprintf("no pending dead letter with id %d", id), nil)
+	}
+	return letters, nil
+}
+
+// retryDeadLetters re-delivers each letter through the current function
+// code, resolving the ones that now succeed and recording an attempt on the
+// ones that do not — the same adjudication as `pocketcqrs deadletter retry`,
+// shared so the CLI and the HTTP API can never drift apart.
+//
+// It holds reloadMu because a hot reload swaps c.fnRuntime wholesale: a
+// retry must run entirely against one runtime, not half of each.
+func (c *components) retryDeadLetters(ctx context.Context, letters []events.DeadLetter) ([]deadLetterResult, error) {
+	c.reloadMu.Lock()
+	defer c.reloadMu.Unlock()
+
+	if c.fnRuntime == nil {
+		return nil, errors.New("function runtime not initialized")
+	}
+
+	results := make([]deadLetterResult, 0, len(letters))
+	for _, dl := range letters {
+		res := deadLetterResult{ID: dl.ID, Consumer: dl.Consumer, Attempts: dl.Attempts}
+		// dead letters record the consumer name ("fn:<name>"); the runtime
+		// knows the function by its bare name
+		name := strings.TrimPrefix(dl.Consumer, "fn:")
+		if err := c.fnRuntime.RetryEventFunction(name, dl.Event); err != nil {
+			res.Error = err.Error()
+			res.Attempts = dl.Attempts + 1
+			if serr := c.store.FailDeadLetterRetry(ctx, dl.ID, err); serr != nil {
+				return nil, serr
+			}
+		} else {
+			res.Resolved = true
+			if serr := c.store.ResolveDeadLetter(ctx, dl.ID); serr != nil {
+				return nil, serr
+			}
+		}
+		results = append(results, res)
+	}
+	return results, nil
 }

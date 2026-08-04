@@ -7,10 +7,25 @@
 <link rel="stylesheet" href="/assets/webawesome/styles/utilities.css">
 <link rel="stylesheet" href="/assets/app.css">
 <script>
-  // Web Awesome uses explicit scheme classes; follow the OS preference.
-  if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.documentElement.classList.replace('wa-light', 'wa-dark');
-  }
+  // Web Awesome uses explicit scheme classes, so the OS preference has to be
+  // mirrored onto <html> — and kept mirrored. This ran one way only until
+  // DASH.4: flipping the OS to dark worked, flipping back to light left the
+  // page on wa-dark for the rest of the session. Both directions now, and
+  // the listener stays for mid-session changes.
+  (function () {
+    var dark = window.matchMedia('(prefers-color-scheme: dark)');
+    function apply() {
+      var root = document.documentElement;
+      root.classList.toggle('wa-dark', dark.matches);
+      root.classList.toggle('wa-light', !dark.matches);
+      // the cytoscape graph snapshots its colours from these tokens, so it
+      // has to be told; it listens for this rather than for matchMedia, to
+      // guarantee it reads the tokens AFTER the class has changed
+      document.dispatchEvent(new CustomEvent('pcqrs:colorscheme', { detail: { dark: dark.matches } }));
+    }
+    dark.addEventListener('change', apply);
+    apply();
+  })();
 </script>
 <script type="module" src="/assets/webawesome/webawesome.loader.js"></script>
 <script src="/assets/vendor/htmx.min.js" defer></script>

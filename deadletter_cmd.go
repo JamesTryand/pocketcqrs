@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -55,9 +53,6 @@ func newDeadletterCommand(c *components) *cobra.Command {
 		Short: "Re-deliver a dead letter through the current function code",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if c.fnRuntime == nil {
-				return errors.New("function runtime not initialized")
-			}
 			ctx := context.Background()
 			letters, err := c.store.DeadLetters(ctx, false)
 			if err != nil {
@@ -78,19 +73,17 @@ func newDeadletterCommand(c *components) *cobra.Command {
 				return nil
 			}
 
-			for _, dl := range letters {
-				name := strings.TrimPrefix(dl.Consumer, "fn:")
-				err := c.fnRuntime.RetryEventFunction(name, dl.Event)
-				if err == nil {
-					if err := c.store.ResolveDeadLetter(ctx, dl.ID); err != nil {
-						return err
-					}
-					cmd.Printf("#%d retried successfully, resolved.\n", dl.ID)
+			// same adjudication as POST /api/cqrs/deadletters/{id}/retry —
+			// shared so the CLI and the dashboard can never diverge
+			results, err := c.retryDeadLetters(ctx, letters)
+			if err != nil {
+				return err
+			}
+			for _, res := range results {
+				if res.Resolved {
+					cmd.Printf("#%d retried successfully, resolved.\n", res.ID)
 				} else {
-					if serr := c.store.FailDeadLetterRetry(ctx, dl.ID, err); serr != nil {
-						return serr
-					}
-					cmd.Printf("#%d retry failed (attempt %d): %v\n", dl.ID, dl.Attempts+1, err)
+					cmd.Printf("#%d retry failed (attempt %d): %v\n", res.ID, res.Attempts, res.Error)
 				}
 			}
 			return nil

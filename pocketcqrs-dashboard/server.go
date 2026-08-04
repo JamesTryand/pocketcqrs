@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
@@ -22,10 +23,24 @@ const authCookieName = "pcqrs_auth"
 const defaultPageSize = 50
 
 // pages are the page templates; each is parsed together with layout.html.
+// Fragment templates live inside their page's file (a polled table body is
+// rendered by the same {{define}} whether it arrives with the page or on its
+// own), so they need no separate entry here.
 var pages = []string{
 	"login", "overview", "placeholder",
-	"aggregates", "streams", "stream", "events", "consumers",
+	"aggregates", "streams", "stream", "events", "consumers", "system",
 }
+
+// livePoll is the hx-trigger interval of every self-refreshing panel, held
+// in one place so a page and the fragment that replaces it cannot disagree.
+//
+// Both live panels are catalog-backed, and the catalog re-derives its log
+// statistics on each call, so this is deliberately one dial rather than a
+// per-panel guess. htmx 4 has no "stop polling" status code (2.x's 286 is
+// gone from the 4.0.0-beta6 build): polling stops because the swapped-in
+// element carries no hx-trigger, which is why every polled fragment renders
+// its own trigger attributes.
+const livePoll = "every 2s"
 
 type server struct {
 	backend    *BackendClient
@@ -69,8 +84,25 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /aggregates/{name}/{id}", s.requireAuth(s.stream))
 	mux.HandleFunc("GET /events", s.requireAuth(s.events))
 	mux.HandleFunc("GET /consumers", s.requireAuth(s.consumers))
+	mux.HandleFunc("GET /system", s.requireAuth(s.system))
+
+	// actions
+	mux.HandleFunc("POST /system/mode", s.requireAuth(s.setMode))
+	mux.HandleFunc("POST /system/reload", s.requireAuth(s.reload))
+	mux.HandleFunc("POST /consumers/deadletters/retry", s.requireAuth(s.deadLetterRetryAll))
+	mux.HandleFunc("POST /consumers/deadletters/{id}/retry", s.requireAuth(s.deadLetterRetry))
+	mux.HandleFunc("POST /consumers/deadletters/{id}/dismiss", s.requireAuth(s.deadLetterDismiss))
+
+	// htmx fragments: the same {{define}}s the pages render, on their own
+	mux.HandleFunc("GET /fragments/overview", s.requireAuth(s.overviewFragment))
+	mux.HandleFunc("GET /fragments/checkpoints", s.requireAuth(s.checkpointsFragment))
+	mux.HandleFunc("GET /fragments/deadletters", s.requireAuth(s.deadLettersFragment))
 	return mux
 }
+
+// isHTMX reports whether the request came from htmx rather than a plain
+// browser navigation. htmx 4 sends HX-Request on every request it makes.
+func isHTMX(r *http.Request) bool { return r.Header.Get("HX-Request") == "true" }
 
 // ---- template data ----
 
@@ -87,6 +119,7 @@ func navItems(active string) []navItem {
 		{Label: "Aggregates", Href: "/aggregates", Icon: "circle"},
 		{Label: "Events", Href: "/events", Icon: "clock"},
 		{Label: "Consumers", Href: "/consumers", Icon: "eye"},
+		{Label: "System", Href: "/system", Icon: "gear"},
 	}
 	for i := range items {
 		items[i].Current = items[i].Href == active
@@ -140,11 +173,28 @@ func (s *server) requireAuth(h authedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(authCookieName)
 		if err != nil || c.Value == "" {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			s.redirectToLogin(w, r)
 			return
 		}
 		h(w, r, c.Value)
 	}
+}
+
+// redirectToLogin sends the visitor back to the sign-in page.
+//
+// A plain navigation gets the usual 303. An htmx request must NOT: its fetch
+// would follow the redirect transparently and swap the whole sign-in page
+// into whatever element issued the request — for a polled table body, every
+// two seconds, forever. htmx reads any hx-* RESPONSE header, so HX-Redirect
+// navigates the actual browser instead (verified against the vendored
+// 4.0.0-beta6 build, which derives those header names dynamically).
+func (s *server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
+	if isHTMX(r) {
+		w.Header().Set("HX-Redirect", "/login")
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *server) loginForm(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +246,7 @@ func (s *server) backendOK(w http.ResponseWriter, r *http.Request, title, active
 	}
 	if errors.Is(err, ErrUnauthorized) {
 		clearAuthCookie(w)
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		s.redirectToLogin(w, r)
 		return false
 	}
 	w.WriteHeader(http.StatusBadGateway)
@@ -280,14 +330,23 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request, token string) 
 	}
 
 	data := s.base("Overview", "/")
+	liveOverview(data, cat)
+	data["Mermaid"] = cat.Mermaid
+	data["CatalogJSON"] = template.JS(raw)
+	s.render(w, "overview", "layout", data)
+}
+
+// liveOverview fills the keys the self-refreshing overview panel reads. The
+// catalog explorer is deliberately NOT part of that panel: re-laying out the
+// graph every few seconds would be expensive and would discard whatever node
+// the operator had selected.
+func liveOverview(data map[string]any, cat *Catalog) {
+	data["Poll"] = livePoll
 	data["Mode"] = cat.Mode
 	data["Totals"] = cat.Totals
 	data["Aggregates"] = len(cat.Aggregates)
 	data["Consumers"] = len(cat.Consumers)
 	data["Generated"] = cat.GeneratedAt
-	data["Mermaid"] = cat.Mermaid
-	data["CatalogJSON"] = template.JS(raw)
-	s.render(w, "overview", "layout", data)
 }
 
 // aggregates lists the registered aggregates and their empirical event types.
@@ -387,6 +446,16 @@ func (s *server) consumers(w http.ResponseWriter, r *http.Request, token string)
 		return
 	}
 
+	data := s.base("Consumers", "/consumers")
+	checkpoints(data, cat)
+	data["DeadLetters"] = letters
+	data["IncludeResolved"] = includeResolved
+	data["Flash"] = flashMessage{} // no action was taken to report
+	s.render(w, "consumers", "layout", data)
+}
+
+// checkpoints fills the keys the polled checkpoints table body reads.
+func checkpoints(data map[string]any, cat *Catalog) {
 	rows := make([]consumerRow, 0, len(cat.Consumers))
 	for _, c := range cat.Consumers {
 		// behind-by is measured against the head of the log, never the
@@ -397,13 +466,255 @@ func (s *server) consumers(w http.ResponseWriter, r *http.Request, token string)
 		}
 		rows = append(rows, consumerRow{Consumer: c, Behind: behind})
 	}
-
-	data := s.base("Consumers", "/consumers")
+	data["Poll"] = livePoll
 	data["Consumers"] = rows
 	data["MaxPosition"] = cat.Totals.MaxPosition
-	data["DeadLetters"] = letters
-	data["IncludeResolved"] = includeResolved
-	s.render(w, "consumers", "layout", data)
+	data["Pending"] = cat.Totals.DeadLettersPending
+}
+
+// ---- system: the mode barrier and hot reload ----
+
+// system renders the mode toggle and the reload control. The two belong on
+// one page because the barrier is an ordering rule between them: schema-
+// bearing files only reload in maintenance, so the sequence is maintenance
+// on → reload → maintenance off.
+func (s *server) system(w http.ResponseWriter, r *http.Request, token string) {
+	mode, err := s.backend.Mode(r.Context(), token)
+	if !s.backendOK(w, r, "System", "/system", err) {
+		return
+	}
+	s.render(w, "system", "layout", s.systemData(mode, nil, ""))
+}
+
+// systemData assembles the System page. report and reloadErr are the outcome
+// of a reload just performed, if any.
+func (s *server) systemData(mode string, report *ReloadReport, reloadErr string) map[string]any {
+	data := s.base("System", "/system")
+	data["Mode"] = mode
+	data["Maintenance"] = mode == "maintenance"
+	data["Report"] = report
+	data["ReloadError"] = reloadErr
+	return data
+}
+
+// setMode moves the barrier. This one is POST-then-redirect: the outcome is
+// the new page state, so a refresh must not re-submit the toggle.
+func (s *server) setMode(w http.ResponseWriter, r *http.Request, token string) {
+	mode := r.PostFormValue("mode")
+	if _, err := s.backend.SetMode(r.Context(), token, mode); err != nil {
+		if !s.backendOK(w, r, "System", "/system", err) {
+			return
+		}
+	}
+	http.Redirect(w, r, "/system", http.StatusSeeOther)
+}
+
+// reload hot-reloads the backend's functions directory.
+//
+// Unlike the mode toggle this does NOT redirect: the report is the whole
+// point of the action, and a redirect would throw it away. htmx swaps it
+// into the report panel; without JS the same POST re-renders the page with
+// the report in place.
+func (s *server) reload(w http.ResponseWriter, r *http.Request, token string) {
+	w.Header().Set("Vary", "HX-Request")
+
+	report, err := s.backend.Reload(r.Context(), token)
+	var reloadErr string
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			clearAuthCookie(w)
+			s.redirectToLogin(w, r)
+			return
+		}
+		// a file that fails to compile or validate is a 400 from the
+		// backend, with the previous code left serving — that is a result
+		// to report, not a dashboard failure
+		reloadErr = err.Error()
+	}
+
+	mode := ""
+	if report != nil {
+		mode = report.Mode
+	} else if m, merr := s.backend.Mode(r.Context(), token); merr == nil {
+		mode = m
+	}
+
+	data := s.systemData(mode, report, reloadErr)
+	if isHTMX(r) {
+		s.render(w, "system", "reload-report", data)
+		return
+	}
+	s.render(w, "system", "layout", data)
+}
+
+// ---- dead-letter actions ----
+
+// deadLetterRetry re-delivers one dead letter through the backend's current
+// function code.
+func (s *server) deadLetterRetry(w http.ResponseWriter, r *http.Request, token string) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid dead letter id", http.StatusBadRequest)
+		return
+	}
+	res, err := s.backend.RetryDeadLetter(r.Context(), token, id)
+	s.afterDeadLetterAction(w, r, token, retryFlash(res), err)
+}
+
+// deadLetterRetryAll re-delivers every pending dead letter.
+func (s *server) deadLetterRetryAll(w http.ResponseWriter, r *http.Request, token string) {
+	results, err := s.backend.RetryAllDeadLetters(r.Context(), token)
+
+	flash := flashMessage{}
+	if err == nil {
+		resolved := 0
+		for _, res := range results {
+			if res.Resolved {
+				resolved++
+			}
+		}
+		switch {
+		case len(results) == 0:
+			flash = flashMessage{"neutral", "Nothing pending to retry."}
+		case resolved == len(results):
+			flash = flashMessage{"success", fmt.Sprintf("Re-delivered %d dead letters; all resolved.", resolved)}
+		default:
+			flash = flashMessage{"warning", fmt.Sprintf(
+				"Re-delivered %d dead letters: %d resolved, %d still failing (see the error details).",
+				len(results), resolved, len(results)-resolved)}
+		}
+	}
+	s.afterDeadLetterAction(w, r, token, flash, err)
+}
+
+// deadLetterDismiss resolves a dead letter without re-delivering it.
+func (s *server) deadLetterDismiss(w http.ResponseWriter, r *http.Request, token string) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid dead letter id", http.StatusBadRequest)
+		return
+	}
+	err = s.backend.DismissDeadLetter(r.Context(), token, id)
+	s.afterDeadLetterAction(w, r, token,
+		flashMessage{"neutral", fmt.Sprintf("Dead letter #%d dismissed without retrying.", id)}, err)
+}
+
+// flashMessage is the one-line outcome shown above the dead-letter table.
+type flashMessage struct {
+	Variant string
+	Text    string
+}
+
+// retryFlash turns a retry outcome into its message. A retry that fails
+// again is the ordinary case — the backend answers 200 with resolved=false —
+// so it reads as a result, not as an error.
+func retryFlash(res *DeadLetterResult) flashMessage {
+	if res == nil {
+		return flashMessage{}
+	}
+	if res.Resolved {
+		return flashMessage{"success", fmt.Sprintf("Dead letter #%d re-delivered and resolved.", res.ID)}
+	}
+	return flashMessage{"danger", fmt.Sprintf(
+		"Dead letter #%d still failing after %d attempts: %s", res.ID, res.Attempts, res.Error)}
+}
+
+// afterDeadLetterAction re-renders the dead-letter panel with the outcome.
+// htmx swaps just that panel; a plain form post goes back to the page.
+func (s *server) afterDeadLetterAction(w http.ResponseWriter, r *http.Request, token string, flash flashMessage, err error) {
+	w.Header().Set("Vary", "HX-Request")
+
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			clearAuthCookie(w)
+			s.redirectToLogin(w, r)
+			return
+		}
+		flash = flashMessage{"danger", "The action failed: " + err.Error()}
+	}
+
+	includeResolved := r.URL.Query().Get("all") == "1"
+	if !isHTMX(r) {
+		target := "/consumers"
+		if includeResolved {
+			target += "?all=1"
+		}
+		http.Redirect(w, r, target, http.StatusSeeOther)
+		return
+	}
+	s.renderDeadLetterPanel(w, r, token, includeResolved, flash)
+}
+
+// ---- htmx fragments ----
+
+// overviewFragment re-renders the mode banner and the totals cards.
+func (s *server) overviewFragment(w http.ResponseWriter, r *http.Request, token string) {
+	data := map[string]any{"Poll": livePoll}
+	cat, err := s.backend.Catalog(r.Context(), token)
+	if msg, handled := s.fragmentBackendErr(w, r, err); handled {
+		return
+	} else if msg != "" {
+		data["Error"] = msg
+	} else {
+		liveOverview(data, cat)
+	}
+	s.render(w, "overview", "overview-live", data)
+}
+
+// checkpointsFragment re-renders the consumer checkpoints table body.
+//
+// Fragment=true lets the template add its out-of-band riders (the head-of-log
+// and pending-dead-letters figures that live outside the table): inside the
+// page's own <table> those elements would be invalid markup.
+func (s *server) checkpointsFragment(w http.ResponseWriter, r *http.Request, token string) {
+	data := map[string]any{"Poll": livePoll, "Fragment": true}
+	cat, err := s.backend.Catalog(r.Context(), token)
+	if msg, handled := s.fragmentBackendErr(w, r, err); handled {
+		return
+	} else if msg != "" {
+		data["Error"] = msg
+	} else {
+		checkpoints(data, cat)
+	}
+	s.render(w, "consumers", "checkpoints-body", data)
+}
+
+// deadLettersFragment re-renders the dead-letter panel (the Refresh button).
+func (s *server) deadLettersFragment(w http.ResponseWriter, r *http.Request, token string) {
+	s.renderDeadLetterPanel(w, r, token, r.URL.Query().Get("all") == "1", flashMessage{})
+}
+
+func (s *server) renderDeadLetterPanel(w http.ResponseWriter, r *http.Request, token string, includeResolved bool, flash flashMessage) {
+	data := map[string]any{"IncludeResolved": includeResolved, "Flash": flash}
+	letters, err := s.backend.DeadLetters(r.Context(), token, includeResolved)
+	if msg, handled := s.fragmentBackendErr(w, r, err); handled {
+		return
+	} else if msg != "" {
+		data["Error"] = msg
+	} else {
+		data["DeadLetters"] = letters
+	}
+	s.render(w, "consumers", "deadletters-panel", data)
+}
+
+// fragmentBackendErr adjudicates a backend failure for a fragment response.
+//
+// An expired session is answered here and reported as handled: a fragment
+// must never carry a whole sign-in page into a table body. Any other failure
+// comes back as a message to render INSIDE the fragment — which keeps its own
+// polling attributes, so the panel heals itself once the backend answers
+// again. err == nil yields ("", false): render normally.
+func (s *server) fragmentBackendErr(w http.ResponseWriter, r *http.Request, err error) (msg string, handled bool) {
+	switch {
+	case err == nil:
+		return "", false
+	case errors.Is(err, ErrUnauthorized):
+		clearAuthCookie(w)
+		s.redirectToLogin(w, r)
+		return "", true
+	default:
+		return "Could not reach the pocketcqrs backend: " + err.Error(), false
+	}
 }
 
 func (s *server) renderPlaceholder(w http.ResponseWriter, title, active, heading, text, variant string) {

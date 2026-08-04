@@ -21,25 +21,32 @@
   const cat = JSON.parse(dataEl.textContent);
   const details = document.getElementById('explorer-details');
 
-  const css = getComputedStyle(document.documentElement);
-  const tok = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
-  const colors = {
-    surface: tok('--wa-color-surface-raised', '#ffffff'),
-    lowered: tok('--wa-color-surface-lowered', '#f4f4f5'),
-    border: tok('--wa-color-surface-border', '#d4d4d8'),
-    text: tok('--wa-color-text-normal', '#27272a'),
-    quiet: tok('--wa-color-text-quiet', '#71717a'),
-    brand: tok('--wa-color-brand-fill-loud', '#4463d8'),
-    warning: tok('--wa-color-warning-fill-loud', '#d97706'),
-    neutralFill: tok('--wa-color-neutral-fill-quiet', '#e4e4e7'),
-    neutralBorder: tok('--wa-color-neutral-border-loud', '#a1a1aa'),
-    // notation colours — fixed tints, not theme tokens (see the note above)
-    eventFill: tok('--wa-color-orange-90', '#ffdfca'),
-    eventBorder: tok('--wa-color-orange-70', '#ff9266'),
-    modelFill: tok('--wa-color-green-90', '#c2f2c1'),
-    modelBorder: tok('--wa-color-green-70', '#5dc36f'),
-    onNote: tok('--wa-color-gray-05', '#101219'),
+  // Read live rather than once: the chrome colours resolve differently in
+  // light and dark, and the OS scheme can change mid-session. getComputedStyle
+  // returns a live view, but the token VALUES must be re-read after the
+  // scheme class flips — hence readColors() rather than a snapshot.
+  const readColors = () => {
+    const css = getComputedStyle(document.documentElement);
+    const tok = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+    return {
+      surface: tok('--wa-color-surface-raised', '#ffffff'),
+      lowered: tok('--wa-color-surface-lowered', '#f4f4f5'),
+      border: tok('--wa-color-surface-border', '#d4d4d8'),
+      text: tok('--wa-color-text-normal', '#27272a'),
+      quiet: tok('--wa-color-text-quiet', '#71717a'),
+      brand: tok('--wa-color-brand-fill-loud', '#4463d8'),
+      warning: tok('--wa-color-warning-fill-loud', '#d97706'),
+      neutralFill: tok('--wa-color-neutral-fill-quiet', '#e4e4e7'),
+      neutralBorder: tok('--wa-color-neutral-border-loud', '#a1a1aa'),
+      // notation colours — fixed tints, not theme tokens (see the note above)
+      eventFill: tok('--wa-color-orange-90', '#ffdfca'),
+      eventBorder: tok('--wa-color-orange-70', '#ff9266'),
+      modelFill: tok('--wa-color-green-90', '#c2f2c1'),
+      modelBorder: tok('--wa-color-green-70', '#5dc36f'),
+      onNote: tok('--wa-color-gray-05', '#101219'),
+    };
   };
+  const colors = readColors();
 
   const elements = [];
   const ids = new Set();
@@ -109,10 +116,9 @@
     });
   });
 
-  const cy = cytoscape({
-    container,
-    elements,
-    style: [
+  // Built from a colour set rather than closing over one, so the same
+  // definition can be re-applied after a colour-scheme change.
+  const buildStyle = (colors) => [
       {
         selector: 'node',
         style: {
@@ -190,9 +196,23 @@
           'target-arrow-color': colors.brand,
         },
       },
-    ],
+  ];
+
+  const cy = cytoscape({
+    container,
+    elements,
+    style: buildStyle(colors),
     layout: { name: 'breadthfirst', directed: true, spacingFactor: 1.15, padding: 24 },
     wheelSensitivity: 0.3,
+  });
+
+  // The page chrome follows the OS colour scheme through CSS; the graph
+  // cannot, because cytoscape resolves its colours once into a canvas style.
+  // layout.html fires this AFTER flipping the scheme class, so the tokens
+  // read here are the new ones. Notation colours are fixed by design and
+  // come back unchanged — only the chrome moves.
+  document.addEventListener('pcqrs:colorscheme', () => {
+    cy.style(buildStyle(readColors()));
   });
 
   cy.on('tap', 'node', (evt) => {

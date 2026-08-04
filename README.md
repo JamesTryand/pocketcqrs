@@ -18,6 +18,7 @@ Early development — see milestones in the issue worktree (`task_plan.md`). Not
 - [Getting started](docs/getting-started.md) — run it, first command, first function, hot reload
 - [JS guide](docs/js-guide.md) — directives, tiers, bindings, determinism, dry-run/dead-letter workflows
 - [Go guide](docs/go-guide.md) — deciders, projections, reactors in Go
+- [Consuming](docs/consuming.md) — deployment patterns for frontends, ops tooling and external read-model sinks (with Caddyfiles)
 - Reference: [directives](docs/reference/directives.md) · [CLI](docs/reference/cli.md) · [gateway](docs/reference/gateway.md)
 - [Domain docs](docs/domains/README.md) — convention + dogfooded [task](docs/domains/task.md), [order](docs/domains/order.md), [note](docs/domains/note.md)
 - [Domain packs](docs/packs.md) — export/import domains, versioning contract, trust model

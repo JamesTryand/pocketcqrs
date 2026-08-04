@@ -1,74 +1,108 @@
-{{define "content"}}
-<div class="wa-split wa-align-items-baseline">
-  <h1>Consumers</h1>
-  <span class="wa-caption-m">head of log: position {{.MaxPosition}}</span>
-</div>
+{{/* The checkpoints table body refreshes itself.
 
-{{/* One row per checkpointed consumer, whatever its kind: Consumer.Name() is
-     the durable checkpoint key for go-projections, js-projections, reactors
-     and effect functions alike, so behind-by resolves uniformly. It is
-     measured against the head of the log rather than the event count —
-     position is AUTOINCREMENT and conflict retries burn values. */}}
-<wa-card>
-  <h2 slot="header">Checkpoints</h2>
-  {{if .Consumers}}
-  <wa-scroller>
-    <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
-      <caption class="wa-visually-hidden">Consumers, their checkpoints and how far each is behind the head of the log</caption>
-      <thead>
-        <tr>
-          <th scope="col">Consumer</th>
-          <th scope="col">Kind</th>
-          <th scope="col">Triggers</th>
-          <th scope="col">Collections</th>
-          <th scope="col" class="wa-text-end">Checkpoint</th>
-          <th scope="col">Behind by</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Consumers}}
-        <tr>
-          <th scope="row">{{.Name}}</th>
-          {{/* reactors carry the warning hue on purpose — it matches the
-               dashed warning-coloured reactor edges in the catalog explorer,
-               so the two views name the same thing the same way */}}
-          <td><wa-tag size="s" variant="{{if eq .Kind "reactor"}}warning{{else}}neutral{{end}}">{{.Kind}}</wa-tag></td>
-          <td>
-            {{range .EventTypes}}<wa-tag size="s" appearance="outlined">{{.}}</wa-tag> {{else}}<span class="wa-caption-m">&mdash;</span>{{end}}
-          </td>
-          <td class="wa-caption-m">
-            {{range $i, $c := .Collections}}{{if $i}}, {{end}}{{$c}}{{else}}&mdash;{{end}}
-          </td>
-          <td class="wa-text-end">{{.Checkpoint}}</td>
-          <td>
-            {{if gt .Behind 0}}
-            <wa-tag size="s" variant="danger"><wa-icon name="clock" library="system"></wa-icon> {{.Behind}} to go</wa-tag>
-            {{else}}
-            <wa-tag size="s" variant="success" appearance="outlined"><wa-icon name="check" library="system"></wa-icon> caught up</wa-tag>
-            {{end}}
-          </td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </wa-scroller>
+     It carries its own hx-trigger, and the fragment that replaces it renders
+     this same {{define}} — which is what makes the loop continue: htmx 4 has
+     no "stop polling" status (2.x's 286 is gone from the 4.0.0-beta6 build),
+     so a poll ends when the swapped-in element arrives without a trigger.
+     That is also the error path: an expired session answers HX-Redirect and
+     the browser leaves; a backend outage renders a row in here and keeps the
+     trigger, so the table heals itself when the backend answers again.
+
+     Only the BODY swaps, never the card: the rows carry <wa-tag>s whose
+     notation colours are part of the event-modeling convention, and the
+     surrounding headings are static. */}}
+{{define "checkpoints-body"}}
+<tbody id="checkpoints-body" hx-get="/fragments/checkpoints" hx-trigger="{{.Poll}}" hx-swap="outerHTML">
+  {{if .Error}}
+  <tr>
+    <td colspan="6">
+      <span class="wa-caption-m stat-danger"><wa-icon name="circle-xmark" library="system" label="error"></wa-icon> {{.Error}}</span>
+    </td>
+  </tr>
   {{else}}
-  <p class="wa-caption-m">No consumers are registered &mdash; nothing is projecting or reacting to the log yet.</p>
+  {{range .Consumers}}
+  <tr>
+    <th scope="row">{{.Name}}</th>
+    {{/* reactors carry the warning hue on purpose — it matches the
+         dashed warning-coloured reactor edges in the catalog explorer,
+         so the two views name the same thing the same way */}}
+    <td><wa-tag size="s" variant="{{if eq .Kind "reactor"}}warning{{else}}neutral{{end}}">{{.Kind}}</wa-tag></td>
+    <td>
+      {{range .EventTypes}}<wa-tag size="s" appearance="outlined">{{.}}</wa-tag> {{else}}<span class="wa-caption-m">&mdash;</span>{{end}}
+    </td>
+    <td class="wa-caption-m">
+      {{range $i, $c := .Collections}}{{if $i}}, {{end}}{{$c}}{{else}}&mdash;{{end}}
+    </td>
+    <td class="wa-text-end">{{.Checkpoint}}</td>
+    <td>
+      {{if gt .Behind 0}}
+      <wa-tag size="s" variant="danger"><wa-icon name="clock" library="system"></wa-icon> {{.Behind}} to go</wa-tag>
+      {{else}}
+      <wa-tag size="s" variant="success" appearance="outlined"><wa-icon name="check" library="system"></wa-icon> caught up</wa-tag>
+      {{end}}
+    </td>
+  </tr>
+  {{else}}
+  <tr>
+    <td colspan="6"><span class="wa-caption-m">No consumers are registered &mdash; nothing is projecting or reacting to the log yet.</span></td>
+  </tr>
   {{end}}
-  <p slot="footer" class="wa-caption-s">Behind-by counts log positions between a consumer&rsquo;s checkpoint and the head, so it settles at zero once the consumer catches up. Projections block on failure; effect functions dead-letter instead.</p>
-</wa-card>
+  {{end}}
+</tbody>
+{{/* Out-of-band riders: the two live numbers that sit outside the table.
+     One poll, three updates. Only on the fragment response — inside the
+     page's own <table> these would be invalid markup, and the parser would
+     hoist them out of it. */}}
+{{if and .Fragment (not .Error)}}
+<span id="log-head" hx-swap-oob="true" class="wa-caption-m">head of log: position {{.MaxPosition}}</span>
+<span id="dl-pending" hx-swap-oob="true">
+  {{if gt .Pending 0}}<wa-tag size="s" variant="danger">{{.Pending}} pending</wa-tag>{{else}}<wa-tag size="s" variant="success" appearance="outlined">none pending</wa-tag>{{end}}
+</span>
+{{end}}
+{{end}}
 
-<wa-card>
-  <h2 slot="header">Dead letters</h2>
-  <div slot="header-actions" class="wa-cluster wa-gap-xs">
+{{/* The dead-letter panel is swapped as a whole, by an action or the refresh
+     button — never on a timer. Its rows hold <wa-details> disclosures an
+     operator opens while diagnosing a failure, and a poll would slam them
+     shut every couple of seconds. The pending count in the card header is
+     the live part (updated out-of-band by the checkpoints poll above), so a
+     newly dead-lettered delivery still announces itself. */}}
+{{define "deadletters-panel"}}
+<div id="deadletters-panel" class="wa-stack wa-gap-m">
+  <div class="wa-cluster wa-gap-xs">
     {{if .IncludeResolved}}
     <wa-button href="/consumers" appearance="outlined" size="s">Pending only</wa-button>
     {{else}}
     <wa-button href="/consumers?all=1" appearance="outlined" size="s">Include resolved</wa-button>
     {{end}}
+    <wa-button size="s" appearance="outlined"
+               hx-get="/fragments/deadletters{{if .IncludeResolved}}?all=1{{end}}"
+               hx-target="#deadletters-panel" hx-swap="outerHTML">
+      <wa-icon slot="start" name="chevron-right" library="system"></wa-icon> Refresh
+    </wa-button>
+    {{if .DeadLetters}}
+    <form method="post" action="/consumers/deadletters/retry{{if .IncludeResolved}}?all=1{{end}}"
+          hx-post="/consumers/deadletters/retry{{if .IncludeResolved}}?all=1{{end}}"
+          hx-target="#deadletters-panel" hx-swap="outerHTML"
+          hx-confirm="Re-deliver every pending dead letter through the current function code?">
+      <wa-button type="submit" size="s" variant="brand">Retry all pending</wa-button>
+    </form>
+    {{end}}
   </div>
 
-  {{if .DeadLetters}}
+  {{if .Flash.Text}}
+  <wa-callout variant="{{.Flash.Variant}}" size="s" aria-live="polite">
+    <wa-icon slot="icon" name="{{if eq .Flash.Variant "success"}}check{{else if eq .Flash.Variant "danger"}}circle-xmark{{else}}circle{{end}}" library="system"></wa-icon>
+    {{.Flash.Text}}
+  </wa-callout>
+  {{end}}
+
+  {{if .Error}}
+  <wa-callout variant="danger">
+    <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+    {{.Error}}
+  </wa-callout>
+  {{else if .DeadLetters}}
   <wa-scroller>
     <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
       <caption class="wa-visually-hidden">Dead-lettered function deliveries</caption>
@@ -81,6 +115,7 @@
           <th scope="col">Last failed</th>
           <th scope="col">Status</th>
           <th scope="col">Failure</th>
+          <th scope="col">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -108,6 +143,28 @@
               <pre class="payload"><code>{{.Event.Payload}}</code></pre>
             </wa-details>
           </td>
+          {{/* Real forms, enhanced by htmx rather than replaced by it: with
+               scripting off these still post and land back on the page. The
+               ?all= carries the current filter through the swap. */}}
+          <td>
+            {{if .Resolved}}
+            <span class="wa-caption-m">&mdash;</span>
+            {{else}}
+            <div class="wa-cluster wa-gap-2xs">
+              <form method="post" action="/consumers/deadletters/{{.ID}}/retry{{if $.IncludeResolved}}?all=1{{end}}"
+                    hx-post="/consumers/deadletters/{{.ID}}/retry{{if $.IncludeResolved}}?all=1{{end}}"
+                    hx-target="#deadletters-panel" hx-swap="outerHTML">
+                <wa-button type="submit" size="s" appearance="outlined" variant="brand">Retry</wa-button>
+              </form>
+              <form method="post" action="/consumers/deadletters/{{.ID}}/dismiss{{if $.IncludeResolved}}?all=1{{end}}"
+                    hx-post="/consumers/deadletters/{{.ID}}/dismiss{{if $.IncludeResolved}}?all=1{{end}}"
+                    hx-target="#deadletters-panel" hx-swap="outerHTML"
+                    hx-confirm="Dismiss dead letter #{{.ID}} without retrying? The event is not re-delivered.">
+                <wa-button type="submit" size="s" appearance="plain">Dismiss</wa-button>
+              </form>
+            </div>
+            {{end}}
+          </td>
         </tr>
         {{end}}
       </tbody>
@@ -118,6 +175,51 @@
     {{if .IncludeResolved}}Nothing has ever been dead-lettered.{{else}}No pending dead letters &mdash; every effect-function delivery has succeeded or been resolved.{{end}}
   </p>
   {{end}}
-  <p slot="footer" class="wa-caption-s">Failed effect-function deliveries are captured with their whole event envelope; the checkpoint still advances, so a poison message never blocks the log. Retry and dismiss run from the CLI (<code>pocketcqrs deadletter retry &lt;id|all&gt;</code>) until DASH.4 brings them here.</p>
+</div>
+{{end}}
+
+{{define "content"}}
+<div class="wa-split wa-align-items-baseline">
+  <h1>Consumers</h1>
+  <span id="log-head" class="wa-caption-m">head of log: position {{.MaxPosition}}</span>
+</div>
+
+{{/* One row per checkpointed consumer, whatever its kind: Consumer.Name() is
+     the durable checkpoint key for go-projections, js-projections, reactors
+     and effect functions alike, so behind-by resolves uniformly. It is
+     measured against the head of the log rather than the event count —
+     position is AUTOINCREMENT and conflict retries burn values. */}}
+<wa-card>
+  <h2 slot="header">Checkpoints</h2>
+  <wa-scroller>
+    <table class="wa-zebra-rows wa-hover-rows wa-tabular-nums">
+      <caption class="wa-visually-hidden">Consumers, their checkpoints and how far each is behind the head of the log</caption>
+      <thead>
+        <tr>
+          <th scope="col">Consumer</th>
+          <th scope="col">Kind</th>
+          <th scope="col">Triggers</th>
+          <th scope="col">Collections</th>
+          <th scope="col" class="wa-text-end">Checkpoint</th>
+          <th scope="col">Behind by</th>
+        </tr>
+      </thead>
+      {{template "checkpoints-body" .}}
+    </table>
+  </wa-scroller>
+  <p slot="footer" class="wa-caption-s">Live: this table refreshes itself every couple of seconds. Behind-by counts log positions between a consumer&rsquo;s checkpoint and the head, so it settles at zero once the consumer catches up. Projections block on failure; effect functions dead-letter instead.</p>
+</wa-card>
+
+<wa-card>
+  <div slot="header" class="wa-cluster wa-gap-s wa-align-items-baseline">
+    <h2>Dead letters</h2>
+    <span id="dl-pending">
+      {{if gt .Pending 0}}<wa-tag size="s" variant="danger">{{.Pending}} pending</wa-tag>{{else}}<wa-tag size="s" variant="success" appearance="outlined">none pending</wa-tag>{{end}}
+    </span>
+  </div>
+
+  {{template "deadletters-panel" .}}
+
+  <p slot="footer" class="wa-caption-s">Failed effect-function deliveries are captured with their whole event envelope; the checkpoint still advances, so a poison message never blocks the log. <strong>Retry</strong> re-delivers through the <em>current</em> function code &mdash; fix the function on the <a href="/system">System</a> page, reload it, then retry. <strong>Dismiss</strong> resolves a letter without re-delivering. The same actions are available as <code>pocketcqrs deadletter retry|dismiss</code>.</p>
 </wa-card>
 {{end}}
