@@ -627,6 +627,60 @@ func TestModeToggle(t *testing.T) {
 	}
 }
 
+// TestModeRefused: the barrier is the safety-critical control here, so a
+// value the backend rejects must be reported as a refused TOGGLE naming the
+// value — not as a generic backend error an operator could read as "the
+// system may or may not have moved".
+func TestModeRefused(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	resp, err := client.PostForm(dash.URL+"/system/mode", url.Values{"mode": {"bogus"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readBody(t, resp)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a refused mode, got %s", resp.Status)
+	}
+	// the rejected value is quoted by %q and then HTML-escaped, which is the
+	// point: it is untrusted input echoed back to the operator
+	for _, want := range []string{"The mode was not changed", "&#34;bogus&#34;", "still running"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("refusal notice missing %q", want)
+		}
+	}
+	// and the system really did not move
+	if !strings.Contains(get(t, client, dash.URL+"/system"), "Running.") {
+		t.Error("the mode changed despite the refusal")
+	}
+}
+
+// TestDeadLetterActionFailureReported: a backend that fails the action must
+// say so in the panel rather than silently swapping an unchanged table.
+func TestDeadLetterActionFailureReported(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+	backend.Close()
+
+	for _, path := range []string{"/consumers/deadletters/9/retry", "/consumers/deadletters/retry"} {
+		resp := htmxRequest(t, client, http.MethodPost, dash.URL+path)
+		body := readBody(t, resp)
+		resp.Body.Close()
+		if !strings.Contains(body, "The action failed") {
+			t.Errorf("%s: a failed action was not reported to the operator", path)
+		}
+	}
+}
+
 // TestReloadReport checks both delivery paths of the reload report: the
 // report is rendered, never redirected away.
 func TestReloadReport(t *testing.T) {

@@ -103,6 +103,12 @@
 <wa-card>
   <h2 slot="header">Mode barrier</h2>
   <div class="wa-stack wa-gap-m">
+    {{if .ModeError}}
+    <wa-callout variant="danger" aria-live="polite">
+      <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+      <strong>The mode was not changed.</strong> {{.ModeError}}
+    </wa-callout>
+    {{end}}
     <p class="wa-body-s">
       The write side is paused in <strong>maintenance</strong> so schema-bearing code can be swapped without a command landing half-way through the change. Nothing else about the system stops: reads, the query side and the operational API all keep serving.
     </p>

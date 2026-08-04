@@ -50,6 +50,12 @@ Retry semantics: a successful retry resolves the letter; a failing one
 increments the attempt count and records the error. Projections do not
 dead-letter — they block at the failing event by design.
 
+The same three actions are on the HTTP API
+([`POST /api/cqrs/deadletters/{id}/retry|dismiss`](gateway.md#operations)) and
+on the ops dashboard's Consumers page. All of them share one implementation,
+so they adjudicate a retry identically — the CLI is for an operator at a
+shell, the API for one at a browser.
+
 ## dryrun
 
 Runs candidate JS code against real history without appending events or

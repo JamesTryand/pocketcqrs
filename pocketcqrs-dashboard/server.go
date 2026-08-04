@@ -501,14 +501,44 @@ func (s *server) systemData(mode string, report *ReloadReport, reloadErr string)
 
 // setMode moves the barrier. This one is POST-then-redirect: the outcome is
 // the new page state, so a refresh must not re-submit the toggle.
+//
+// The barrier is the safety-critical control on this page, so a refused
+// toggle has to say that the TOGGLE was refused. A 4xx is the backend
+// rejecting the value itself (it validates like store.SetMode and leaves the
+// current mode untouched) — reported on the page, naming the value. Only an
+// unreachable backend falls through to the generic notice; without the
+// distinction an operator reads "Backend error" and cannot tell whether the
+// system moved.
 func (s *server) setMode(w http.ResponseWriter, r *http.Request, token string) {
 	mode := r.PostFormValue("mode")
-	if _, err := s.backend.SetMode(r.Context(), token, mode); err != nil {
-		if !s.backendOK(w, r, "System", "/system", err) {
+	_, err := s.backend.SetMode(r.Context(), token, mode)
+	if err == nil {
+		http.Redirect(w, r, "/system", http.StatusSeeOther)
+		return
+	}
+	if errors.Is(err, ErrUnauthorized) {
+		clearAuthCookie(w)
+		s.redirectToLogin(w, r)
+		return
+	}
+
+	var he *HTTPError
+	if errors.As(err, &he) && he.StatusCode < 500 {
+		current, merr := s.backend.Mode(r.Context(), token)
+		if merr != nil {
+			// the backend answered a moment ago, so this is unexpected;
+			// fall back to the generic notice rather than guess a mode
+			s.backendOK(w, r, "System", "/system", merr)
 			return
 		}
+		data := s.systemData(current, nil, "")
+		data["ModeError"] = fmt.Sprintf("The backend refused the mode %q, so the system is unchanged — it is still %s. (%s)",
+			mode, current, he.Detail)
+		w.WriteHeader(http.StatusBadRequest)
+		s.render(w, "system", "layout", data)
+		return
 	}
-	http.Redirect(w, r, "/system", http.StatusSeeOther)
+	s.backendOK(w, r, "System", "/system", err)
 }
 
 // reload hot-reloads the backend's functions directory.
