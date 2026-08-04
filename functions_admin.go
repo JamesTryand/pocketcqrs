@@ -312,8 +312,11 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
+		// "produced", not "events": the other modes report an event COUNT
+		// under that name, and one field meaning two shapes by mode is a
+		// trap for every client
 		return re.JSON(http.StatusOK, map[string]any{
-			"mode": req.Mode, "ok": true, "events": produced,
+			"mode": req.Mode, "ok": true, "produced": produced,
 			"summary": fmt.Sprintf("%q on %s/%s would produce %d event(s). Nothing was appended.",
 				req.Command, spec.Aggregate, req.StreamID, len(produced)),
 		})

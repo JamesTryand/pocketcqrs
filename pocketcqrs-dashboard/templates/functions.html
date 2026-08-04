@@ -1,0 +1,194 @@
+{{/* The editor panel: file list, source, dry-run controls and the result.
+     One {{define}} for both delivery paths — htmx swaps it after a save, a
+     delete or a dry run; without scripting the same POST re-renders the
+     whole page around it. The source in the box is always the source the
+     operator has in hand, so a refused save never costs an edit. */}}
+{{define "editor-panel"}}
+<div id="editor-panel" class="wa-grid editor-grid">
+
+  <wa-card class="file-list">
+    <h2 slot="header">Files</h2>
+    <p class="wa-caption-m"><code>{{.Dir}}</code> on the backend</p>
+    {{if .Files}}
+    <nav class="wa-stack wa-gap-2xs" aria-label="Function files">
+      {{range .Files}}
+      <a href="/functions/{{.Name}}" class="wa-cluster wa-gap-xs file-entry{{if eq .Name $.Selected}} nav-active{{end}}"
+         {{if eq .Name $.Selected}}aria-current="page"{{end}}>
+        <span class="file-name">{{.Name}}</span>
+        {{/* the kind is the loader's own verdict, not a guess from the
+             file name — and it decides which dry run applies */}}
+        {{if eq .Kind "unreadable"}}
+        <wa-tag size="s" variant="danger"><wa-icon name="circle-xmark" library="system"></wa-icon> unreadable</wa-tag>
+        {{else if eq .Kind "none"}}
+        <wa-tag size="s" appearance="outlined">no directives</wa-tag>
+        {{else}}
+        <wa-tag size="s" variant="{{if .Declaration.SchemaBearing}}warning{{else}}neutral{{end}}">{{.Kind}}</wa-tag>
+        {{end}}
+      </a>
+      {{end}}
+    </nav>
+    {{else}}
+    <p class="wa-caption-m">No function files yet.</p>
+    {{end}}
+    <p slot="footer" class="wa-caption-s">A file marked <strong>unreadable</strong> blocks every reload until it is fixed or deleted &mdash; reloads are all&#8209;or&#8209;nothing. Files marked <strong>projection</strong> or <strong>decider</strong> carry schema, so activating them needs maintenance mode.</p>
+  </wa-card>
+
+  <wa-card class="editor-pane">
+    <div slot="header" class="wa-cluster wa-gap-s wa-align-items-baseline">
+      <h2>{{if .Selected}}{{.Selected}}{{else}}New function{{end}}</h2>
+      {{with .File}}{{if .Declaration}}
+      <wa-tag size="s" variant="{{if .Declaration.SchemaBearing}}warning{{else}}neutral{{end}}">{{.Declaration.Kind}}</wa-tag>
+      {{end}}{{end}}
+    </div>
+
+    {{if .Flash.Text}}
+    <wa-callout variant="{{.Flash.Variant}}" size="s" aria-live="polite">
+      <wa-icon slot="icon" name="{{if eq .Flash.Variant "success"}}check{{else if eq .Flash.Variant "danger"}}circle-xmark{{else}}gear{{end}}" library="system"></wa-icon>
+      {{.Flash.Text}}
+    </wa-callout>
+    {{end}}
+
+    {{/* ONE form, ONE htmx action, and the pressed button says which job it
+         is (wa-button copies its name/value onto the hidden button it
+         submits with). Not formaction + per-button hx-post: wa-button
+         synthesises a real submit click, so the form's own hx-post fires
+         TOO and the second response overwrites the first — a save that
+         landed, then vanished under a dry-run panel. Caught in the browser;
+         no HTTP-level check would have seen it. */}}
+    <form method="post" action="/functions/act" class="wa-stack wa-gap-m"
+          hx-post="/functions/act" hx-target="#editor-panel" hx-swap="outerHTML">
+      <div class="wa-cluster wa-gap-s wa-align-items-end">
+        <wa-input name="name" label="File name" size="s" value="{{.Selected}}"
+                  placeholder="my_function.js" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*\.js" required
+                  hint="letters, digits, dot, dash, underscore; must end in .js"></wa-input>
+        <input type="hidden" name="mode" value="{{.DryRunMode}}">
+      </div>
+
+      {{/* A plain textarea is the source of truth for the form; CodeMirror
+           attaches to it and writes changes back on submit, so the editor
+           works with scripting off — just without highlighting. */}}
+      <label class="wa-stack wa-gap-2xs">
+        <span class="wa-caption-m">Source</span>
+        <textarea id="function-source" name="source" rows="22" spellcheck="false" wrap="off">{{.Source}}</textarea>
+      </label>
+
+      {{/* Dry-run arguments. Folding whole streams answers "does this code
+           survive real history"; naming a command answers "what would it
+           do next" — the two halves of the harness. */}}
+      <wa-details summary="Dry-run arguments (optional)">
+        <div class="wa-cluster wa-gap-s wa-align-items-end">
+          <wa-input name="streamId" label="Stream id" size="s" placeholder="t1"
+                    hint="limit a decider fold to one stream, or name the stream a command would run on"></wa-input>
+          <wa-input name="command" label="Command" size="s" placeholder="CreateTask"
+                    hint="given, the dry run reports the events this command WOULD append"></wa-input>
+          <wa-input name="payload" label="Payload (JSON)" size="s" placeholder="{&#34;title&#34;:&#34;x&#34;}"></wa-input>
+          <wa-checkbox name="diff" size="s" hint="projections only: compare the simulation with the live collection">Diff against live</wa-checkbox>
+        </div>
+      </wa-details>
+
+      <div class="wa-cluster wa-gap-s wa-align-items-center">
+        <wa-button type="submit" name="action" value="dryrun" variant="brand">
+          <wa-icon slot="start" name="eye" library="system"></wa-icon> Dry run
+        </wa-button>
+        {{/* Save is deliberately the second button, not the first: the
+             backend refuses source that does not load, and the dry run is
+             what tells you whether it will BEHAVE. */}}
+        <wa-button type="submit" name="action" value="save" appearance="outlined">
+          <wa-icon slot="start" name="check" library="system"></wa-icon> Save
+        </wa-button>
+        <wa-spinner class="htmx-indicator" aria-label="running"></wa-spinner>
+      </div>
+    </form>
+
+    {{/* Delete is its own form, and not only because a form cannot nest:
+         it needs a confirmation, and htmx reads hx-confirm from the element
+         issuing the request — which is the form, so one shared form would
+         put the prompt in front of every save too. It needs no source, just
+         the name. */}}
+    {{if .Selected}}
+    <form method="post" action="/functions/{{.Selected}}/delete" class="wa-cluster wa-gap-s wa-align-items-center delete-row"
+          hx-post="/functions/{{.Selected}}/delete" hx-target="#editor-panel" hx-swap="outerHTML"
+          hx-confirm="Delete {{.Selected}}? Whatever it registered keeps serving until the next reload drops it.">
+      <wa-button type="submit" appearance="plain" variant="danger" size="s">Delete this file</wa-button>
+      <span class="wa-caption-s">Removes the file from the backend. What it registered keeps serving until the next reload.</span>
+    </form>
+    {{end}}
+
+    <p slot="footer" class="wa-caption-s">Saving writes the file; it does <strong>not</strong> activate it. Reload on the <a href="/system">System</a> page &mdash; effect, HTTP and cron functions reload in any mode; projections and deciders need maintenance mode first. A save is refused outright if the source does not parse or compile, because an unloadable file would block every later reload.</p>
+  </wa-card>
+
+  {{with .DryRun}}
+  <wa-card class="dryrun-result">
+    <div slot="header" class="wa-cluster wa-gap-s wa-align-items-baseline">
+      <h2>Dry run</h2>
+      <wa-tag size="s" appearance="outlined">{{.Mode}}</wa-tag>
+    </div>
+    <div class="wa-stack wa-gap-m">
+      <p class="wa-body-s">{{.Summary}}</p>
+
+      {{if eq .Mode "projection"}}
+      <div class="wa-cluster wa-gap-l wa-tabular-nums">
+        <span class="wa-caption-m">events folded <strong>{{.Events}}</strong></span>
+        <span class="wa-caption-m">upserts <strong>{{.Upserts}}</strong></span>
+        <span class="wa-caption-m">deletes <strong>{{.Deletes}}</strong></span>
+        <span class="wa-caption-m">final rows <strong>{{.Rows}}</strong></span>
+      </div>
+      {{/* 0 upserts over a non-empty log is the tell that project() is not
+           returning row ops — the mistake this panel exists to catch */}}
+      {{if and (gt .Events 0) (eq .Upserts 0)}}
+      <wa-callout variant="warning" size="s">
+        <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+        It folded {{.Events}} event(s) but produced no upserts. Check that <code>project(event)</code> returns row ops &mdash; <code>{upsert: {key, fields}}</code> or <code>{delete: key}</code> &mdash; rather than plain objects, which are silently ignored.
+      </wa-callout>
+      {{end}}
+      {{end}}
+
+      {{if eq .Mode "decider"}}
+      <div class="wa-cluster wa-gap-l wa-tabular-nums">
+        <span class="wa-caption-m">aggregate <strong>{{.Aggregate}}</strong></span>
+        <span class="wa-caption-m">streams folded <strong>{{.Streams}}</strong></span>
+        <span class="wa-caption-m">events folded <strong>{{.Events}}</strong></span>
+      </div>
+      {{end}}
+
+      {{with .Detail}}
+      <div class="wa-stack wa-gap-2xs">
+        <span class="wa-caption-m">{{if eq $.DryRun.Mode "decide"}}events this command would append (nothing was appended){{else}}folded state{{end}}</span>
+        <pre class="payload"><code>{{.}}</code></pre>
+      </div>
+      {{end}}
+
+      {{range $collection, $diffs := .Diff}}
+      <div class="wa-stack wa-gap-2xs">
+        <span class="wa-caption-m">diff vs live <code>{{$collection}}</code></span>
+        {{if $diffs}}
+        <ul class="wa-caption-s">{{range $diffs}}<li>{{.}}</li>{{end}}</ul>
+        {{else}}
+        <p class="wa-caption-s">No differences: the simulation matches the live collection.</p>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+    <p slot="footer" class="wa-caption-s">Nothing here was persisted: candidates compile into a scratch runtime, and neither events nor collection rows are written. Read&#8209;modify&#8209;write projections read live state while simulating, so only absolute&#8209;recompute projections are expected to diff clean.</p>
+  </wa-card>
+  {{end}}
+</div>
+{{end}}
+
+{{define "content"}}
+<div class="wa-split wa-align-items-baseline">
+  <h1>Functions</h1>
+  <span class="wa-caption-m">edit &rarr; dry run &rarr; save &rarr; reload</span>
+</div>
+
+<wa-callout variant="neutral">
+  <wa-icon slot="icon" name="gear" library="system"></wa-icon>
+  These files are <strong>executed by the backend</strong>. Dry run before saving: it folds candidate code over real history without appending events or touching collections, and for deciders it applies the same gate a reload will.
+</wa-callout>
+
+{{template "editor-panel" .}}
+
+<script src="/assets/vendor/codemirror/codemirror.js"></script>
+<script src="/assets/vendor/codemirror/mode/javascript/javascript.js"></script>
+<script src="/assets/editor.js" defer></script>
+{{end}}

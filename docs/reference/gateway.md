@@ -166,6 +166,10 @@ check:
 
 Every mode answers `200` with `ok`, a `summary` sentence and its mode-specific
 fields; a candidate that fails to load or fold is a `400` carrying the error.
+`decider` and `projection` report `events` as the **count** of history they
+folded; `decide` reports the events it would append under **`produced`** — a
+separate field, because one name meaning two shapes by mode is a trap for
+every client.
 The `diff` caveat from the CLI applies here too: read-modify-write projections
 read live state during simulation, so only absolute-recompute projections are
 expected to come back clean.

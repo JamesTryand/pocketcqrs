@@ -264,6 +264,176 @@ func (c *BackendClient) DismissDeadLetter(ctx context.Context, token string, id 
 	return c.do(ctx, http.MethodPost, path, token, nil, nil)
 }
 
+// FunctionFiles lists the backend's functions directory.
+func (c *BackendClient) FunctionFiles(ctx context.Context, token string) ([]FunctionFile, string, error) {
+	var out struct {
+		Dir   string         `json:"dir"`
+		Files []FunctionFile `json:"files"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/cqrs/admin/functions", token, nil, &out); err != nil {
+		return nil, "", err
+	}
+	return out.Files, out.Dir, nil
+}
+
+// FunctionSource reads one function file.
+func (c *BackendClient) FunctionSource(ctx context.Context, token, name string) (*FunctionFile, error) {
+	var out FunctionFile
+	if err := c.do(ctx, http.MethodGet, "/api/cqrs/admin/functions/"+url.PathEscape(name), token, nil, &out); err != nil {
+		return nil, err
+	}
+	out.Name = name
+	return &out, nil
+}
+
+// SaveFunction writes a function file. The backend refuses source that does
+// not load, so a 400 here carries the parse or compile error.
+func (c *BackendClient) SaveFunction(ctx context.Context, token, name, source string) (*SaveResult, error) {
+	var out SaveResult
+	err := c.do(ctx, http.MethodPut, "/api/cqrs/admin/functions/"+url.PathEscape(name), token,
+		map[string]string{"source": source}, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteFunction removes a function file. Whatever it registered keeps
+// serving until the next reload drops it.
+func (c *BackendClient) DeleteFunction(ctx context.Context, token, name string) (*SaveResult, error) {
+	var out SaveResult
+	err := c.do(ctx, http.MethodDelete, "/api/cqrs/admin/functions/"+url.PathEscape(name), token, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DryRun runs candidate source against real history without persisting
+// anything (POST /api/cqrs/admin/dryrun).
+func (c *BackendClient) DryRun(ctx context.Context, token string, req DryRunRequest) (*DryRunResult, error) {
+	var out DryRunResult
+	if err := c.do(ctx, http.MethodPost, "/api/cqrs/admin/dryrun", token, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ---- the function-file API contract ----
+
+// Declaration is what a function file's directives declare, as the backend's
+// loader reads them.
+type Declaration struct {
+	Kind        string   `json:"kind"` // effect | projection | decider | none
+	EventTypes  []string `json:"eventTypes,omitempty"`
+	HTTP        bool     `json:"http,omitempty"`
+	Cron        string   `json:"cron,omitempty"`
+	Projection  string   `json:"projection,omitempty"`
+	Collections []string `json:"collections,omitempty"`
+	Aggregate   string   `json:"aggregate,omitempty"`
+	Handles     []string `json:"handles,omitempty"`
+	// SchemaBearing reports whether activating the file needs maintenance
+	// mode — projection schemas and deciders move only behind the barrier.
+	SchemaBearing bool `json:"schemaBearing"`
+}
+
+// DryRunMode is the check to run for a file of this kind. The mode is chosen
+// from the declaration rather than guessed by the backend, so the page can
+// name the check it is about to run.
+func (d *Declaration) DryRunMode() string {
+	if d == nil {
+		return "compile"
+	}
+	switch d.Kind {
+	case "decider":
+		return "decider"
+	case "projection":
+		return "projection"
+	default:
+		return "compile"
+	}
+}
+
+// FunctionFile is one entry of the function listing (Source is set only when
+// a single file is read).
+type FunctionFile struct {
+	Name        string       `json:"name"`
+	Size        int64        `json:"size"`
+	Modified    string       `json:"modified"`
+	Source      string       `json:"source,omitempty"`
+	Declaration *Declaration `json:"declaration,omitempty"`
+	Error       string       `json:"error,omitempty"`
+}
+
+// Kind reports the file's declared kind, or "unreadable" when it does not
+// parse — a file that blocks every reload until it is fixed or removed.
+func (f FunctionFile) Kind() string {
+	if f.Declaration == nil {
+		return "unreadable"
+	}
+	return f.Declaration.Kind
+}
+
+// SaveResult is the answer to a write or delete. Active is always false:
+// saving is not activating.
+type SaveResult struct {
+	Name        string       `json:"name"`
+	Declaration *Declaration `json:"declaration,omitempty"`
+	Active      bool         `json:"active"`
+	Deleted     bool         `json:"deleted,omitempty"`
+	Hint        string       `json:"hint"`
+}
+
+// DryRunRequest is the body of POST /api/cqrs/admin/dryrun.
+type DryRunRequest struct {
+	Name     string          `json:"name"`
+	Source   string          `json:"source"`
+	Mode     string          `json:"mode"`
+	StreamID string          `json:"streamId,omitempty"`
+	Command  string          `json:"command,omitempty"`
+	Payload  json.RawMessage `json:"payload,omitempty"`
+	Diff     bool            `json:"diff,omitempty"`
+}
+
+// DryRunResult is what a dry run reports. Fields not relevant to the mode
+// are absent.
+type DryRunResult struct {
+	Mode        string       `json:"mode"`
+	OK          bool         `json:"ok"`
+	Summary     string       `json:"summary"`
+	Declaration *Declaration `json:"declaration,omitempty"`
+	Aggregate   string       `json:"aggregate,omitempty"`
+	Streams     int          `json:"streams,omitempty"`
+	// Events is how much history was folded (decider/projection modes).
+	Events int `json:"events,omitempty"`
+	// Produced is what a command WOULD append (decide mode) — a separate
+	// field from Events, which is a count.
+	Produced    json.RawMessage     `json:"produced,omitempty"`
+	Name        string              `json:"name,omitempty"`
+	Upserts     int                 `json:"upserts,omitempty"`
+	Deletes     int                 `json:"deletes,omitempty"`
+	Rows        int                 `json:"rows,omitempty"`
+	Collections int                 `json:"collections,omitempty"`
+	State       any                 `json:"state,omitempty"`
+	Diff        map[string][]string `json:"diff,omitempty"`
+}
+
+// Detail renders the mode-specific part of a dry-run result for display:
+// the events a command would produce, or the folded state.
+func (r DryRunResult) Detail() string {
+	if len(r.Produced) > 0 {
+		return indentJSON(r.Produced)
+	}
+	if r.State != nil {
+		raw, err := json.MarshalIndent(r.State, "", "  ")
+		if err != nil {
+			return ""
+		}
+		return string(raw)
+	}
+	return ""
+}
+
 // ---- the public catalog JSON contract (mirror of the API document) ----
 
 type Catalog struct {

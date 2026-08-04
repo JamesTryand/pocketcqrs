@@ -28,7 +28,7 @@ const defaultPageSize = 50
 // own), so they need no separate entry here.
 var pages = []string{
 	"login", "overview", "placeholder",
-	"aggregates", "streams", "stream", "events", "consumers", "system",
+	"aggregates", "streams", "stream", "events", "consumers", "system", "functions",
 }
 
 // livePoll is the hx-trigger interval of every self-refreshing panel, held
@@ -87,6 +87,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /events", s.requireAuth(s.events))
 	mux.HandleFunc("GET /consumers", s.requireAuth(s.consumers))
 	mux.HandleFunc("GET /system", s.requireAuth(s.system))
+	mux.HandleFunc("GET /functions", s.requireAuth(s.functions))
+	mux.HandleFunc("GET /functions/{name}", s.requireAuth(s.functions))
+	mux.HandleFunc("POST /functions/act", s.requireAuth(s.functionAction))
+	mux.HandleFunc("POST /functions/{name}/delete", s.requireAuth(s.deleteFunction))
 
 	// actions
 	mux.HandleFunc("POST /system/mode", s.requireAuth(s.setMode))
@@ -121,6 +125,7 @@ func navItems(active string) []navItem {
 		{Label: "Aggregates", Href: "/aggregates", Icon: "circle"},
 		{Label: "Events", Href: "/events", Icon: "clock"},
 		{Label: "Consumers", Href: "/consumers", Icon: "eye"},
+		{Label: "Functions", Href: "/functions", Icon: "copy"},
 		{Label: "System", Href: "/system", Icon: "gear"},
 	}
 	for i := range items {
@@ -577,6 +582,199 @@ func (s *server) reload(w http.ResponseWriter, r *http.Request, token string) {
 		return
 	}
 	s.render(w, "system", "layout", data)
+}
+
+// ---- functions: the editor ----
+
+// functions is the editor page: the file list, and the selected file's
+// source. /functions/{name} selects one; /functions alone shows the list
+// with a new-file form, so both are ordinary shareable URLs.
+func (s *server) functions(w http.ResponseWriter, r *http.Request, token string) {
+	name := r.PathValue("name")
+
+	files, dir, err := s.backend.FunctionFiles(r.Context(), token)
+	if !s.backendOK(w, r, "Functions", "/functions", err) {
+		return
+	}
+
+	data := s.base("Functions", "/functions")
+	data["CodeMirror"] = true // the editor stylesheet, loaded only on this page
+	data["Files"] = files
+	data["Dir"] = dir
+	data["Selected"] = name
+	data["Flash"] = flashMessage{}
+
+	if name != "" {
+		file, err := s.backend.FunctionSource(r.Context(), token, name)
+		if !s.backendOK(w, r, "Functions", "/functions", err) {
+			return
+		}
+		data["File"] = file
+		data["Source"] = file.Source
+		data["DryRunMode"] = file.Declaration.DryRunMode()
+	}
+	s.render(w, "functions", "layout", data)
+}
+
+// functionAction handles the editor form. Which job to do comes from the
+// pressed button rather than from the URL, so the form has exactly one
+// action and one htmx request: a Web Awesome submit button synthesises a
+// real submit click, so per-button hx-post attributes fire the FORM's
+// request as well, and the loser's response lands second and wins the swap.
+func (s *server) functionAction(w http.ResponseWriter, r *http.Request, token string) {
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	if name == "" {
+		name = "new.js"
+	}
+	if r.PostFormValue("action") == "save" {
+		s.saveFunction(w, r, token, name)
+		return
+	}
+	s.dryRunFunction(w, r, token, name)
+}
+
+// saveFunction writes the edited source. The backend refuses source that
+// does not load — a file it cannot parse would abort every later reload —
+// so a refusal comes back as the editor's error message with the source
+// still in the box, never as a lost edit.
+func (s *server) saveFunction(w http.ResponseWriter, r *http.Request, token, name string) {
+	source := r.PostFormValue("source")
+
+	res, err := s.backend.SaveFunction(r.Context(), token, name, source)
+	flash := flashMessage{}
+	switch {
+	case err == nil:
+		flash = flashMessage{"success", res.Hint}
+	case errors.Is(err, ErrUnauthorized):
+		clearAuthCookie(w)
+		s.redirectToLogin(w, r)
+		return
+	default:
+		flash = flashMessage{"danger", "Not saved — " + backendDetail(err)}
+	}
+	s.renderEditor(w, r, token, name, source, flash, nil)
+}
+
+// deleteFunction removes a file. What it registered keeps serving until a
+// reload drops it, which is what the hint says.
+func (s *server) deleteFunction(w http.ResponseWriter, r *http.Request, token string) {
+	name := r.PathValue("name")
+	res, err := s.backend.DeleteFunction(r.Context(), token, name)
+	if errors.Is(err, ErrUnauthorized) {
+		clearAuthCookie(w)
+		s.redirectToLogin(w, r)
+		return
+	}
+	if err != nil {
+		s.renderEditor(w, r, token, name, r.PostFormValue("source"),
+			flashMessage{"danger", "Not deleted — " + backendDetail(err)}, nil)
+		return
+	}
+	// the file is gone, so there is nothing to select: back to the list,
+	// carrying the hint about what is still serving
+	s.renderEditor(w, r, token, "", "", flashMessage{"warning", res.Hint}, nil)
+}
+
+// dryRunFunction runs the candidate source in the editor against real
+// history — the check to make before saving, and the reason the editor
+// exists rather than an scp and a restart.
+func (s *server) dryRunFunction(w http.ResponseWriter, r *http.Request, token, name string) {
+	source := r.PostFormValue("source")
+	req := DryRunRequest{
+		Name:     name,
+		Source:   source,
+		Mode:     r.PostFormValue("mode"),
+		StreamID: strings.TrimSpace(r.PostFormValue("streamId")),
+		Command:  strings.TrimSpace(r.PostFormValue("command")),
+		Diff:     r.PostFormValue("diff") == "on",
+	}
+	if p := strings.TrimSpace(r.PostFormValue("payload")); p != "" && json.Valid([]byte(p)) {
+		req.Payload = json.RawMessage(p)
+	}
+	// a command turns "fold the history" into "what would this command do"
+	if req.Mode == "decider" && req.Command != "" {
+		req.Mode = "decide"
+	}
+
+	res, err := s.backend.DryRun(r.Context(), token, req)
+	flash := flashMessage{}
+	switch {
+	case err == nil:
+		flash = flashMessage{"success", res.Summary}
+	case errors.Is(err, ErrUnauthorized):
+		clearAuthCookie(w)
+		s.redirectToLogin(w, r)
+		return
+	default:
+		// a candidate the backend refuses is the dry run WORKING: report it
+		// as a finding about the code, not as a dashboard failure
+		flash = flashMessage{"danger", backendDetail(err)}
+	}
+	s.renderEditor(w, r, token, name, source, flash, res)
+}
+
+// renderEditor re-renders the editor with the source the operator has in
+// hand, whatever the outcome. htmx swaps the editor panel; without JS the
+// whole page comes back the same way.
+func (s *server) renderEditor(w http.ResponseWriter, r *http.Request, token, name, source string, flash flashMessage, dryRun *DryRunResult) {
+	w.Header().Set("Vary", "HX-Request")
+
+	files, dir, err := s.backend.FunctionFiles(r.Context(), token)
+	if err != nil {
+		if msg, handled := s.fragmentBackendErr(w, r, err); handled {
+			return
+		} else if msg != "" {
+			flash = flashMessage{"danger", msg}
+		}
+	}
+
+	data := s.base("Functions", "/functions")
+	data["CodeMirror"] = true
+	data["Files"] = files
+	data["Dir"] = dir
+	data["Selected"] = name
+	data["Source"] = source
+	data["Flash"] = flash
+	data["DryRun"] = dryRun
+	data["DryRunMode"] = "compile"
+
+	for _, f := range files {
+		if f.Name == name {
+			data["File"] = f
+			data["DryRunMode"] = f.Declaration.DryRunMode()
+			break
+		}
+	}
+	if isHTMX(r) {
+		s.render(w, "functions", "editor-panel", data)
+		return
+	}
+	s.render(w, "functions", "layout", data)
+}
+
+// backendDetail unwraps an HTTPError to the backend's own message — for the
+// function API that message IS the result (the parse error, the failed
+// fold), so burying it under a status code would throw away the answer.
+func backendDetail(err error) string {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		var body struct {
+			Message string `json:"message"`
+			Data    struct {
+				Message string `json:"message"`
+			} `json:"data"`
+		}
+		if json.Unmarshal([]byte(he.Detail), &body) == nil {
+			if body.Message != "" {
+				return body.Message
+			}
+			if body.Data.Message != "" {
+				return body.Data.Message
+			}
+		}
+		return he.Detail
+	}
+	return err.Error()
 }
 
 // ---- dead-letter actions ----

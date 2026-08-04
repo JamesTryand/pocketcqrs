@@ -212,6 +212,102 @@ func fakeBackend(t *testing.T) *httptest.Server {
 		json.NewEncoder(w).Encode(map[string]any{"id": r.PathValue("id"), "resolved": true})
 	}))
 
+	// ---- DASH.5: function files and the dry run ----
+	sources := map[string]string{
+		"task_audit.js": "//@trigger event TaskCreated\nconsole.log('audit');\n",
+		"notes.js":      "//@trigger projection notes on NoteCreated\n//@schema notes text:text\n//@key text\nfunction project(e) { return []; }\n",
+	}
+	declOf := func(name string) map[string]any {
+		if name == "notes.js" {
+			return map[string]any{"kind": "projection", "projection": "notes",
+				"collections": []string{"notes"}, "schemaBearing": true}
+		}
+		return map[string]any{"kind": "effect", "eventTypes": []string{"TaskCreated"}, "schemaBearing": false}
+	}
+	mux.HandleFunc("GET /api/cqrs/admin/functions", authed(func(w http.ResponseWriter, r *http.Request) {
+		files := []map[string]any{}
+		for _, name := range []string{"notes.js", "task_audit.js"} {
+			if _, ok := sources[name]; !ok {
+				continue
+			}
+			files = append(files, map[string]any{
+				"name": name, "size": len(sources[name]),
+				"modified": "2026-08-04 09:00:00.000Z", "declaration": declOf(name),
+			})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"dir": "pb_functions", "files": files})
+	}))
+	mux.HandleFunc("GET /api/cqrs/admin/functions/{name}", authed(func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		src, ok := sources[name]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"no such function file"}`))
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"name": name, "source": src, "declaration": declOf(name)})
+	}))
+	mux.HandleFunc("PUT /api/cqrs/admin/functions/{name}", authed(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Source string `json:"source"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		// the real backend refuses source it cannot load
+		if strings.Contains(body.Source, "SYNTAX ERROR") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"message":"functions: compile bad.js: SyntaxError: unexpected token"}`))
+			return
+		}
+		name := r.PathValue("name")
+		sources[name] = body.Source
+		json.NewEncoder(w).Encode(map[string]any{
+			"name": name, "declaration": declOf(name), "active": false,
+			"hint": "Saved, not live. Reload to activate it; effect, HTTP and cron functions reload in any mode.",
+		})
+	}))
+	mux.HandleFunc("DELETE /api/cqrs/admin/functions/{name}", authed(func(w http.ResponseWriter, r *http.Request) {
+		delete(sources, r.PathValue("name"))
+		json.NewEncoder(w).Encode(map[string]any{
+			"name": r.PathValue("name"), "deleted": true,
+			"hint": "The file is gone, but whatever it registered is still serving until the next reload drops it.",
+		})
+	}))
+	mux.HandleFunc("POST /api/cqrs/admin/dryrun", authed(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mode, _ := req["mode"].(string)
+		src, _ := req["source"].(string)
+		if strings.Contains(src, "THROWS") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"message":"validation: decider note does not define decide"}`))
+			return
+		}
+		switch mode {
+		case "projection":
+			// a projection returning no row ops: folded events, zero upserts
+			upserts := 4
+			if strings.Contains(src, "return []") {
+				upserts = 0
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"mode": mode, "ok": true, "name": "notes", "events": 6,
+				"upserts": upserts, "deletes": 0, "rows": upserts, "collections": 1,
+				"summary": "Simulated \"notes\" over 6 event(s) in memory.",
+			})
+		case "decide":
+			json.NewEncoder(w).Encode(map[string]any{
+				"mode": mode, "ok": true,
+				"produced": []map[string]any{{"type": "NoteCreated", "data": map[string]any{"text": "hi"}}},
+				"summary":  "\"CreateNote\" on note/n1 would produce 1 event(s). Nothing was appended.",
+			})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{
+				"mode": mode, "ok": true, "declaration": declOf("task_audit.js"),
+				"summary": "Parses and compiles.",
+			})
+		}
+	}))
+
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -541,14 +637,19 @@ func TestVendoredAssetsServed(t *testing.T) {
 	}
 }
 
-// TestVendoredWebAwesomeHasNoBareImports guards the self-contained
-// frontend: the npm `dist/` build of Web Awesome contains bare module
-// specifiers ("@shoelace-style/animations", "lit", …) that browsers cannot
-// resolve — only the `dist-cdn/` build is importable directly. Scan every
-// embedded webawesome JS file so a wrong-tree vendor fails loudly.
-func TestVendoredWebAwesomeHasNoBareImports(t *testing.T) {
+// TestVendoredAssetsHaveNoBareImports guards the self-contained frontend:
+// the npm `dist/` build of Web Awesome contains bare module specifiers
+// ("@shoelace-style/animations", "lit", …) that browsers cannot resolve —
+// only the `dist-cdn/` build is importable directly. DASH.2 shipped the
+// wrong tree and NO component ever defined, silently.
+//
+// The scan covers every embedded JS tree, not just webawesome/: the same
+// mistake is available to anything else vendored later (DASH.5 added
+// CodeMirror), and the guard is only worth having if it catches the next
+// one too.
+func TestVendoredAssetsHaveNoBareImports(t *testing.T) {
 	bare := regexp.MustCompile(`(?:from\s+["']|import\s*\(\s*["']|import\s+["'])(?:@|lit)`)
-	err := fs.WalkDir(assetsFS, "assets/webawesome", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(assetsFS, "assets", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -560,7 +661,7 @@ func TestVendoredWebAwesomeHasNoBareImports(t *testing.T) {
 			return err
 		}
 		if m := bare.Find(raw); m != nil {
-			t.Errorf("%s: bare module specifier near %q — vendor from dist-cdn/, not dist/", path, m)
+			t.Errorf("%s: bare module specifier near %q — a browser cannot resolve it; vendor a build with relative imports (for Web Awesome that is dist-cdn/, not dist/)", path, m)
 		}
 		return nil
 	})
@@ -569,7 +670,188 @@ func TestVendoredWebAwesomeHasNoBareImports(t *testing.T) {
 	}
 }
 
+// ---- DASH.5: the function editor ----
+
+// TestFunctionEditorPage: the list classifies files the way the loader does,
+// and selecting one loads its source into the form the browser submits.
+func TestFunctionEditorPage(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	body := get(t, client, dash.URL+"/functions")
+	for _, want := range []string{
+		"task_audit.js", "notes.js",
+		`href="/functions/notes.js"`, // drill-down
+		">projection<", ">effect<",   // the loader's own verdict
+		"pb_functions",                            // where they live on the backend
+		`id="function-source"`,                    // the textarea the form submits
+		"/assets/vendor/codemirror/codemirror.js", // the enhancement over it
+		"/assets/vendor/codemirror/codemirror.css",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("functions page missing %q", want)
+		}
+	}
+
+	body = get(t, client, dash.URL+"/functions/notes.js")
+	if !strings.Contains(body, "//@trigger projection notes") {
+		t.Error("the selected file's source is not in the editor")
+	}
+	// the dry-run mode follows the file's kind, so the page can name the
+	// check it is about to run
+	if !strings.Contains(body, `name="mode" value="projection"`) {
+		t.Error("the dry-run mode does not follow the file kind")
+	}
+	if !strings.Contains(get(t, client, dash.URL+"/functions/task_audit.js"), `name="mode" value="compile"`) {
+		t.Error("an effect function should dry-run as compile")
+	}
+
+	// One action per form. A Web Awesome submit button synthesises a real
+	// submit click, so a per-button hx-post fires the FORM's request too and
+	// the second response overwrites the first — a save that landed and then
+	// vanished under a dry-run panel. Found in the browser, guarded here:
+	// which job to run comes from the pressed button's value.
+	if strings.Contains(body, "formaction=") {
+		t.Error("formaction is back on a submit button: it will fire the form's htmx request as well")
+	}
+	if n := strings.Count(body, `hx-post="/functions/act"`); n != 1 {
+		t.Errorf("the editor form should carry exactly one hx-post, found %d", n)
+	}
+	for _, want := range []string{`name="action" value="dryrun"`, `name="action" value="save"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the editor buttons must name their action: missing %q", want)
+		}
+	}
+}
+
+// TestFunctionSaveAndRefusal: a save reports that it is NOT activation, and
+// a refusal keeps the operator's source in the box rather than losing it.
+func TestFunctionSaveAndRefusal(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	good := "//@trigger event TaskCreated\nconsole.log('edited');\n"
+	resp := htmxPost(t, client, dash.URL+"/functions/act",
+		url.Values{"action": {"save"}, "source": {good}, "name": {"task_audit.js"}})
+	body := readBody(t, resp)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %s", resp.Status)
+	}
+	if strings.Contains(strings.ToLower(body), "<!doctype") {
+		t.Error("htmx save returned a page instead of the editor panel")
+	}
+	if !strings.Contains(body, "Saved, not live") {
+		t.Error("the save did not report that saving is not activating")
+	}
+
+	// a refusal: the backend rejects source it cannot load
+	bad := "//@trigger event TaskCreated\nSYNTAX ERROR (((\n"
+	resp = htmxPost(t, client, dash.URL+"/functions/act",
+		url.Values{"action": {"save"}, "source": {bad}, "name": {"task_audit.js"}})
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "Not saved") || !strings.Contains(body, "SyntaxError") {
+		t.Errorf("a refused save must report the backend's reason, got: %s", body)
+	}
+	if !strings.Contains(body, "SYNTAX ERROR") {
+		t.Error("a refused save threw away the operator's source")
+	}
+}
+
+// TestFunctionDryRun: the dry run reports findings about the CODE — a
+// candidate the backend refuses is the dry run working, not a page error.
+func TestFunctionDryRun(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	// a projection that returns no row ops: folded events, zero upserts
+	resp := htmxPost(t, client, dash.URL+"/functions/act", url.Values{
+		"name": {"notes.js"}, "mode": {"projection"},
+		"source": {"//@trigger projection notes on NoteCreated\nfunction project(e) { return []; }"},
+	})
+	body := readBody(t, resp)
+	resp.Body.Close()
+	for _, want := range []string{"Dry run", "Simulated", "no upserts", "row ops"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the zero-upsert warning is missing %q", want)
+		}
+	}
+
+	// naming a command turns the fold into "what would this command do"
+	resp = htmxPost(t, client, dash.URL+"/functions/act", url.Values{
+		"name": {"note.js"}, "mode": {"decider"}, "command": {"CreateNote"},
+		"streamId": {"n1"}, "source": {"//@trigger decider note\n"},
+	})
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "would produce 1 event") || !strings.Contains(body, "NoteCreated") {
+		t.Errorf("decide-mode result not rendered: %s", body)
+	}
+	if !strings.Contains(body, "nothing was appended") {
+		t.Error("the panel must say nothing was appended")
+	}
+
+	// a candidate the backend refuses is reported as a finding
+	resp = htmxPost(t, client, dash.URL+"/functions/act", url.Values{
+		"name": {"note.js"}, "mode": {"decider"},
+		"source": {"//@trigger decider note\nTHROWS\n"},
+	})
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("a refused candidate is a finding, not a dashboard error: %s", resp.Status)
+	}
+	if !strings.Contains(body, "does not define decide") {
+		t.Error("the refusal reason from the backend was not shown")
+	}
+}
+
+// TestFunctionDelete: deleting says what is still serving.
+func TestFunctionDelete(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	resp := htmxPost(t, client, dash.URL+"/functions/task_audit.js/delete", url.Values{})
+	body := readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "still serving until the next reload") {
+		t.Error("the delete did not say what is still live")
+	}
+	if strings.Contains(body, `href="/functions/task_audit.js"`) {
+		t.Error("the deleted file is still listed")
+	}
+}
+
 // ---- helpers ----
+
+// htmxPost posts a form the way htmx does.
+func htmxPost(t *testing.T, client *http.Client, target string, values url.Values) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, target, strings.NewReader(values.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
 
 func login(t *testing.T, client *http.Client, dashURL string) {
 	t.Helper()

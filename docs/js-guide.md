@@ -181,6 +181,14 @@ function transform_NoteCreated_1_to_2(data) { data.priority = data.priority || 0
    see [getting started](getting-started.md#change-code-without-restarting).
 4. Failed effect deliveries? `pocketcqrs deadletter list` → fix → `retry all`.
 
+The same workflow runs in a browser on the ops dashboard's **Functions**
+page, over the
+[function-file and dry-run API](reference/gateway.md#function-files): edit,
+dry run against real history, save, then reload from the System page. Saving
+is never activation — and a save is refused outright if the source does not
+parse or compile, because reloads are all-or-nothing and an unloadable file
+would block every later reload, including the one that fixes it.
+
 ### What hot reload swaps when
 
 | file kind | when | semantics |

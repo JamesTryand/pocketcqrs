@@ -192,3 +192,106 @@ wa-page[view='mobile'] {
   width: 100%;
   max-width: 24rem;
 }
+
+/* ---- function editor (DASH.5) ---------------------------------------- */
+
+/* Three panels: the file list stays narrow, the editor takes the rest, and
+   the dry-run result runs full width beneath both. Below the wa-page mobile
+   breakpoint they stack, which the single-column default already does. */
+.editor-grid {
+  grid-template-columns: minmax(14rem, 20rem) 1fr;
+  align-items: start;
+}
+.editor-grid > .dryrun-result {
+  grid-column: 1 / -1;
+}
+@media (max-width: 60rem) {
+  .editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.file-entry {
+  padding: var(--wa-space-2xs) var(--wa-space-xs);
+  border-radius: var(--wa-border-radius-m);
+  text-decoration: none;
+  justify-content: space-between;
+}
+.file-entry:hover {
+  background-color: var(--wa-color-surface-lowered);
+}
+.file-name {
+  font-family: var(--wa-font-family-code);
+  font-size: var(--wa-font-size-s);
+}
+
+/* CodeMirror ships a light-only stylesheet, so its surface is re-pointed at
+   the theme tokens — the editor then follows the OS colour scheme with the
+   rest of the dashboard instead of staying a white slab in dark mode. The
+   syntax hues are palette tints (fixed by role, like the event-modeling
+   notation colours) so they stay legible in both schemes. */
+.CodeMirror {
+  height: auto;
+  font-family: var(--wa-font-family-code);
+  font-size: var(--wa-font-size-s);
+  line-height: var(--wa-line-height-normal);
+  color: var(--wa-color-text-normal);
+  background-color: var(--wa-color-surface-lowered);
+  border: var(--wa-border-width-s) solid var(--wa-color-surface-border);
+  border-radius: var(--wa-border-radius-m);
+}
+.CodeMirror-gutters {
+  background-color: var(--wa-color-surface-lowered);
+  border-right: var(--wa-border-width-s) solid var(--wa-color-surface-border);
+}
+.CodeMirror-linenumber {
+  color: var(--wa-color-text-quiet);
+}
+.CodeMirror-cursor {
+  border-left-color: var(--wa-color-text-normal);
+}
+.CodeMirror-selected,
+.CodeMirror-focused .CodeMirror-selected {
+  background-color: var(--wa-color-neutral-fill-quiet);
+}
+.CodeMirror-activeline-background {
+  background-color: var(--wa-color-surface-default);
+}
+.cm-s-default .cm-keyword {
+  color: var(--wa-color-purple-50);
+}
+.cm-s-default .cm-def,
+.cm-s-default .cm-variable-2 {
+  color: var(--wa-color-blue-50);
+}
+.cm-s-default .cm-string,
+.cm-s-default .cm-string-2 {
+  color: var(--wa-color-green-40);
+}
+.cm-s-default .cm-number,
+.cm-s-default .cm-atom {
+  color: var(--wa-color-orange-40);
+}
+.cm-s-default .cm-comment {
+  color: var(--wa-color-text-quiet);
+  font-style: italic;
+}
+.cm-s-default .cm-property {
+  color: var(--wa-color-cyan-40);
+}
+.cm-s-default .cm-operator {
+  color: var(--wa-color-text-normal);
+}
+
+/* The plain textarea is what the form submits and what a scripting-off
+   visitor edits, so it gets the same treatment rather than browser default. */
+#function-source {
+  width: 100%;
+  padding: var(--wa-space-s);
+  font-family: var(--wa-font-family-code);
+  font-size: var(--wa-font-size-s);
+  color: var(--wa-color-text-normal);
+  background-color: var(--wa-color-surface-lowered);
+  border: var(--wa-border-width-s) solid var(--wa-color-surface-border);
+  border-radius: var(--wa-border-radius-m);
+}
