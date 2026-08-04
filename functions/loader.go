@@ -17,6 +17,105 @@ type LoadResult struct {
 	Deciders    []*DeciderSpec
 }
 
+// Kind names what a function file declares, using the same branch the loader
+// takes over it.
+type Kind string
+
+const (
+	// KindNone is a .js file with no //@trigger directive: the loader
+	// ignores it, and a reload cleanly drops whatever it used to declare.
+	KindNone Kind = "none"
+	// KindEffect covers event, http and cron functions — the tier that
+	// reloads in any mode, because it declares no schema.
+	KindEffect     Kind = "effect"
+	KindProjection Kind = "projection"
+	KindDecider    Kind = "decider"
+)
+
+// Declaration is what one function file's directives declare.
+//
+// It exists so that callers which need to classify a file WITHOUT loading it
+// — the admin API listing pb_functions/, the editor choosing which dry-run
+// to offer — reach the same verdict the loader will, rather than growing a
+// parallel classifier that drifts from it. LoadDir branches on this too.
+type Declaration struct {
+	Kind        Kind     `json:"kind"`
+	EventTypes  []string `json:"eventTypes,omitempty"`
+	HTTP        bool     `json:"http,omitempty"`
+	Cron        string   `json:"cron,omitempty"`
+	Projection  string   `json:"projection,omitempty"`
+	Collections []string `json:"collections,omitempty"`
+	Aggregate   string   `json:"aggregate,omitempty"`
+	Handles     []string `json:"handles,omitempty"`
+	// SchemaBearing reports whether ACTIVATING this file needs the
+	// maintenance barrier: projection schemas and deciders move only in
+	// maintenance, effect/http/cron functions move in any mode.
+	SchemaBearing bool `json:"schemaBearing"`
+}
+
+// Declares parses a function file's directives and reports what it declares.
+// name is used for error messages only.
+func Declares(name, src string) (*Declaration, error) {
+	t, err := parseTriggers(src)
+	if err != nil {
+		return nil, fmt.Errorf("functions: %s: %w", name, err)
+	}
+	return declaration(name, t)
+}
+
+func declaration(name string, t triggers) (*Declaration, error) {
+	d := &Declaration{
+		Kind:       KindNone,
+		EventTypes: t.eventTypes,
+		HTTP:       t.isHTTP,
+		Cron:       t.cron,
+		Projection: t.projection,
+		Aggregate:  t.decider,
+		Handles:    t.handles,
+	}
+	if t.empty() {
+		return d, nil
+	}
+
+	// The single-purpose check counts event/http but NOT cron, exactly as
+	// the loader always has. A file declaring both a cron job and a
+	// projection is therefore still tolerated, with the projection winning
+	// and the cron trigger silently dropped — a latent quirk, left as it is
+	// rather than turned into a boot failure by a classification change.
+	kinds := 0
+	if len(t.eventTypes) > 0 || t.isHTTP {
+		kinds++
+	}
+	if t.projection != "" {
+		kinds++
+	}
+	if t.decider != "" {
+		kinds++
+	}
+	if kinds > 1 {
+		return nil, fmt.Errorf("functions: %s: projection and decider files must be single-purpose", name)
+	}
+
+	// Kind mirrors the branch LoadDir takes: projection and decider files
+	// are handled by name, everything else falls to the effect tier.
+	switch {
+	case t.projection != "":
+		d.Kind = KindProjection
+	case t.decider != "":
+		d.Kind = KindDecider
+	default:
+		d.Kind = KindEffect
+	}
+
+	for _, rs := range t.schemas {
+		if s, err := parseSchemaDirective(rs.raw, rs.key); err == nil {
+			d.Collections = append(d.Collections, s.Collection)
+		}
+	}
+	d.SchemaBearing = d.Kind == KindProjection || d.Kind == KindDecider
+	return d, nil
+}
+
 // LoadDir loads functions from dir (PocketBase pb_hooks precedent).
 //
 // Files ending in .js declare their triggers via directives in the first
@@ -66,23 +165,15 @@ func LoadDir(rt *GojaRuntime, app core.App, dir string) (*LoadResult, error) {
 			return nil, fmt.Errorf("functions: %s: %w", entry.Name(), err)
 		}
 
-		if t.empty() {
+		// classify exactly as Declares does — the admin API and the editor
+		// branch on the same verdict
+		d, err := declaration(entry.Name(), t)
+		if err != nil {
+			return nil, err
+		}
+		if d.Kind == KindNone {
 			rt.logger("function file has no //@trigger directive, ignored", "file", path)
 			continue
-		}
-
-		kinds := 0
-		if len(t.eventTypes) > 0 || t.isHTTP {
-			kinds++
-		}
-		if t.projection != "" {
-			kinds++
-		}
-		if t.decider != "" {
-			kinds++
-		}
-		if kinds > 1 {
-			return nil, fmt.Errorf("functions: %s: projection and decider files must be single-purpose", entry.Name())
 		}
 
 		switch {

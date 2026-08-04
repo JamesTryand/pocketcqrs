@@ -85,6 +85,91 @@ previous code keeps serving.
 (`schemaTier` is `"skipped: not in maintenance"` when running; the
 `*Removed`/`*Refused` fields appear only when non-empty.)
 
+### Function files
+
+```
+GET    /api/cqrs/admin/functions           list the functions directory
+GET    /api/cqrs/admin/functions/{name}    read one file's source
+PUT    /api/cqrs/admin/functions/{name}    write it   body: {"source": "..."}
+DELETE /api/cqrs/admin/functions/{name}    remove it
+```
+
+**Auth**: superuser token required (`401` otherwise).
+
+**Trust model — stated plainly**: these routes write code that the server
+executes in-process (goja). That is deliberate and it is not a new exposure:
+functions are trusted, owner-authored code by design, `pack import` already
+writes the same files, and a superuser can already reload them. Untrusted
+function code remains the open question a wasm runtime would answer. Treat
+anything holding a superuser token as an administrative surface.
+
+`{name}` must be a single `.js` file name — letters, digits, dot, dash and
+underscore, starting with a letter or digit. Anything else is a `400`:
+separators, `..`, absolute paths and Windows device names (`CON.js`) are all
+refused, and the resolved path is re-checked to be a direct child of the
+functions directory.
+
+The listing reports what each file declares, as the loader reads it:
+
+```json
+{
+  "dir": "pb_functions",
+  "files": [
+    {"name": "task_audit.js", "size": 412, "modified": "2026-08-04 09:00:00.000Z",
+     "declaration": {"kind": "effect", "eventTypes": ["TaskCreated"], "schemaBearing": false}},
+    {"name": "notes.js", "size": 690, "modified": "2026-08-04 09:01:00.000Z",
+     "declaration": {"kind": "projection", "projection": "notes",
+                     "collections": ["notes"], "schemaBearing": true}}
+  ]
+}
+```
+
+`kind` is `effect` (event/http/cron), `projection`, `decider`, or `none` for a
+file with no directives — which the loader ignores, and a reload drops.
+`schemaBearing` is what decides whether activation needs the maintenance
+barrier. A file that does not parse is listed **with its `error`** rather than
+omitted: it is the file that blocks every reload, so it is exactly the one
+worth finding.
+
+**A write is refused unless the source loads** (`400` with the parse or
+compile error). Reloads are all-or-nothing, so an unloadable file in the
+directory would abort every later reload — including the one that fixes it.
+
+**Saving is not activating.** `PUT` and `DELETE` answer with
+`"active": false` and a hint: nothing is live until
+`POST /api/cqrs/admin/reload`, and a schema-bearing file needs maintenance
+mode first. A deleted file keeps serving until that reload drops it.
+
+### Dry run
+
+```
+POST /api/cqrs/admin/dryrun
+body: {"name": "note.js", "source": "...", "mode": "decider",
+       "streamId": "n1", "command": "CreateNote", "payload": {}, "diff": false}
+```
+
+Runs candidate source against real history **without appending events or
+touching collections** — the HTTP face of the [`dryrun` CLI](cli.md#dryrun),
+and the check to run before saving. The candidate is compiled into a scratch
+runtime, never the live one.
+
+`mode` is required and explicit — the caller knows the file's kind from the
+listing, and a server-side guess would fail by silently running the wrong
+check:
+
+| mode | what it does |
+| --- | --- |
+| `compile` | parses and compiles only — the whole check for effect/http/cron functions |
+| `decider` | applies the same gate a reload does — contract probe plus `//@handles` coverage — then folds existing streams (`streamId` limits it to one, and returns its final state). Passing means a reload would accept the decider, which folding alone would not tell you for an aggregate with no history yet |
+| `decide` | reports the events a command **would** produce on a real stream; needs `streamId` and `command` |
+| `projection` | simulates the projection over the log in memory; `diff: true` also compares against the live collections |
+
+Every mode answers `200` with `ok`, a `summary` sentence and its mode-specific
+fields; a candidate that fails to load or fold is a `400` carrying the error.
+The `diff` caveat from the CLI applies here too: read-modify-write projections
+read live state during simulation, so only absolute-recompute projections are
+expected to come back clean.
+
 ### Catalog
 
 ```

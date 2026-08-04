@@ -13,20 +13,39 @@ import (
 	"github.com/JamesTryand/pocketcqrs/events"
 )
 
+// LoadDeciderSource loads a JS decider from source held in memory — the
+// editor's candidate code, which has not been written to disk (and may never
+// be, if the dry-run says it should not be).
+func LoadDeciderSource(rt *GojaRuntime, name, src string) (*DeciderSpec, error) {
+	t, err := parseTriggers(src)
+	if err != nil {
+		return nil, fmt.Errorf("functions: %s: %w", name, err)
+	}
+	if t.decider == "" {
+		return nil, fmt.Errorf("functions: %s: missing //@trigger decider directive", name)
+	}
+	return buildDeciderSpec(rt, name, src, t)
+}
+
+// LoadProjectionSource loads a JS projection from source held in memory.
+func LoadProjectionSource(rt *GojaRuntime, app core.App, name, src string) (*ProjectionSpec, error) {
+	t, err := parseTriggers(src)
+	if err != nil {
+		return nil, fmt.Errorf("functions: %s: %w", name, err)
+	}
+	if t.projection == "" {
+		return nil, fmt.Errorf("functions: %s: missing //@trigger projection directive", name)
+	}
+	return buildProjectionSpec(rt, app, name, src, t)
+}
+
 // LoadDeciderFile loads a single JS decider file (for the dryrun CLI).
 func LoadDeciderFile(rt *GojaRuntime, path string) (*DeciderSpec, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	t, err := parseTriggers(string(raw))
-	if err != nil {
-		return nil, fmt.Errorf("functions: %s: %w", filepath.Base(path), err)
-	}
-	if t.decider == "" {
-		return nil, fmt.Errorf("functions: %s: missing //@trigger decider directive", filepath.Base(path))
-	}
-	return buildDeciderSpec(rt, filepath.Base(path), string(raw), t)
+	return LoadDeciderSource(rt, filepath.Base(path), string(raw))
 }
 
 // LoadProjectionFile loads a single JS projection file (for the dryrun CLI).
@@ -35,14 +54,7 @@ func LoadProjectionFile(rt *GojaRuntime, app core.App, path string) (*Projection
 	if err != nil {
 		return nil, err
 	}
-	t, err := parseTriggers(string(raw))
-	if err != nil {
-		return nil, fmt.Errorf("functions: %s: %w", filepath.Base(path), err)
-	}
-	if t.projection == "" {
-		return nil, fmt.Errorf("functions: %s: missing //@trigger projection directive", filepath.Base(path))
-	}
-	return buildProjectionSpec(rt, app, filepath.Base(path), string(raw), t)
+	return LoadProjectionSource(rt, app, filepath.Base(path), string(raw))
 }
 
 // DeciderDryRun reports a decider dry-run over existing history.

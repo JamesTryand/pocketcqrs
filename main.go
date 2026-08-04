@@ -222,6 +222,7 @@ func main() {
 		gateway.RegisterRoutes(e, c.registry, gatewayCfg)
 		functions.RegisterHTTPRoutes(e, c.httpFns, !gatewayCfg.AllowAnonymous)
 		registerReloadRoute(e, c, functionsDir)
+		registerFunctionAdminRoutes(e, c, functionsDir)
 		registerCatalogRoute(e, c)
 		registerOpsRoutes(e, c)
 		c.engine.Start(context.Background())
