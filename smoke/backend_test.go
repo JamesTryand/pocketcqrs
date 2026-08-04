@@ -462,6 +462,120 @@ function evolve(state, event) { return { made: true }; }
 	}
 }
 
+// TestScaffoldedSliceWorks is the DASH.6 payoff: a slice described in a few
+// fields is generated, saved, activated, and then actually accepts commands
+// and materialises a read model. Generating source that looks right but does
+// not RUN would be worse than not generating at all.
+func TestScaffoldedSliceWorks(t *testing.T) {
+	h := startBackend(t, nil)
+
+	var gen struct {
+		Files []struct {
+			Name   string `json:"name"`
+			Source string `json:"source"`
+			Kind   string `json:"kind"`
+		} `json:"files"`
+	}
+	h.apiOK(http.MethodPost, "/api/cqrs/admin/scaffold", jsonBody(map[string]any{
+		"aggregate": "ticket",
+		"commands": []map[string]any{
+			{"name": "OpenTicket", "event": "TicketOpened", "once": true,
+				"fields": []map[string]string{{"name": "subject", "type": "text"}}},
+			{"name": "CloseTicket", "event": "TicketClosed", "requiresExisting": true,
+				"fields": []map[string]string{{"name": "resolution", "type": "text"}}},
+		},
+		"readModel": map[string]any{
+			"collection": "tickets", "key": "ticketId",
+			"fields": []map[string]string{
+				{"name": "subject", "type": "text"}, {"name": "resolution", "type": "text"},
+			},
+		},
+	}), &gen)
+	if len(gen.Files) != 2 {
+		t.Fatalf("expected a decider and a projection, got %d", len(gen.Files))
+	}
+
+	// generation writes nothing — the files go through the ordinary save
+	// path, load check included
+	for _, f := range gen.Files {
+		if status, _ := h.api(http.MethodGet, "/api/cqrs/admin/functions/"+f.Name, nil, nil); status != http.StatusNotFound {
+			t.Fatalf("%s exists before it was saved: generation must not write", f.Name)
+		}
+		// and each passes its own dry run before anyone saves it
+		var dry map[string]any
+		status, raw := h.api(http.MethodPost, "/api/cqrs/admin/dryrun",
+			jsonBody(map[string]any{"name": f.Name, "source": f.Source, "mode": f.Kind}), &dry)
+		if status != http.StatusOK {
+			t.Fatalf("generated %s failed its own dry run: %s", f.Name, truncate(raw, 300))
+		}
+		h.apiOK(http.MethodPut, "/api/cqrs/admin/functions/"+f.Name,
+			jsonBody(map[string]string{"source": f.Source}), nil)
+	}
+
+	// activate the slice behind the barrier
+	h.setMode("maintenance")
+	report := h.reload()
+	h.setMode("running")
+	if report["schemaTier"] != "reloaded" {
+		t.Fatalf("the slice did not activate: %v", report)
+	}
+
+	// and now it is a working vertical slice
+	h.command("ticket", "tk1", "OpenTicket", map[string]string{"subject": "printer on fire"})
+	h.command("ticket", "tk1", "CloseTicket", map[string]string{"resolution": "extinguished"})
+
+	// the generated decider's rules hold: the create is once-only, and the
+	// follow-up needs an existing stream
+	if status, _ := h.api(http.MethodPost, "/api/cqrs/ticket/tk1/OpenTicket",
+		jsonBody(map[string]string{"subject": "again"}), nil); status != http.StatusBadRequest {
+		t.Errorf("re-opening an existing ticket should be refused, got %d", status)
+	}
+	if status, _ := h.api(http.MethodPost, "/api/cqrs/ticket/unknown/CloseTicket",
+		jsonBody(map[string]string{"resolution": "x"}), nil); status != http.StatusBadRequest {
+		t.Errorf("closing a ticket that does not exist should be refused, got %d", status)
+	}
+
+	// the generated projection maintains the read model — the row-op
+	// contract is the thing most easily got wrong, so assert real rows
+	var rows struct {
+		Items []struct {
+			TicketID   string `json:"ticketId"`
+			Subject    string `json:"subject"`
+			Resolution string `json:"resolution"`
+		} `json:"items"`
+	}
+	eventually(t, "the generated projection to materialise its row", func() bool {
+		status, _ := h.api(http.MethodGet, "/api/collections/tickets/records", nil, &rows)
+		return status == http.StatusOK && len(rows.Items) == 1
+	})
+	got := rows.Items[0]
+	if got.TicketID != "tk1" || got.Subject != "printer on fire" || got.Resolution != "extinguished" {
+		t.Fatalf("the projection merged the events wrongly: %+v", got)
+	}
+
+	// the declared commands reach the catalog, which is what makes an
+	// export faithful — commands leave no trace in the log to recover
+	var cat struct {
+		Aggregates []struct {
+			Name     string   `json:"name"`
+			Commands []string `json:"commands"`
+		} `json:"aggregates"`
+	}
+	h.apiOK(http.MethodGet, "/api/cqrs/catalog", nil, &cat)
+	found := false
+	for _, a := range cat.Aggregates {
+		if a.Name == "ticket" {
+			found = true
+			if len(a.Commands) != 2 {
+				t.Errorf("expected the declared commands in the catalog, got %v", a.Commands)
+			}
+		}
+	}
+	if !found {
+		t.Error("the scaffolded aggregate is not in the catalog")
+	}
+}
+
 // TestAuthoringWorkflow is the DASH.5 payoff end to end: write a projection
 // through the API, watch it stay inert, activate it behind the barrier, and
 // see it live with history replayed and its collection write-guarded.

@@ -320,6 +320,37 @@ func (c *BackendClient) DeleteFunction(ctx context.Context, token, name string) 
 	return &out, nil
 }
 
+// Scaffold generates a slice's source from a domain description. It writes
+// nothing: the files come back for review, dry run and save through the
+// ordinary function-file API.
+func (c *BackendClient) Scaffold(ctx context.Context, token string, domain any) ([]GeneratedFile, error) {
+	var out struct {
+		Files []GeneratedFile `json:"files"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/cqrs/admin/scaffold", token, domain, &out); err != nil {
+		return nil, err
+	}
+	return out.Files, nil
+}
+
+// GeneratedFile is one file the scaffolder produced, with the dry-run mode
+// its kind calls for.
+type GeneratedFile struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+	Kind   string `json:"kind"`
+}
+
+// DryRunMode is the check that applies to this generated file.
+func (f GeneratedFile) DryRunMode() string {
+	switch f.Kind {
+	case "decider", "projection":
+		return f.Kind
+	default:
+		return "compile"
+	}
+}
+
 // DryRun runs candidate source against real history without persisting
 // anything (POST /api/cqrs/admin/dryrun).
 func (c *BackendClient) DryRun(ctx context.Context, token string, req DryRunRequest) (*DryRunResult, error) {

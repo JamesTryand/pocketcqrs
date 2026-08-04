@@ -34,6 +34,15 @@ type Decider[S any] struct {
 	InitialState func() S
 	Decide       func(cmd Command, state S) ([]events.NewEvent, error)
 	Evolve       func(state S, ev events.Event) (S, error)
+	// Commands optionally names the commands this decider accepts.
+	//
+	// It is documentation, not enforcement: Decide still adjudicates, and an
+	// unlisted command is not rejected here. It exists because commands
+	// leave NO trace in the log — events are recoverable empirically,
+	// commands are not — so without a declaration the catalog cannot show
+	// them, an export cannot reproduce them, and nothing can validate a
+	// payload later.
+	Commands []string
 }
 
 // Registry maps aggregate names to their deciders and executes commands.
@@ -47,9 +56,10 @@ type Registry struct {
 
 // erased is a type-erased Decider[S].
 type erased struct {
-	initial func() any
-	decide  func(Command, any, map[string]any) ([]events.NewEvent, error)
-	evolve  func(any, events.Event) (any, error)
+	initial  func() any
+	decide   func(Command, any, map[string]any) ([]events.NewEvent, error)
+	evolve   func(any, events.Event) (any, error)
+	commands []string
 }
 
 // Untyped is a type-erased decider contract, used by adapters whose state
@@ -58,6 +68,8 @@ type Untyped struct {
 	Initial func() any
 	Decide  func(cmd Command, state any, meta map[string]any) ([]events.NewEvent, error)
 	Evolve  func(state any, ev events.Event) (any, error)
+	// Commands optionally names the commands accepted — see Decider.Commands.
+	Commands []string
 }
 
 // NewRegistry creates a Registry executing commands against store.
@@ -77,6 +89,7 @@ func Register[S any](r *Registry, aggregate string, d *Decider[S]) {
 		evolve: func(state any, ev events.Event) (any, error) {
 			return d.Evolve(state.(S), ev)
 		},
+		commands: d.Commands,
 	}
 }
 
@@ -84,7 +97,9 @@ func Register[S any](r *Registry, aggregate string, d *Decider[S]) {
 func (r *Registry) RegisterUntyped(aggregate string, d Untyped) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.deciders[aggregate] = erased{initial: d.Initial, decide: d.Decide, evolve: d.Evolve}
+	r.deciders[aggregate] = erased{
+		initial: d.Initial, decide: d.Decide, evolve: d.Evolve, commands: d.Commands,
+	}
 }
 
 // Unregister drops the decider for aggregate (no-op if absent): a JS
@@ -111,6 +126,21 @@ func (r *Registry) Aggregates() []string {
 	for name := range r.deciders {
 		out = append(out, name)
 	}
+	sort.Strings(out)
+	return out
+}
+
+// Commands returns the commands an aggregate declares, sorted, or nil when
+// it declares none. Declaring is optional, so an empty result means "not
+// stated" — never "accepts nothing".
+func (r *Registry) Commands(aggregate string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	d, ok := r.deciders[aggregate]
+	if !ok || len(d.commands) == 0 {
+		return nil
+	}
+	out := append([]string(nil), d.commands...)
 	sort.Strings(out)
 	return out
 }

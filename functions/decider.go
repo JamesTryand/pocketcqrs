@@ -15,8 +15,11 @@ import (
 // DeciderSpec is a JS decider: its aggregate, declared event coverage,
 // transforms and code.
 type DeciderSpec struct {
-	Aggregate  string
-	Handles    []string
+	Aggregate string
+	Handles   []string
+	// Commands is the optional //@commands declaration — see
+	// decider.Decider.Commands for why it exists.
+	Commands   []string
 	Transforms []TransformSpec
 	Prog       *goja.Program
 	runtime    *GojaRuntime
@@ -39,6 +42,7 @@ type TransformSpec struct {
 // (idempotent: a transform only fires on an exact From == version match).
 func (spec *DeciderSpec) UntypedDecider() decider.Untyped {
 	return decider.Untyped{
+		Commands: spec.Commands,
 		Initial: func() any {
 			state, err := spec.runtime.runInitial(spec)
 			if err != nil {

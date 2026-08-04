@@ -1,0 +1,129 @@
+{{define "content"}}
+<div class="wa-split wa-align-items-baseline">
+  <h1>Scaffold a slice</h1>
+  <span class="wa-caption-m">describe &rarr; generate &rarr; dry run &rarr; save</span>
+</div>
+
+<wa-callout variant="neutral">
+  <wa-icon slot="icon" name="gear" library="system"></wa-icon>
+  This writes <strong>nothing</strong>. It generates a decider and a projection from what you describe, dry-runs them against the live log, and shows you the result &mdash; then you open each file in the <a href="/functions">editor</a> to save it. Generated code takes exactly the same path as hand-written code.
+</wa-callout>
+
+{{if .Flash.Text}}
+<wa-callout variant="{{.Flash.Variant}}" aria-live="polite">
+  <wa-icon slot="icon" name="{{if eq .Flash.Variant "success"}}check{{else}}circle-xmark{{end}}" library="system"></wa-icon>
+  {{.Flash.Text}}
+</wa-callout>
+{{end}}
+
+{{/* A plain form: this is a description being filled in, not a live surface,
+     and it must survive a refused generate with what was typed intact. */}}
+<form method="post" action="/scaffold" class="wa-stack wa-gap-l">
+  <wa-card>
+    <h2 slot="header">The aggregate</h2>
+    <div class="wa-stack wa-gap-m">
+      <p class="wa-body-s">The stream family every command in this slice writes to. One stream per instance, identified by the id in the command URL.</p>
+      <wa-input name="aggregate" label="Aggregate name" size="s" required
+                value="{{.Form.aggregate}}"
+                placeholder="ticket" hint="lower camel case: ticket, supportCase, order"></wa-input>
+    </div>
+  </wa-card>
+
+  <wa-card>
+    <h2 slot="header">Commands and their events</h2>
+    <div class="wa-stack wa-gap-m">
+      <p class="wa-body-s">
+        Each command records exactly one event &mdash; the common case, and the one worth generating. Mark the <strong>create</strong>: the generated decider refuses it on a stream that already exists, and refuses every other command on one that does not.
+      </p>
+      <wa-scroller>
+        <table class="wa-zebra-rows">
+          <caption class="wa-visually-hidden">Commands, the event each records, and their payload fields</caption>
+          <thead>
+            <tr>
+              <th scope="col">Command</th>
+              <th scope="col">Event it records</th>
+              <th scope="col">Payload fields</th>
+              <th scope="col">Create</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{/* Four rows is enough to describe a slice and small enough to
+                 fill in; more commands are an edit away in the editor. */}}
+            {{range $i, $row := .Rows}}
+            <tr>
+              <td><wa-input name="commandName" size="s" placeholder="{{$row.CommandPlaceholder}}" value="{{$row.Name}}"></wa-input></td>
+              <td><wa-input name="commandEvent" size="s" placeholder="{{$row.EventPlaceholder}}" value="{{$row.Event}}"></wa-input></td>
+              <td><wa-input name="commandFields" size="s" placeholder="subject:text, priority:number" value="{{$row.Fields}}"></wa-input></td>
+              <td><wa-checkbox name="commandOnce" value="{{$i}}" {{if $row.Once}}checked{{end}}></wa-checkbox></td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </wa-scroller>
+      <p class="wa-caption-s">Field types: <code>text</code>, <code>number</code>, <code>bool</code>, <code>date</code>, <code>json</code>. A bare name is <code>text</code>.</p>
+    </div>
+  </wa-card>
+
+  <wa-card>
+    <h2 slot="header">Read model <span class="wa-caption-m">optional</span></h2>
+    <div class="wa-stack wa-gap-m">
+      <p class="wa-body-s">One row per stream, maintained by a generated projection. Leave the collection blank for a write-only slice &mdash; a read model can be added later without touching the decider.</p>
+      <div class="wa-cluster wa-gap-s wa-align-items-end">
+        <wa-input name="collection" label="Collection" size="s" placeholder="tickets"
+                  value="{{.Form.collection}}"
+                  hint="created on reload, behind the maintenance barrier"></wa-input>
+        <wa-input name="key" label="Key field" size="s" placeholder="ticketId"
+                  value="{{.Form.key}}"
+                  hint="defaults to &lt;aggregate&gt;Id; holds the stream id"></wa-input>
+        <wa-input name="readModelFields" label="Columns" size="s" placeholder="subject:text, priority:number"
+                  value="{{.Form.readModelFields}}"></wa-input>
+      </div>
+    </div>
+  </wa-card>
+
+  <div class="wa-cluster wa-gap-s wa-align-items-center">
+    <wa-button type="submit" variant="brand">
+      <wa-icon slot="start" name="gear" library="system"></wa-icon> Generate and dry run
+    </wa-button>
+    <span class="wa-caption-m">Nothing is written until you save each file in the editor.</span>
+  </div>
+</form>
+
+{{range .Generated}}
+<wa-card>
+  <div slot="header" class="wa-cluster wa-gap-s wa-align-items-baseline">
+    <h2>{{.Name}}</h2>
+    <wa-tag size="s" variant="warning">{{.Kind}}</wa-tag>
+  </div>
+  <div class="wa-stack wa-gap-m">
+    {{if .Error}}
+    <wa-callout variant="danger">
+      <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+      <strong>The generated file did not pass its own dry run.</strong> {{.Error}}
+      <p class="wa-caption-s">That is a generator problem, not yours &mdash; the file is shown as generated so it can be reported or edited.</p>
+    </wa-callout>
+    {{end}}
+    {{with .DryRun}}
+    <wa-callout variant="success" size="s">
+      <wa-icon slot="icon" name="check" library="system"></wa-icon>
+      {{.Summary}}
+    </wa-callout>
+    {{end}}
+
+    <pre class="payload"><code>{{.Source}}</code></pre>
+
+    {{/* The source goes to the editor rather than straight to disk: it is a
+         starting point, and the save path there is the one that load-checks
+         it and keeps a previous version. */}}
+    <form method="post" action="/functions/act" class="wa-cluster wa-gap-s wa-align-items-center">
+      <input type="hidden" name="action" value="dryrun">
+      <input type="hidden" name="name" value="{{.Name}}">
+      <input type="hidden" name="mode" value="{{.DryRunMode}}">
+      <input type="hidden" name="source" value="{{.Source}}">
+      <wa-button type="submit" appearance="outlined">Open in the editor</wa-button>
+      <span class="wa-caption-s">Review it there, then save. Both files need a reload behind the maintenance barrier to go live.</span>
+    </form>
+  </div>
+</wa-card>
+{{end}}
+{{end}}

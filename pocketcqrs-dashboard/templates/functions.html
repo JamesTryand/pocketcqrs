@@ -9,6 +9,9 @@
   <wa-card class="file-list">
     <h2 slot="header">Files</h2>
     <p class="wa-caption-m"><code>{{.Dir}}</code> on the backend</p>
+    <p><wa-button href="/scaffold" appearance="outlined" size="s">
+      <wa-icon slot="start" name="gear" library="system"></wa-icon> Scaffold a new slice
+    </wa-button></p>
     {{if .Files}}
     <nav class="wa-stack wa-gap-2xs" aria-label="Function files">
       {{range .Files}}

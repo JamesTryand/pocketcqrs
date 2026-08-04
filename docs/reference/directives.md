@@ -98,6 +98,38 @@ Required for deciders: the event types the decider may produce or must fold.
 Boot/reload validation fails if an existing stream contains a type not
 declared here.
 
+## `//@commands <Name...>`
+
+Optional, deciders only: the commands this aggregate accepts.
+
+It is **documentation, not enforcement** — `decide()` still adjudicates, and
+an unlisted command is not rejected by the directive. It exists because
+commands are the one part of a slice that cannot be recovered from the log:
+events leave a trace there and can be reported empirically, commands leave
+none. Without a declaration the catalog cannot list them, a schema export
+cannot reproduce them, and nothing can validate a payload later.
+
+```js
+//@trigger decider note
+//@handles NoteCreated NoteTextChanged NoteArchived
+//@commands CreateNote ChangeNoteText ArchiveNote
+```
+
+Go deciders declare the same thing with the `Commands` field:
+
+```go
+return &decider.Decider[TaskState]{
+    Commands:     []string{CmdCreateTask, CmdCompleteTask},
+    InitialState: func() TaskState { return TaskState{} },
+    // …
+}
+```
+
+Declared commands appear in `GET /api/cqrs/catalog`, in the `catalog`
+Markdown, and fill the command table of a generated domain-doc skeleton
+(which otherwise stays a `TODO` row — an honest blank rather than a guess
+from event names).
+
 ## `//@transform <Type> <from> <to>`
 
 Declares an upcaster for event `<Type>` from version `<from>` to `<to>`

@@ -17,6 +17,7 @@ import (
 
 	"github.com/JamesTryand/pocketcqrs/decider"
 	"github.com/JamesTryand/pocketcqrs/functions"
+	"github.com/JamesTryand/pocketcqrs/scaffold"
 )
 
 // functionNamePattern is the whole allowed shape of a function file name:
@@ -202,6 +203,30 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 
 	e.Router.POST("/api/cqrs/admin/dryrun", func(re *core.RequestEvent) error {
 		return c.handleDryRun(re)
+	}).Bind(apis.RequireSuperuserAuth())
+
+	// Generate a slice's source from a domain description. It writes
+	// nothing: the caller saves the files through PUT above, so generated
+	// code goes through the same load check, dry run and maintenance barrier
+	// as anything hand-written. Generated code gets no shortcut.
+	e.Router.POST("/api/cqrs/admin/scaffold", func(re *core.RequestEvent) error {
+		payload, err := io.ReadAll(re.Request.Body)
+		if err != nil {
+			return apis.NewBadRequestError("failed reading request body", err)
+		}
+		var domain scaffold.Domain
+		if err := json.Unmarshal(payload, &domain); err != nil {
+			return apis.NewBadRequestError("invalid JSON body: "+err.Error(), err)
+		}
+		files, err := domain.Generate()
+		if err != nil {
+			return apis.NewBadRequestError(err.Error(), err)
+		}
+		return re.JSON(http.StatusOK, map[string]any{
+			"files": files,
+			"hint": "Nothing was written. Dry-run each file, save it, then reload — " +
+				"a generated decider and projection are a starting point, not a finished domain.",
+		})
 	}).Bind(apis.RequireSuperuserAuth())
 }
 

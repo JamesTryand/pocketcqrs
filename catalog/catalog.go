@@ -55,8 +55,13 @@ type Totals struct {
 
 // Aggregate is one registered aggregate with declared and empirical facts.
 type Aggregate struct {
-	Name       string      `json:"name"`
-	Origin     string      `json:"origin"` // "go" | "js"
+	Name   string `json:"name"`
+	Origin string `json:"origin"` // "go" | "js"
+	// Commands is what the aggregate DECLARES it accepts, if anything.
+	// Unlike events it cannot be observed: commands leave no trace in the
+	// log, so an aggregate that declares none reports none — which means
+	// "not stated", never "accepts nothing".
+	Commands   []string    `json:"commands,omitempty"`
 	Handles    []string    `json:"handles,omitempty"`
 	Transforms []string    `json:"transforms,omitempty"` // "Type v1->v2"
 	Streams    int64       `json:"streams"`
@@ -172,10 +177,11 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 	}
 	for _, name := range in.Registry.Aggregates() {
 		agg := Aggregate{
-			Name:    name,
-			Origin:  "go",
-			Streams: streamCounts[name],
-			Events:  eventsByAggregate[name],
+			Name:     name,
+			Origin:   "go",
+			Commands: in.Registry.Commands(name),
+			Streams:  streamCounts[name],
+			Events:   eventsByAggregate[name],
 		}
 		if spec, ok := in.JSDeciders[name]; ok {
 			agg.Origin = "js"

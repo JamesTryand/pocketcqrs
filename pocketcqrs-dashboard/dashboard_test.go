@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/JamesTryand/pocketcqrs/scaffold"
 )
 
 // sampleCatalog mirrors the public GET /api/cqrs/catalog JSON. maxPosition
@@ -271,6 +273,24 @@ func fakeBackend(t *testing.T) *httptest.Server {
 			"name": r.PathValue("name"), "deleted": true,
 			"hint": "The file is gone, but whatever it registered is still serving until the next reload drops it.",
 		})
+	}))
+	mux.HandleFunc("POST /api/cqrs/admin/scaffold", authed(func(w http.ResponseWriter, r *http.Request) {
+		var domain scaffold.Domain
+		if err := json.NewDecoder(r.Body).Decode(&domain); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"message":"invalid body"}`))
+			return
+		}
+		// the real endpoint generates with the same package, so the fake
+		// uses it too: a fake that invented its own output would let a
+		// generator change pass unnoticed here
+		files, err := domain.Generate()
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"message": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"files": files, "hint": "Nothing was written."})
 	}))
 	mux.HandleFunc("POST /api/cqrs/admin/dryrun", authed(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
@@ -857,6 +877,84 @@ func TestFunctionDryRun(t *testing.T) {
 	}
 	if !strings.Contains(body, "does not define decide") {
 		t.Error("the refusal reason from the backend was not shown")
+	}
+}
+
+// TestScaffoldWizard: the wizard describes a slice, the backend generates
+// it, and each generated file is dry-run before it is shown — but nothing is
+// written. Generated code takes the same path as hand-written code.
+func TestScaffoldWizard(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	body := get(t, client, dash.URL+"/scaffold")
+	for _, want := range []string{"Scaffold a slice", `name="aggregate"`, `name="commandName"`,
+		`name="commandEvent"`, `name="collection"`, "writes <strong>nothing</strong>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the wizard is missing %q", want)
+		}
+	}
+
+	resp, err := client.PostForm(dash.URL+"/scaffold", url.Values{
+		"aggregate":       {"ticket"},
+		"commandName":     {"OpenTicket", "CloseTicket"},
+		"commandEvent":    {"TicketOpened", "TicketClosed"},
+		"commandFields":   {"subject:text, priority:number", "resolution:text"},
+		"commandOnce":     {"0"},
+		"collection":      {"tickets"},
+		"key":             {"ticketId"},
+		"readModelFields": {"subject:text, priority:number"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("generate: expected 200, got %s", resp.Status)
+	}
+	for _, want := range []string{
+		"ticket.js", "tickets.js",
+		"//@trigger decider ticket",
+		"//@commands OpenTicket CloseTicket",
+		"//@key ticketId",
+		"Nothing has been written",
+		`action="/functions/act"`, // it hands off to the editor rather than saving
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the generated slice is missing %q", want)
+		}
+	}
+
+	// a model the generator refuses comes back with the reason and the form
+	// still filled in
+	resp, err = client.PostForm(dash.URL+"/scaffold", url.Values{
+		"aggregate": {"ticket"}, "commandName": {"Open Ticket"}, "commandEvent": {"TicketOpened"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "Open Ticket") {
+		t.Error("a refused generate emptied the form")
+	}
+	if !strings.Contains(body, "valid identifier") && !strings.Contains(body, "letters, digits") {
+		t.Error("the refusal did not explain itself")
+	}
+
+	// an aggregate with no commands is refused before the backend is asked
+	resp, err = client.PostForm(dash.URL+"/scaffold", url.Values{"aggregate": {"ticket"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "at least one command") {
+		t.Error("a slice with no commands should be refused with an explanation")
 	}
 }
 

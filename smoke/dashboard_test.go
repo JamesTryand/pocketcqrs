@@ -224,7 +224,9 @@ function project(event) { return [{ title: event.data.title }]; }
 	if status != http.StatusOK {
 		t.Fatalf("dry run: expected 200, got %d", status)
 	}
-	if err := contains(body, "Simulated", "no upserts", "row ops"); err != nil {
+	// the backend counts the values that are not row ops, so the panel names
+	// the mistake instead of inferring it from a zero
+	if err := contains(body, "Simulated", "are not row ops", "discarded at runtime"); err != nil {
 		t.Errorf("the wrong-contract warning is missing: %v", err)
 	}
 

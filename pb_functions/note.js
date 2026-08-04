@@ -1,5 +1,6 @@
 //@trigger decider note
 //@handles NoteCreated NoteTextChanged NoteArchived
+//@commands CreateNote ChangeNoteText ArchiveNote
 // Example JS decider (tier 3): the full write side of a note aggregate,
 // defined at runtime. This VM is neutered: no Math.random, no Date, no pb
 // bindings — decide from command + state only. command.now is the time

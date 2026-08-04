@@ -54,6 +54,7 @@ func (s OrderState) open() bool { return s.Exists && s.Status == OrderStatusOpen
 // Order returns the decider for the order aggregate.
 func Order() *decider.Decider[OrderState] {
 	return &decider.Decider[OrderState]{
+		Commands:     []string{CmdPlaceOrder, CmdAddOrderLine, CmdConfirmOrder, CmdCancelOrder},
 		InitialState: func() OrderState { return OrderState{} },
 
 		Decide: func(cmd decider.Command, state OrderState) ([]events.NewEvent, error) {

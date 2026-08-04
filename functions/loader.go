@@ -47,6 +47,7 @@ type Declaration struct {
 	Collections []string `json:"collections,omitempty"`
 	Aggregate   string   `json:"aggregate,omitempty"`
 	Handles     []string `json:"handles,omitempty"`
+	Commands    []string `json:"commands,omitempty"`
 	// SchemaBearing reports whether ACTIVATING this file needs the
 	// maintenance barrier: projection schemas and deciders move only in
 	// maintenance, effect/http/cron functions move in any mode.
@@ -72,6 +73,7 @@ func declaration(name string, t triggers) (*Declaration, error) {
 		Projection: t.projection,
 		Aggregate:  t.decider,
 		Handles:    t.handles,
+		Commands:   t.commands,
 	}
 	if t.empty() {
 		return d, nil
@@ -140,6 +142,11 @@ func declaration(name string, t triggers) (*Declaration, error) {
 //	                                                recent //@schema.
 //	//@trigger decider <aggregate>               -> JS decider (tier 3);
 //	//@handles <EventTypes...>                      requires //@handles
+//	//@commands <Names...>                       -> optional: the commands this
+//	                                                decider accepts. Documentation
+//	                                                only — commands leave no trace
+//	                                                in the log, so nothing else can
+//	                                                report them.
 //	//@transform <Type> <from> <to>              -> upcaster fn transform_<Type>_<from>_to_<to>
 //
 // Event/http files may combine freely; projection and decider files must
@@ -271,6 +278,7 @@ func buildDeciderSpec(rt *GojaRuntime, filename, src string, t triggers) (*Decid
 	return &DeciderSpec{
 		Aggregate:  t.decider,
 		Handles:    t.handles,
+		Commands:   t.commands,
 		Transforms: t.transforms,
 		Prog:       prog,
 		runtime:    rt,
@@ -294,12 +302,13 @@ type triggers struct {
 	schemas      []rawSchema // //@schema ... (+ its //@key), repeatable
 	decider      string      // //@trigger decider <aggregate>
 	handles      []string    // //@handles ...
+	commands     []string    // //@commands ... (optional; documentation)
 	transforms   []TransformSpec
 }
 
 func (t triggers) empty() bool {
 	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && len(t.schemas) == 0 &&
-		t.decider == "" && len(t.handles) == 0 && len(t.transforms) == 0
+		t.decider == "" && len(t.handles) == 0 && len(t.commands) == 0 && len(t.transforms) == 0
 }
 
 // parseTriggers scans the leading comment lines for //@ directives.
@@ -368,6 +377,8 @@ func parseTriggers(src string) (triggers, error) {
 			last.key = fields[1]
 		case "handles":
 			t.handles = append(t.handles, fields[1:]...)
+		case "commands":
+			t.commands = append(t.commands, fields[1:]...)
 		case "transform":
 			if len(fields) != 4 {
 				return t, fmt.Errorf("//@transform wants: transform <Type> <from> <to>")

@@ -34,6 +34,10 @@ type TaskState struct {
 // Task returns the decider for the task aggregate.
 func Task() *decider.Decider[TaskState] {
 	return &decider.Decider[TaskState]{
+		// Declared for the catalog and for schema export: a command leaves
+		// no trace in the log, so nothing can report these unless they are
+		// stated. Decide still adjudicates — this list does not gate it.
+		Commands:     []string{CmdCreateTask, CmdCompleteTask},
 		InitialState: func() TaskState { return TaskState{} },
 
 		Decide: func(cmd decider.Command, state TaskState) ([]events.NewEvent, error) {

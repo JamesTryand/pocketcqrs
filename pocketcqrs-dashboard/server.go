@@ -28,7 +28,7 @@ const defaultPageSize = 50
 // own), so they need no separate entry here.
 var pages = []string{
 	"login", "overview", "placeholder",
-	"aggregates", "streams", "stream", "events", "consumers", "system", "functions",
+	"aggregates", "streams", "stream", "events", "consumers", "system", "functions", "scaffold",
 }
 
 // livePoll is the hx-trigger interval of every self-refreshing panel, held
@@ -89,6 +89,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /system", s.requireAuth(s.system))
 	mux.HandleFunc("GET /functions", s.requireAuth(s.functions))
 	mux.HandleFunc("GET /functions/{name}", s.requireAuth(s.functions))
+	mux.HandleFunc("GET /scaffold", s.requireAuth(s.scaffold))
+	mux.HandleFunc("POST /scaffold", s.requireAuth(s.scaffoldGenerate))
 	mux.HandleFunc("POST /functions/act", s.requireAuth(s.functionAction))
 	mux.HandleFunc("POST /functions/{name}/delete", s.requireAuth(s.deleteFunction))
 
@@ -765,11 +767,21 @@ func (s *server) renderEditor(w http.ResponseWriter, r *http.Request, token, nam
 	data["DryRun"] = dryRun
 	data["DryRunMode"] = "compile"
 
+	found := false
 	for _, f := range files {
 		if f.Name == name {
 			data["File"] = f
 			data["DryRunMode"] = f.Declaration.DryRunMode()
+			found = true
 			break
+		}
+	}
+	// a file that is not on disk yet — generated source arriving from the
+	// scaffolder — keeps the mode the caller asked for, so the editor offers
+	// the right check for code it has never seen
+	if !found {
+		if mode := r.PostFormValue("mode"); mode != "" {
+			data["DryRunMode"] = mode
 		}
 	}
 	if isHTMX(r) {
@@ -802,6 +814,230 @@ func backendDetail(err error) string {
 		return he.Detail
 	}
 	return err.Error()
+}
+
+// ---- scaffolder ----
+
+// scaffoldCommand is one row of the wizard's command table.
+type scaffoldCommand struct {
+	Name             string              `json:"name"`
+	Event            string              `json:"event"`
+	Fields           []map[string]string `json:"fields,omitempty"`
+	Once             bool                `json:"once,omitempty"`
+	RequiresExisting bool                `json:"requiresExisting,omitempty"`
+}
+
+// scaffoldRow is one command row of the wizard, carrying what was typed so a
+// refused generate re-renders the form rather than emptying it.
+type scaffoldRow struct {
+	Name, Event, Fields                  string
+	Once                                 bool
+	CommandPlaceholder, EventPlaceholder string
+}
+
+// scaffoldRows returns the command rows, prefilled from a previous submit.
+// Four is enough to describe a slice and small enough to fill in; more
+// commands are one edit away in the editor.
+func scaffoldRows(r *http.Request) []scaffoldRow {
+	placeholders := [][2]string{
+		{"OpenTicket", "TicketOpened"},
+		{"CloseTicket", "TicketClosed"},
+		{"ReopenTicket", "TicketReopened"},
+		{"", ""},
+	}
+	at := func(key string, i int) string {
+		if r == nil {
+			return ""
+		}
+		if v := r.PostForm[key]; i < len(v) {
+			return v[i]
+		}
+		return ""
+	}
+	rows := make([]scaffoldRow, len(placeholders))
+	for i := range rows {
+		rows[i] = scaffoldRow{
+			Name:               at("commandName", i),
+			Event:              at("commandEvent", i),
+			Fields:             at("commandFields", i),
+			CommandPlaceholder: placeholders[i][0],
+			EventPlaceholder:   placeholders[i][1],
+		}
+		if r != nil {
+			for _, v := range r.PostForm["commandOnce"] {
+				if v == strconv.Itoa(i) {
+					rows[i].Once = true
+				}
+			}
+		}
+	}
+	// a first visit suggests the create is the first row
+	if r == nil {
+		rows[0].Once = true
+	}
+	return rows
+}
+
+func (s *server) scaffold(w http.ResponseWriter, r *http.Request, token string) {
+	data := s.base("Scaffold a slice", "/functions")
+	data["Flash"] = flashMessage{}
+	data["Form"] = map[string]string{}
+	data["Rows"] = scaffoldRows(nil)
+	s.render(w, "scaffold", "layout", data)
+}
+
+// scaffoldGenerate turns the form into a domain model, asks the backend to
+// generate the slice, and dry-runs each file against real history before
+// showing it. Generated code is presented already checked — but still only
+// checked, never saved: saving is a separate, deliberate act.
+func (s *server) scaffoldGenerate(w http.ResponseWriter, r *http.Request, token string) {
+	domain, err := parseScaffoldForm(r)
+	data := s.base("Scaffold a slice", "/functions")
+	data["Form"] = map[string]string{
+		"aggregate":       r.PostFormValue("aggregate"),
+		"collection":      r.PostFormValue("collection"),
+		"key":             r.PostFormValue("key"),
+		"readModelFields": r.PostFormValue("readModelFields"),
+	}
+	data["Rows"] = scaffoldRows(r)
+	if err != nil {
+		data["Flash"] = flashMessage{"danger", err.Error()}
+		s.render(w, "scaffold", "layout", data)
+		return
+	}
+
+	files, err := s.backend.Scaffold(r.Context(), token, domain)
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			clearAuthCookie(w)
+			s.redirectToLogin(w, r)
+			return
+		}
+		data["Flash"] = flashMessage{"danger", backendDetail(err)}
+		s.render(w, "scaffold", "layout", data)
+		return
+	}
+
+	// dry-run each generated file, so a generator bug shows up here rather
+	// than as a puzzling refusal at save time
+	type reviewed struct {
+		GeneratedFile
+		DryRun *DryRunResult
+		Error  string
+	}
+	out := make([]reviewed, 0, len(files))
+	for _, f := range files {
+		item := reviewed{GeneratedFile: f}
+		res, err := s.backend.DryRun(r.Context(), token, DryRunRequest{
+			Name: f.Name, Source: f.Source, Mode: f.DryRunMode(),
+		})
+		if err != nil {
+			item.Error = backendDetail(err)
+		} else {
+			item.DryRun = res
+		}
+		out = append(out, item)
+	}
+
+	data["Generated"] = out
+	data["Flash"] = flashMessage{"success",
+		"Generated and dry-run against the live log. Nothing has been written — open each file in the editor to save it."}
+	s.render(w, "scaffold", "layout", data)
+}
+
+// parseScaffoldForm builds the domain model from the wizard's fields.
+//
+// The wizard collects commands as parallel arrays (name, event, fields, …)
+// because that is what a form can express; the model it produces is the same
+// one the M14 importer will build from a schema document.
+func parseScaffoldForm(r *http.Request) (map[string]any, error) {
+	if err := r.ParseForm(); err != nil {
+		return nil, errors.New("could not read the form")
+	}
+	aggregate := strings.TrimSpace(r.PostFormValue("aggregate"))
+	if aggregate == "" {
+		return nil, errors.New("name the aggregate — it is the stream family every command writes to")
+	}
+
+	names := r.PostForm["commandName"]
+	events := r.PostForm["commandEvent"]
+	fieldSpecs := r.PostForm["commandFields"]
+	once := r.PostForm["commandOnce"]
+
+	commands := make([]scaffoldCommand, 0, len(names))
+	for i, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue // an empty row is a row the operator did not fill in
+		}
+		cmd := scaffoldCommand{Name: name}
+		if i < len(events) {
+			cmd.Event = strings.TrimSpace(events[i])
+		}
+		if cmd.Event == "" {
+			return nil, fmt.Errorf("command %q needs the event it records", name)
+		}
+		if i < len(fieldSpecs) {
+			fields, err := parseFieldSpec(fieldSpecs[i])
+			if err != nil {
+				return nil, fmt.Errorf("command %q: %w", name, err)
+			}
+			cmd.Fields = fields
+		}
+		// the create checkbox posts the row index it belongs to
+		for _, v := range once {
+			if v == strconv.Itoa(i) {
+				cmd.Once = true
+			}
+		}
+		cmd.RequiresExisting = !cmd.Once
+		commands = append(commands, cmd)
+	}
+	if len(commands) == 0 {
+		return nil, errors.New("add at least one command")
+	}
+
+	domain := map[string]any{"aggregate": aggregate, "commands": commands}
+
+	if collection := strings.TrimSpace(r.PostFormValue("collection")); collection != "" {
+		key := strings.TrimSpace(r.PostFormValue("key"))
+		if key == "" {
+			key = aggregate + "Id"
+		}
+		fields, err := parseFieldSpec(r.PostFormValue("readModelFields"))
+		if err != nil {
+			return nil, fmt.Errorf("read model: %w", err)
+		}
+		domain["readModel"] = map[string]any{
+			"collection": collection, "key": key, "fields": fields,
+		}
+	}
+	return domain, nil
+}
+
+// parseFieldSpec reads "title:text, priority:number" into field objects.
+// A bare name defaults to text, which is what people type.
+func parseFieldSpec(spec string) ([]map[string]string, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, nil
+	}
+	var out []map[string]string
+	for _, part := range strings.FieldsFunc(spec, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' }) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		name, typ, found := strings.Cut(part, ":")
+		if !found {
+			typ = "text"
+		}
+		if name == "" {
+			return nil, fmt.Errorf("%q is not a field: write name:type", part)
+		}
+		out = append(out, map[string]string{"name": name, "type": typ})
+	}
+	return out, nil
 }
 
 // ---- dead-letter actions ----

@@ -175,6 +175,9 @@ check:
 
 Every mode answers `200` with `ok`, a `summary` sentence and its mode-specific
 fields; a candidate that fails to load or fold is a `400` carrying the error.
+`projection` also reports `ignoredValues` — values `project()` returned that
+are **not** row ops and would be discarded at runtime, which is what turns a
+mysterious empty collection into a named mistake.
 `decider` and `projection` report `events` as the **count** of history they
 folded; `decide` reports the events it would append under **`produced`** — a
 separate field, because one name meaning two shapes by mode is a trap for
@@ -285,6 +288,38 @@ Reads or sets the system mode barrier. `POST` validates like
 `store.SetMode`: an invalid mode is a `400` and the current mode is
 unchanged. While `maintenance`, domain commands are rejected (`503`) and
 schema-bearing functions may be reloaded.
+
+### Scaffold
+
+```
+POST /api/cqrs/admin/scaffold
+body: {"aggregate": "ticket",
+       "commands": [{"name": "OpenTicket", "event": "TicketOpened", "once": true,
+                     "fields": [{"name": "subject", "type": "text"}]}],
+       "readModel": {"collection": "tickets", "key": "ticketId",
+                     "fields": [{"name": "subject", "type": "text"}]}}
+```
+
+Generates a JS decider and (when a read model is described) a JS projection
+from a description of a slice. It **writes nothing**: the files come back as
+`{files: [{name, source, kind}], hint}` and are saved through
+`PUT /api/cqrs/admin/functions/{name}` like anything else, so generated code
+goes through the same load check, the same dry run and the same maintenance
+barrier. Generated code gets no shortcut.
+
+An invalid model is a `400` listing **every** problem at once, not the first —
+the description is written by a person or an importer, and fixing one issue at
+a time is a poor way to spend either's attention.
+
+Marking a command `once` makes it the slice's create: the generated decider
+refuses it on a stream that already exists, and `requiresExisting` refuses a
+command on a stream that does not. Everything past that — the invariants that
+make this domain rather than any other — is the author's, which is why the
+output is meant to be read and edited rather than shipped.
+
+The generator is deliberately driven by an intermediate model rather than by
+the form that first needed it: the dashboard's wizard and (later) the
+eventmodelschema importer are two front-ends onto the same generator.
 
 ## Write-guard (all collections API routes)
 

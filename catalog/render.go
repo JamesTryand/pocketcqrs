@@ -165,10 +165,22 @@ func (c *Catalog) Skeleton(a Aggregate) string {
 	fmt.Fprintf(&b, "# %s\n\n", a.Name)
 	b.WriteString("<!-- TODO: one paragraph — the business capability this aggregate owns -->\n\n")
 
+	// Commands are the one part of a slice that cannot be recovered from the
+	// log — they leave no trace there — so the skeleton can only fill this
+	// in for an aggregate that DECLARES them (//@commands, or Commands on a
+	// Go decider). Without a declaration the TODO row stands, which is the
+	// honest answer rather than a guess from event names.
 	b.WriteString("## Commands\n\n")
 	b.WriteString("| command | payload | intent | rejects when |\n")
 	b.WriteString("| --- | --- | --- | --- |\n")
-	b.WriteString("| `TODO` | | | |\n\n")
+	if len(a.Commands) == 0 {
+		b.WriteString("| `TODO` | | | |\n")
+		b.WriteString("\n<!-- declare //@commands (JS) or Commands (Go) and this table fills itself in -->\n")
+	}
+	for _, cmd := range a.Commands {
+		fmt.Fprintf(&b, "| `%s` | | | |\n", cmd)
+	}
+	b.WriteString("\n")
 
 	b.WriteString("## Events\n\n")
 	b.WriteString("| event | data | since version | notes |\n")
