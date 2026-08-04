@@ -286,6 +286,17 @@ func (c *BackendClient) FunctionSource(ctx context.Context, token, name string) 
 	return &out, nil
 }
 
+// PreviousFunctionSource reads the copy the backend kept when this file was
+// last overwritten. ErrNotFound-shaped 404s mean there has been no overwrite.
+func (c *BackendClient) PreviousFunctionSource(ctx context.Context, token, name string) (string, error) {
+	var out FunctionFile
+	path := "/api/cqrs/admin/functions/" + url.PathEscape(name) + "/previous"
+	if err := c.do(ctx, http.MethodGet, path, token, nil, &out); err != nil {
+		return "", err
+	}
+	return out.Source, nil
+}
+
 // SaveFunction writes a function file. The backend refuses source that does
 // not load, so a 400 here carries the parse or compile error.
 func (c *BackendClient) SaveFunction(ctx context.Context, token, name, source string) (*SaveResult, error) {
@@ -363,6 +374,9 @@ type FunctionFile struct {
 	Source      string       `json:"source,omitempty"`
 	Declaration *Declaration `json:"declaration,omitempty"`
 	Error       string       `json:"error,omitempty"`
+	// HasPrevious reports that the backend kept a copy from the last
+	// overwrite, so the editor can offer to load it back.
+	HasPrevious bool `json:"hasPrevious,omitempty"`
 }
 
 // Kind reports the file's declared kind, or "unreadable" when it does not
@@ -408,14 +422,17 @@ type DryRunResult struct {
 	Events int `json:"events,omitempty"`
 	// Produced is what a command WOULD append (decide mode) — a separate
 	// field from Events, which is a count.
-	Produced    json.RawMessage     `json:"produced,omitempty"`
-	Name        string              `json:"name,omitempty"`
-	Upserts     int                 `json:"upserts,omitempty"`
-	Deletes     int                 `json:"deletes,omitempty"`
-	Rows        int                 `json:"rows,omitempty"`
-	Collections int                 `json:"collections,omitempty"`
-	State       any                 `json:"state,omitempty"`
-	Diff        map[string][]string `json:"diff,omitempty"`
+	Produced    json.RawMessage `json:"produced,omitempty"`
+	Name        string          `json:"name,omitempty"`
+	Upserts     int             `json:"upserts,omitempty"`
+	Deletes     int             `json:"deletes,omitempty"`
+	Rows        int             `json:"rows,omitempty"`
+	Collections int             `json:"collections,omitempty"`
+	// IgnoredValues counts values project() returned that are not row ops
+	// and would be discarded at runtime.
+	IgnoredValues int                 `json:"ignoredValues,omitempty"`
+	State         any                 `json:"state,omitempty"`
+	Diff          map[string][]string `json:"diff,omitempty"`
 }
 
 // Detail renders the mode-specific part of a dry-run result for display:

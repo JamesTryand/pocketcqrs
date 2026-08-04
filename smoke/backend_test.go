@@ -312,11 +312,52 @@ function project(event) { return [{ upsert: { key: event.data.title, fields: { t
 
 	// read it back
 	var read struct {
-		Source string `json:"source"`
+		Source      string `json:"source"`
+		HasPrevious bool   `json:"hasPrevious"`
 	}
 	h.apiOK(http.MethodGet, "/api/cqrs/admin/functions/titles.js", nil, &read)
 	if !strings.Contains(read.Source, "//@trigger projection titles") {
 		t.Fatal("reading a file did not return the source that was written")
+	}
+	if read.HasPrevious {
+		t.Error("a file written once should have no previous version")
+	}
+	if status, _ := h.api(http.MethodGet, "/api/cqrs/admin/functions/titles.js/previous", nil, nil); status != http.StatusNotFound {
+		t.Errorf("expected 404 for a file that was never overwritten, got %d", status)
+	}
+
+	// overwriting keeps the replaced copy: without it a mis-paste through
+	// the editor is unrecoverable on a deployment whose functions directory
+	// is not version-controlled
+	const replacement = `//@trigger projection titles on TaskCreated
+//@schema titles title:text
+//@key title
+function project(event) { return []; }
+`
+	h.apiOK(http.MethodPut, "/api/cqrs/admin/functions/titles.js",
+		jsonBody(map[string]string{"source": replacement}), nil)
+	h.apiOK(http.MethodGet, "/api/cqrs/admin/functions/titles.js", nil, &read)
+	if !read.HasPrevious || !strings.Contains(read.Source, "return []") {
+		t.Fatalf("the overwrite did not take, or no previous version was kept: %+v", read)
+	}
+	var prev struct {
+		Source string `json:"source"`
+	}
+	h.apiOK(http.MethodGet, "/api/cqrs/admin/functions/titles.js/previous", nil, &prev)
+	if !strings.Contains(prev.Source, "upsert") {
+		t.Fatalf("the previous version is not the source that was replaced: %q", truncate(prev.Source, 120))
+	}
+	// the kept copy is not a .js file, so it must not appear as one
+	var afterList struct {
+		Files []struct {
+			Name string `json:"name"`
+		} `json:"files"`
+	}
+	h.apiOK(http.MethodGet, "/api/cqrs/admin/functions", nil, &afterList)
+	for _, f := range afterList.Files {
+		if strings.HasSuffix(f.Name, ".prev") {
+			t.Errorf("the kept copy %q is listed as a function file", f.Name)
+		}
 	}
 
 	// delete
@@ -359,6 +400,14 @@ function project(event) { return [{ title: event.data.title }]; }
 	}
 	if out["events"].(float64) < 2 || out["upserts"].(float64) != 0 {
 		t.Fatalf("expected folded events with zero upserts, got %v", out)
+	}
+	// and it must NAME the mistake rather than leave a zero to be
+	// interpreted: the same values are silently discarded at runtime
+	if out["ignoredValues"] == nil || out["ignoredValues"].(float64) < 2 {
+		t.Fatalf("the dry run should report the values that are not row ops: %v", out)
+	}
+	if !strings.Contains(out["summary"].(string), "NOT row ops") {
+		t.Errorf("the summary should say so in prose: %q", out["summary"])
 	}
 
 	const right = `//@trigger projection titles on TaskCreated

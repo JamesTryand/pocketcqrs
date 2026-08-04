@@ -167,12 +167,12 @@ func TestReconcileSchemasRelationTargetMissing(t *testing.T) {
 
 func TestNormalizeOps(t *testing.T) {
 	// nil -> none
-	if ops, err := normalizeOps(nil); err != nil || len(ops) != 0 {
+	if ops, _, err := normalizeOps(nil); err != nil || len(ops) != 0 {
 		t.Fatalf("nil: ops=%v err=%v", ops, err)
 	}
 
 	// single upsert
-	ops, err := normalizeOps(map[string]any{
+	ops, _, err := normalizeOps(map[string]any{
 		"upsert": map[string]any{"key": "c1", "fields": map[string]any{"n": 1}},
 	})
 	if err != nil || len(ops) != 1 || ops[0].key != "c1" || ops[0].delete {
@@ -180,13 +180,13 @@ func TestNormalizeOps(t *testing.T) {
 	}
 
 	// single delete
-	ops, err = normalizeOps(map[string]any{"delete": "c1"})
+	ops, _, err = normalizeOps(map[string]any{"delete": "c1"})
 	if err != nil || len(ops) != 1 || !ops[0].delete || ops[0].key != "c1" {
 		t.Fatalf("delete: ops=%v err=%v", ops, err)
 	}
 
 	// array
-	ops, err = normalizeOps([]any{
+	ops, _, err = normalizeOps([]any{
 		map[string]any{"upsert": map[string]any{"key": "a", "fields": map[string]any{}}},
 		map[string]any{"delete": "b"},
 	})
@@ -195,7 +195,7 @@ func TestNormalizeOps(t *testing.T) {
 	}
 
 	// collection attribute routes (both op kinds)
-	ops, err = normalizeOps([]any{
+	ops, _, err = normalizeOps([]any{
 		map[string]any{"collection": "c1", "upsert": map[string]any{"key": "a", "fields": map[string]any{}}},
 		map[string]any{"collection": "c2", "delete": "b"},
 	})
@@ -203,11 +203,25 @@ func TestNormalizeOps(t *testing.T) {
 		t.Fatalf("collection: ops=%v err=%v", ops, err)
 	}
 
+	// an object that is neither an upsert nor a delete is not an error —
+	// returning nothing is legitimate — but it IS counted, so the caller can
+	// say so out loud instead of writing nothing in silence
+	ops, ignored, err := normalizeOps([]any{
+		map[string]any{"title": "not an op"},
+		map[string]any{"upsert": map[string]any{"key": "a", "fields": map[string]any{}}},
+	})
+	if err != nil || len(ops) != 1 || ignored != 1 {
+		t.Fatalf("ignored: ops=%v ignored=%d err=%v", ops, ignored, err)
+	}
+	if _, ignored, err = normalizeOps(map[string]any{"title": "not an op"}); err != nil || ignored != 1 {
+		t.Fatalf("single non-op: ignored=%d err=%v", ignored, err)
+	}
+
 	// malformed
-	if _, err = normalizeOps(map[string]any{"upsert": "nope"}); err == nil {
+	if _, _, err = normalizeOps(map[string]any{"upsert": "nope"}); err == nil {
 		t.Fatal("expected malformed upsert error")
 	}
-	if _, err = normalizeOps(map[string]any{"collection": 42, "delete": "b"}); err == nil {
+	if _, _, err = normalizeOps(map[string]any{"collection": 42, "delete": "b"}); err == nil {
 		t.Fatal("expected non-string collection error")
 	}
 }

@@ -96,6 +96,15 @@
         <wa-button type="submit" name="action" value="save" appearance="outlined">
           <wa-icon slot="start" name="check" library="system"></wa-icon> Save
         </wa-button>
+        {{/* A save is an overwrite; the backend keeps the replaced copy so
+             there is a way back. It loads into the editor rather than
+             saving itself — restoring is an edit like any other, and goes
+             through the same dry run. */}}
+        {{with .File}}{{if .HasPrevious}}
+        <wa-button type="submit" name="action" value="previous" appearance="plain" size="s">
+          Load previous version
+        </wa-button>
+        {{end}}{{end}}
         <wa-spinner class="htmx-indicator" aria-label="running"></wa-spinner>
       </div>
     </form>
@@ -133,12 +142,17 @@
         <span class="wa-caption-m">deletes <strong>{{.Deletes}}</strong></span>
         <span class="wa-caption-m">final rows <strong>{{.Rows}}</strong></span>
       </div>
-      {{/* 0 upserts over a non-empty log is the tell that project() is not
-           returning row ops — the mistake this panel exists to catch */}}
-      {{if and (gt .Events 0) (eq .Upserts 0)}}
+      {{/* The backend counts values that were returned but are not ops, so
+           this can name the mistake rather than infer it from a zero. */}}
+      {{if gt .IgnoredValues 0}}
       <wa-callout variant="warning" size="s">
         <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
-        It folded {{.Events}} event(s) but produced no upserts. Check that <code>project(event)</code> returns row ops &mdash; <code>{upsert: {key, fields}}</code> or <code>{delete: key}</code> &mdash; rather than plain objects, which are silently ignored.
+        <strong>{{.IgnoredValues}} returned value(s) are not row ops</strong> and would be discarded at runtime. <code>project(event)</code> must return <code>{upsert: {key, fields}}</code> or <code>{delete: key}</code> &mdash; a plain object is dropped.
+      </wa-callout>
+      {{else if and (gt .Events 0) (eq .Upserts 0)}}
+      <wa-callout variant="warning" size="s">
+        <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+        It folded {{.Events}} event(s) and produced no upserts. That is correct for a projection that only deletes, or one whose triggers never matched &mdash; otherwise check what <code>project(event)</code> returns.
       </wa-callout>
       {{end}}
       {{end}}

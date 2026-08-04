@@ -153,6 +153,11 @@ type ProjectionDryRun struct {
 	Events  int
 	Upserts int
 	Deletes int
+	// IgnoredValues counts values project() returned that were not row ops.
+	// They are dropped at runtime too, so a projection that returns plain
+	// rows writes nothing — this is what lets a dry run say so out loud
+	// rather than just reporting zero upserts.
+	IgnoredValues int
 	// Rows is the final simulated row set per collection
 	// (collection -> key -> fields), mirroring applyOp semantics
 	// (upsert merges, delete removes).
@@ -186,10 +191,11 @@ func DryRunProjection(store *events.Store, spec *ProjectionSpec) (*ProjectionDry
 			if err != nil {
 				return nil, fmt.Errorf("dryrun: projection %s failed at event %d: %w", spec.Name, ev.Position, err)
 			}
-			ops, err := normalizeOps(result)
+			ops, ignored, err := normalizeOps(result)
 			if err != nil {
 				return nil, fmt.Errorf("dryrun: projection %s: %w", spec.Name, err)
 			}
+			out.IgnoredValues += ignored
 			for _, op := range ops {
 				s, err := spec.resolveSchema(op)
 				if err != nil {

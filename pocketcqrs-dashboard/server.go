@@ -632,11 +632,14 @@ func (s *server) functionAction(w http.ResponseWriter, r *http.Request, token st
 			flashMessage{"danger", "Give the file a name before saving or dry-running it (for example my_function.js)."}, nil)
 		return
 	}
-	if r.PostFormValue("action") == "save" {
+	switch r.PostFormValue("action") {
+	case "save":
 		s.saveFunction(w, r, token, name)
-		return
+	case "previous":
+		s.loadPreviousFunction(w, r, token, name)
+	default:
+		s.dryRunFunction(w, r, token, name)
 	}
-	s.dryRunFunction(w, r, token, name)
 }
 
 // saveFunction writes the edited source. The backend refuses source that
@@ -659,6 +662,24 @@ func (s *server) saveFunction(w http.ResponseWriter, r *http.Request, token, nam
 		flash = flashMessage{"danger", "Not saved — " + backendDetail(err)}
 	}
 	s.renderEditor(w, r, token, name, source, flash, nil)
+}
+
+// loadPreviousFunction puts the copy kept from the last overwrite back in
+// the editor. It does NOT save it: the operator looks at it, dry-runs it,
+// and saves if that is what they wanted — the same path as any other edit.
+func (s *server) loadPreviousFunction(w http.ResponseWriter, r *http.Request, token, name string) {
+	source, err := s.backend.PreviousFunctionSource(r.Context(), token, name)
+	switch {
+	case err == nil:
+		s.renderEditor(w, r, token, name, source,
+			flashMessage{"warning", "This is the version replaced by the last save — it is in the editor, not saved. Save it to put it back."}, nil)
+	case errors.Is(err, ErrUnauthorized):
+		clearAuthCookie(w)
+		s.redirectToLogin(w, r)
+	default:
+		s.renderEditor(w, r, token, name, r.PostFormValue("source"),
+			flashMessage{"danger", "No previous version to load — " + backendDetail(err)}, nil)
+	}
 }
 
 // deleteFunction removes a file. What it registered keeps serving until a

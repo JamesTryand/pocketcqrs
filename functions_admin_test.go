@@ -206,24 +206,27 @@ func TestDeclaresReportsBadSchema(t *testing.T) {
 	}
 }
 
-// TestDeclaresMatchesLoaderTolerance pins the one quirk deliberately left in
-// place: cron is not counted by the single-purpose check, so a cron+projection
-// file is still tolerated (projection wins) rather than becoming a boot
-// failure. If this ever changes it should be a decision, not a side effect.
-func TestDeclaresMatchesLoaderTolerance(t *testing.T) {
-	d, err := functions.Declares("odd.js",
-		"//@trigger cron * * * * *\n//@trigger projection p on X\n//@schema ps a:number\n//@key a\n")
-	if err != nil {
-		t.Fatalf("cron+projection should still be tolerated: %v", err)
-	}
-	if d.Kind != functions.KindProjection {
-		t.Errorf("projection should win the classification, got %q", d.Kind)
+// TestDeclaresRefusesMixedPurpose: single-purpose means single-purpose. A
+// cron+projection file used to load with its cron trigger silently
+// discarded — a job that simply never ran, with nothing said anywhere.
+func TestDeclaresRefusesMixedPurpose(t *testing.T) {
+	for name, src := range map[string]string{
+		"cron + projection":  "//@trigger cron * * * * *\n//@trigger projection p on X\n//@schema ps a:number\n//@key a\n",
+		"projection+decider": "//@trigger projection p on X\n//@trigger decider a\n",
+		"event + decider":    "//@trigger event X\n//@trigger decider a\n//@handles X\n",
+	} {
+		_, err := functions.Declares("mixed.js", src)
+		if err == nil || !strings.Contains(err.Error(), "single-purpose") {
+			t.Errorf("%s must be refused as not single-purpose, got %v", name, err)
+		}
 	}
 
-	// projection + decider remains refused
-	if _, err := functions.Declares("bad.js",
-		"//@trigger projection p on X\n//@trigger decider a\n"); err == nil ||
-		!strings.Contains(err.Error(), "single-purpose") {
-		t.Errorf("projection+decider must be refused as not single-purpose, got %v", err)
+	// the ordinary combinations still load: an effect file may declare
+	// events, HTTP and cron together
+	if d, err := functions.Declares("mixed_effects.js",
+		"//@trigger event X\n//@trigger http\n//@trigger cron * * * * *\n"); err != nil {
+		t.Errorf("event+http+cron is one effect-tier file and must load: %v", err)
+	} else if d.Kind != functions.KindEffect {
+		t.Errorf("expected the effect tier, got %q", d.Kind)
 	}
 }

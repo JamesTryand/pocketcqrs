@@ -77,13 +77,14 @@ func declaration(name string, t triggers) (*Declaration, error) {
 		return d, nil
 	}
 
-	// The single-purpose check counts event/http but NOT cron, exactly as
-	// the loader always has. A file declaring both a cron job and a
-	// projection is therefore still tolerated, with the projection winning
-	// and the cron trigger silently dropped — a latent quirk, left as it is
-	// rather than turned into a boot failure by a classification change.
+	// Single-purpose means single-purpose, cron included. This used to count
+	// event/http but not cron, so a file declaring both a cron job and a
+	// projection loaded happily with the cron trigger silently discarded —
+	// the same class of quiet wrong-doing as a projection returning
+	// non-ops. Nothing sensible declares both, and a refusal names the
+	// problem where a silent drop leaves a job that simply never runs.
 	kinds := 0
-	if len(t.eventTypes) > 0 || t.isHTTP {
+	if len(t.eventTypes) > 0 || t.isHTTP || t.cron != "" {
 		kinds++
 	}
 	if t.projection != "" {

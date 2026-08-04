@@ -66,6 +66,9 @@ type functionFile struct {
 	// them; nil when the file does not parse (Error then says why).
 	Declaration *functions.Declaration `json:"declaration,omitempty"`
 	Error       string                 `json:"error,omitempty"`
+	// HasPrevious reports that a copy was kept when this file was last
+	// overwritten, so a caller can offer to load it back.
+	HasPrevious bool `json:"hasPrevious,omitempty"`
 }
 
 // registerFunctionAdminRoutes binds the superuser-only function-file API:
@@ -108,12 +111,31 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 		}
 		name := filepath.Base(path)
 		out := map[string]any{"name": name, "source": string(raw)}
+		if _, err := os.Stat(path + previousSuffix); err == nil {
+			out["hasPrevious"] = true
+		}
 		if d, derr := functions.Declares(name, string(raw)); derr == nil {
 			out["declaration"] = d
 		} else {
 			out["error"] = derr.Error()
 		}
 		return re.JSON(http.StatusOK, out)
+	}).Bind(apis.RequireSuperuserAuth())
+
+	// the copy kept when this file was last overwritten — the undo a bare
+	// os.WriteFile does not give you
+	e.Router.GET("/api/cqrs/admin/functions/{name}/previous", func(re *core.RequestEvent) error {
+		path, err := resolveFunctionPath(functionsDir, re.Request.PathValue("name"))
+		if err != nil {
+			return apis.NewBadRequestError(err.Error(), err)
+		}
+		raw, err := os.ReadFile(path + previousSuffix)
+		if err != nil {
+			return apis.NewNotFoundError("no previous version of this function file", err)
+		}
+		return re.JSON(http.StatusOK, map[string]any{
+			"name": filepath.Base(path), "source": string(raw),
+		})
 	}).Bind(apis.RequireSuperuserAuth())
 
 	e.Router.PUT("/api/cqrs/admin/functions/{name}", func(re *core.RequestEvent) error {
@@ -143,7 +165,10 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 		// writes take the reload lock: a reload reads the whole directory,
 		// and a write landing mid-read would tear the load
 		c.reloadMu.Lock()
-		err = os.WriteFile(path, []byte(body.Source), 0o644)
+		replaced, err := keepPreviousVersion(path)
+		if err == nil {
+			err = os.WriteFile(path, []byte(body.Source), 0o644)
+		}
 		c.reloadMu.Unlock()
 		if err != nil {
 			return apis.NewBadRequestError("failed writing the function file: "+err.Error(), err)
@@ -152,6 +177,7 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			"name":        name,
 			"declaration": decl,
 			"active":      false,
+			"hasPrevious": replaced,
 			"hint":        activationHint(decl),
 		})
 	}).Bind(apis.RequireSuperuserAuth())
@@ -177,6 +203,32 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 	e.Router.POST("/api/cqrs/admin/dryrun", func(re *core.RequestEvent) error {
 		return c.handleDryRun(re)
 	}).Bind(apis.RequireSuperuserAuth())
+}
+
+// previousSuffix marks the copy kept when a file is overwritten. It is not
+// a .js file, so the loader ignores it and the listing does not show it.
+const previousSuffix = ".prev"
+
+// keepPreviousVersion copies the file about to be overwritten aside, and
+// reports whether there was one.
+//
+// A save through the API is otherwise a bare overwrite with no undo. In this
+// repo the function files happen to be version-controlled; in a deployment —
+// which is exactly where the editor is used — the functions directory
+// usually is not, so a mis-paste is unrecoverable. One previous version is
+// not history, but it turns "gone" into "one click back".
+func keepPreviousVersion(path string) (bool, error) {
+	current, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil // a new file has no previous version
+		}
+		return false, err
+	}
+	if err := os.WriteFile(path+previousSuffix, current, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // activationHint says what it takes to make a saved file live. Saving is
@@ -343,12 +395,18 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 		for _, r := range res.Rows {
 			rows += len(r)
 		}
+		summary := fmt.Sprintf("Simulated %q over %d event(s) in memory: %d upsert(s), %d delete(s), %d final row(s) across %d collection(s).",
+			res.Name, res.Events, res.Upserts, res.Deletes, rows, len(spec.Schemas))
+		if res.IgnoredValues > 0 {
+			summary += fmt.Sprintf(" %d returned value(s) were NOT row ops and would be discarded at runtime.",
+				res.IgnoredValues)
+		}
 		out := map[string]any{
 			"mode": req.Mode, "ok": true, "name": res.Name,
 			"events": res.Events, "upserts": res.Upserts, "deletes": res.Deletes,
 			"rows": rows, "collections": len(spec.Schemas),
-			"summary": fmt.Sprintf("Simulated %q over %d event(s) in memory: %d upsert(s), %d delete(s), %d final row(s) across %d collection(s).",
-				res.Name, res.Events, res.Upserts, res.Deletes, rows, len(spec.Schemas)),
+			"ignoredValues": res.IgnoredValues,
+			"summary":       summary,
 		}
 		if req.Diff {
 			diffs, err := c.diffProjection(spec, res)
@@ -405,6 +463,9 @@ func listFunctionFiles(dir string) ([]functionFile, error) {
 		if info, err := entry.Info(); err == nil {
 			f.Size = info.Size()
 			f.Modified = info.ModTime().UTC().Format("2006-01-02 15:04:05.000Z")
+		}
+		if _, err := os.Stat(filepath.Join(dir, entry.Name()+previousSuffix)); err == nil {
+			f.HasPrevious = true
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if err != nil {

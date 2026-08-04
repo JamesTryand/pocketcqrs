@@ -66,9 +66,20 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 		return err
 	}
 
-	ops, err := normalizeOps(result)
+	ops, ignored, err := normalizeOps(result)
 	if err != nil {
 		return fmt.Errorf("projection %s: %w", p.spec.Name, err)
+	}
+	// An object that is neither an upsert nor a delete is not an op, and was
+	// silently discarded: a projection returning plain rows wrote nothing,
+	// forever, without a word. It is not an error — returning nothing is a
+	// legitimate outcome and projections BLOCK on error — but it must be
+	// audible, because the symptom (an empty collection) points nowhere near
+	// the cause. The dry run says the same thing before it ever ships.
+	if ignored > 0 {
+		p.spec.runtime.logger("projection returned values that are not row ops, ignored",
+			"projection", p.spec.Name, "event", ev.Type, "position", ev.Position, "ignored", ignored,
+			"hint", "project(event) must return {upsert:{key,fields}} or {delete:key}")
 	}
 
 	ctx = writeguard.MarkInternal(ctx)
@@ -167,28 +178,36 @@ type rowOp struct {
 // normalizeOps converts the project() return value into row ops:
 // undefined/null -> none; {upsert:{key,fields}} / {delete:key} -> one;
 // an array of those -> many. Each op may carry a "collection" attribute.
-func normalizeOps(result any) ([]rowOp, error) {
+//
+// It also reports how many returned values were objects but not ops, so the
+// caller can say so — silently dropping them is how a projection ends up
+// writing nothing with no explanation anywhere.
+func normalizeOps(result any) (ops []rowOp, ignored int, err error) {
 	if result == nil {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if list, ok := result.([]any); ok {
-		var ops []rowOp
 		for _, item := range list {
 			op, ok, err := normalizeOp(item)
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			if ok {
 				ops = append(ops, op)
+			} else {
+				ignored++
 			}
 		}
-		return ops, nil
+		return ops, ignored, nil
 	}
 	op, ok, err := normalizeOp(result)
-	if err != nil || !ok {
-		return nil, err
+	if err != nil {
+		return nil, 0, err
 	}
-	return []rowOp{op}, nil
+	if !ok {
+		return nil, 1, nil
+	}
+	return []rowOp{op}, 0, nil
 }
 
 func normalizeOp(v any) (rowOp, bool, error) {

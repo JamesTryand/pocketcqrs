@@ -88,10 +88,11 @@ previous code keeps serving.
 ### Function files
 
 ```
-GET    /api/cqrs/admin/functions           list the functions directory
-GET    /api/cqrs/admin/functions/{name}    read one file's source
-PUT    /api/cqrs/admin/functions/{name}    write it   body: {"source": "..."}
-DELETE /api/cqrs/admin/functions/{name}    remove it
+GET    /api/cqrs/admin/functions                    list the functions directory
+GET    /api/cqrs/admin/functions/{name}             read one file's source
+GET    /api/cqrs/admin/functions/{name}/previous    the copy kept by the last overwrite
+PUT    /api/cqrs/admin/functions/{name}             write it   body: {"source": "..."}
+DELETE /api/cqrs/admin/functions/{name}             remove it
 ```
 
 **Auth**: superuser token required (`401` otherwise).
@@ -139,6 +140,14 @@ directory would abort every later reload — including the one that fixes it.
 `"active": false` and a hint: nothing is live until
 `POST /api/cqrs/admin/reload`, and a schema-bearing file needs maintenance
 mode first. A deleted file keeps serving until that reload drops it.
+
+**Overwriting keeps one copy.** A `PUT` over an existing file first copies it
+to `<name>.js.prev` and reports `"hasPrevious": true`; `GET .../previous`
+returns that source. It is not history — one version, overwritten by the next
+save — but the functions directory of a deployment is usually not
+version-controlled, and without it a mis-paste through the editor is
+unrecoverable. `.prev` files are not `.js`, so the loader ignores them and the
+listing does not show them.
 
 ### Dry run
 

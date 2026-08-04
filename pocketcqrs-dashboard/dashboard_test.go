@@ -284,15 +284,20 @@ func fakeBackend(t *testing.T) *httptest.Server {
 		}
 		switch mode {
 		case "projection":
-			// a projection returning no row ops: folded events, zero upserts
-			upserts := 4
-			if strings.Contains(src, "return []") {
-				upserts = 0
+			// mirror the real backend: a projection returning plain objects
+			// folds events, produces no upserts, and REPORTS how many
+			// returned values were not row ops
+			upserts, ignored := 4, 0
+			if strings.Contains(src, "return [{ title") {
+				upserts, ignored = 0, 6
+			} else if strings.Contains(src, "return []") {
+				upserts = 0 // legitimately empty: nothing returned, nothing ignored
 			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"mode": mode, "ok": true, "name": "notes", "events": 6,
 				"upserts": upserts, "deletes": 0, "rows": upserts, "collections": 1,
-				"summary": "Simulated \"notes\" over 6 event(s) in memory.",
+				"ignoredValues": ignored,
+				"summary":       "Simulated \"notes\" over 6 event(s) in memory.",
 			})
 		case "decide":
 			json.NewEncoder(w).Encode(map[string]any{
@@ -796,17 +801,34 @@ func TestFunctionDryRun(t *testing.T) {
 	client := dashboardClient(t)
 	login(t, client, dash.URL)
 
-	// a projection that returns no row ops: folded events, zero upserts
+	// a projection returning plain objects instead of row ops: the panel
+	// names the mistake from the backend's count, rather than inferring it
+	// from a zero
 	resp := htmxPost(t, client, dash.URL+"/functions/act", url.Values{
 		"name": {"notes.js"}, "mode": {"projection"},
-		"source": {"//@trigger projection notes on NoteCreated\nfunction project(e) { return []; }"},
+		"source": {"//@trigger projection notes on NoteCreated\nfunction project(e) { return [{ title: e.data.title }]; }"},
 	})
 	body := readBody(t, resp)
 	resp.Body.Close()
-	for _, want := range []string{"Dry run", "Simulated", "no upserts", "row ops"} {
+	for _, want := range []string{"Dry run", "Simulated", "are not row ops", "discarded at runtime"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("the zero-upsert warning is missing %q", want)
+			t.Errorf("the non-op warning is missing %q", want)
 		}
+	}
+
+	// a projection that legitimately returns nothing gets the softer note,
+	// not an accusation
+	resp = htmxPost(t, client, dash.URL+"/functions/act", url.Values{
+		"name": {"notes.js"}, "mode": {"projection"},
+		"source": {"//@trigger projection notes on NoteCreated\nfunction project(e) { return []; }"},
+	})
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if strings.Contains(body, "are not row ops") {
+		t.Error("an empty projection should not be reported as returning non-ops")
+	}
+	if !strings.Contains(body, "produced no upserts") {
+		t.Error("an empty projection should still be noted")
 	}
 
 	// naming a command turns the fold into "what would this command do"
