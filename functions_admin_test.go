@@ -154,6 +154,58 @@ func TestListFunctionFilesClassifies(t *testing.T) {
 	}
 }
 
+// TestCheckFunctionSourceRefusesBadCron is the regression test for a file
+// that could be WRITTEN and then abort every later reload — defeating the
+// whole point of refusing unloadable writes. Compiling is not the whole
+// check for the effect tier: the cron service parses the schedule too, and
+// it does so after the effect tier has already been swapped, so a bad one
+// used to leave a reload half-applied as well.
+func TestCheckFunctionSourceRefusesBadCron(t *testing.T) {
+	c := &components{} // the effect tier needs no app and no store
+
+	for _, src := range []string{
+		"//@trigger cron 99 99 99 99 99\nconsole.log('tick');\n",
+		"//@trigger cron not a schedule at all\nconsole.log('tick');\n",
+		"//@trigger cron * * *\nconsole.log('tick');\n", // too few segments
+	} {
+		if _, err := c.checkFunctionSource("badcron.js", src); err == nil {
+			t.Errorf("an unusable cron schedule was accepted: %q", strings.SplitN(src, "\n", 2)[0])
+		}
+	}
+
+	// a real schedule still passes, macros included
+	for _, src := range []string{
+		"//@trigger cron * * * * *\nconsole.log('tick');\n",
+		"//@trigger cron 0 3 * * 1\nconsole.log('weekly');\n",
+		"//@trigger cron @daily\nconsole.log('macro');\n",
+	} {
+		if _, err := c.checkFunctionSource("goodcron.js", src); err != nil {
+			t.Errorf("a valid schedule was refused: %q: %v", strings.SplitN(src, "\n", 2)[0], err)
+		}
+	}
+}
+
+// TestDeclaresReportsBadSchema: the listing exists to surface the file that
+// blocks reloads, so a malformed //@schema must not render as a healthy
+// projection that merely owns no collections.
+func TestDeclaresReportsBadSchema(t *testing.T) {
+	dir := t.TempDir()
+	src := "//@trigger projection p on X\n//@schema\n//@key a\nfunction project() {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "badschema.js"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := functions.Declares("badschema.js", src); err == nil {
+		t.Error("a malformed //@schema was reported as a clean declaration")
+	}
+	files, err := listFunctionFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Error == "" || files[0].Declaration != nil {
+		t.Errorf("the listing should show the file with its error, got %+v", files[0])
+	}
+}
+
 // TestDeclaresMatchesLoaderTolerance pins the one quirk deliberately left in
 // place: cron is not counted by the single-purpose check, so a cron+projection
 // file is still tolerated (projection wins) rather than becoming a boot

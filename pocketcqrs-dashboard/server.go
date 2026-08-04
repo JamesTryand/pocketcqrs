@@ -624,7 +624,13 @@ func (s *server) functions(w http.ResponseWriter, r *http.Request, token string)
 func (s *server) functionAction(w http.ResponseWriter, r *http.Request, token string) {
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	if name == "" {
-		name = "new.js"
+		// no silent default: an empty name used to write "new.js", and the
+		// wa-input's `required` does not save us — Web Awesome validates on
+		// the native submit path, which htmx never takes (the same gap that
+		// made CodeMirror write through to the textarea necessary)
+		s.renderEditor(w, r, token, "", r.PostFormValue("source"),
+			flashMessage{"danger", "Give the file a name before saving or dry-running it (for example my_function.js)."}, nil)
+		return
 	}
 	if r.PostFormValue("action") == "save" {
 		s.saveFunction(w, r, token, name)

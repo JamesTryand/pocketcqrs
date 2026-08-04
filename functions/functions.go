@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
+	"github.com/pocketbase/pocketbase/tools/cron"
 
 	"github.com/JamesTryand/pocketcqrs/consumers"
 	"github.com/JamesTryand/pocketcqrs/events"
@@ -98,6 +99,15 @@ func (r *GojaRuntime) RegisterEventFunction(eventTypes []string, name, source st
 // RegisterCronFunction compiles source as name and schedules it for
 // cron-triggered execution (effect tier: script body runs per tick).
 func (r *GojaRuntime) RegisterCronFunction(schedule, name, source string) error {
+	// Validate the schedule HERE, where loading happens, not later where the
+	// job is added to the cron service. A reload loads into a fresh runtime
+	// first precisely so a bad file cannot touch live structures — but the
+	// cron service is fed after the effect tier has already been swapped, so
+	// an unparseable schedule used to abort the reload half-applied. It also
+	// meant such a file could be written and then block EVERY later reload.
+	if _, err := cron.NewSchedule(schedule); err != nil {
+		return fmt.Errorf("functions: %s: invalid cron schedule %q: %w", name, schedule, err)
+	}
 	prog, err := goja.Compile(name, source, false)
 	if err != nil {
 		return fmt.Errorf("functions: compile %s: %w", name, err)

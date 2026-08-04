@@ -107,10 +107,15 @@ func declaration(name string, t triggers) (*Declaration, error) {
 		d.Kind = KindEffect
 	}
 
+	// A malformed //@schema is reported, not skipped: the listing's whole
+	// job is to surface the file that will block a reload, and a projection
+	// shown as healthy-with-no-collections would hide exactly that.
 	for _, rs := range t.schemas {
-		if s, err := parseSchemaDirective(rs.raw, rs.key); err == nil {
-			d.Collections = append(d.Collections, s.Collection)
+		s, err := parseSchemaDirective(rs.raw, rs.key)
+		if err != nil {
+			return nil, fmt.Errorf("functions: %s: %w", name, err)
 		}
+		d.Collections = append(d.Collections, s.Collection)
 	}
 	d.SchemaBearing = d.Kind == KindProjection || d.Kind == KindDecider
 	return d, nil

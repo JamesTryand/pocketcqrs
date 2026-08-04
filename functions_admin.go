@@ -208,9 +208,18 @@ func (c *components) checkFunctionSource(name, src string) (*functions.Declarati
 			return nil, err
 		}
 	default:
-		// effect/http/cron: compiling is the whole check
+		// effect/http/cron: compile it, and mirror the one other thing
+		// LoadDir does for this tier — validate a cron schedule. Compiling
+		// alone let a file with an impossible schedule be written, and it
+		// then aborted EVERY later reload, which is precisely what refusing
+		// unloadable writes exists to prevent.
 		if err := rt.RegisterEventFunction([]string{"__check"}, name, src); err != nil {
 			return nil, err
+		}
+		if decl.Cron != "" {
+			if err := rt.RegisterCronFunction(decl.Cron, name, src); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return decl, nil

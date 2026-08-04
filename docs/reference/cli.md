@@ -83,6 +83,15 @@ pocketcqrs dryrun projection <file.js> [--diff]
   (read-modify-write style) are not `--diff`-clean — the simulation reads
   the already-projected state. Recompute-style projections diff cleanly.
 
+The same checks run over HTTP at
+[`POST /api/cqrs/admin/dryrun`](gateway.md#dry-run) (source in the body
+rather than a path, so the ops dashboard's editor can dry-run code that has
+never been written to disk), and from the dashboard's Functions page. One
+difference worth knowing: the HTTP `decider` mode also applies the gate a
+reload applies — the contract probe and `//@handles` coverage — so it answers
+"would a reload accept this?", which folding alone cannot for an aggregate
+with no history yet.
+
 ## system
 
 ```sh

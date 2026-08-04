@@ -765,6 +765,28 @@ func TestFunctionSaveAndRefusal(t *testing.T) {
 	}
 }
 
+// TestFunctionNameRequired: an empty name must be refused, not defaulted.
+// wa-input's `required` only fires on the native submit path, which htmx
+// never takes — so the server has to say it.
+func TestFunctionNameRequired(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	resp := htmxPost(t, client, dash.URL+"/functions/act",
+		url.Values{"action": {"save"}, "name": {"  "}, "source": {"//@trigger event X\n"}})
+	body := readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "Give the file a name") {
+		t.Error("an empty file name was accepted instead of being reported")
+	}
+	if strings.Contains(body, "new.js") {
+		t.Error("an empty name silently became new.js")
+	}
+}
+
 // TestFunctionDryRun: the dry run reports findings about the CODE — a
 // candidate the backend refuses is the dry run working, not a page error.
 func TestFunctionDryRun(t *testing.T) {
