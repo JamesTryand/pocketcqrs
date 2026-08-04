@@ -39,6 +39,7 @@ func TestDashboardBrowsing(t *testing.T) {
 		{"/consumers", []string{"Checkpoints", "Dead letters", "caught up"}},
 		{"/system", []string{"Mode barrier", "Hot reload", "Running."}},
 		{"/functions", []string{"audit.js", "pb_functions", `id="function-source"`}},
+		{"/scaffold", []string{"Scaffold a slice", `name="aggregate"`, `name="commandName"`, "writes <strong>nothing</strong>"}},
 	} {
 		status, body := h.dash(http.MethodGet, tc.path, nil, false)
 		if status != http.StatusOK {

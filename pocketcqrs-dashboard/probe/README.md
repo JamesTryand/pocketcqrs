@@ -9,6 +9,7 @@ one exists because it caught a real defect that every other gate passed:
 | `live.mjs` | htmx polls fire, swapped-in rows are re-processed, a `<wa-tag>` arriving in a swap upgrades, and an out-of-band rider updates a figure outside the swapped table | polling that stops after one tick, and swapped rows rendering as undefined elements — both silent |
 | `system.mjs` | the System page boots, the reload indicator is hidden while idle, and the report swaps in place | — |
 | `editor.mjs` | CodeMirror attaches, **writes through to the `<textarea>` htmx submits**, re-attaches after a swap, and the typed source is what reaches the backend | a save that landed and was then overwritten by a second request the same click fired; every endpoint's own test passed |
+| `scaffold.mjs` | the wizard's components boot, and filling it in a browser really generates a slice | Web Awesome inputs are form-associated custom elements: their values reach a plain form submit, which no server-side test can confirm |
 
 They complement `go test -tags=smoke ./smoke/`, which covers everything
 reachable over HTTP. Anything involving a shadow DOM, a canvas, a timer or a

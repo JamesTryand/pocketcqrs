@@ -9,7 +9,8 @@
     "components": "node components.mjs",
     "live": "node live.mjs",
     "system": "node system.mjs",
-    "editor": "node editor.mjs"
+    "editor": "node editor.mjs",
+    "scaffold": "node scaffold.mjs"
   },
   "dependencies": {
     "puppeteer-core": "^25.4.0"
