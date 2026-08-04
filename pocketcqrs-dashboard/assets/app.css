@@ -196,8 +196,14 @@ wa-page[view='mobile'] {
 /* ---- function editor (DASH.5) ---------------------------------------- */
 
 /* Three panels: the file list stays narrow, the editor takes the rest, and
-   the dry-run result runs full width beneath both. Below the wa-page mobile
-   breakpoint they stack, which the single-column default already does. */
+   the dry-run result runs full width beneath both.
+
+   The rem values here are deliberate, and the same call as --menu-width and
+   the explorer's height above: Web Awesome's scales cover spacing, type,
+   radius and colour, but there is no token for a grid track width or a
+   layout breakpoint. Per the design system's own guidance this is the
+   "extend it, once, in a reused class" case rather than the "reach for a raw
+   value" mistake — so it is defined here once, not inline per element. */
 .editor-grid {
   grid-template-columns: minmax(14rem, 20rem) 1fr;
   align-items: start;
