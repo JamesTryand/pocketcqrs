@@ -80,19 +80,41 @@ check(swapped.hasBody && swapped.powered, 'the swapped-in table body is htmx-pro
 check(swapped.defined && swapped.shadow, 'a <wa-tag> inside swapped rows upgraded', JSON.stringify(swapped));
 
 // ------------------------------------------------- out-of-band rider, live
+//
+// Assert the count MOVES rather than that it starts at zero: the probe must
+// not care what the instance already had in it. It installs its own poison
+// function too, so it does not depend on the instance being hand-prepared.
+const pendingCount = (text) => {
+  const m = /(\d+) pending/.exec(text ?? '');
+  return m ? Number(m[1]) : 0;
+};
+const admin = (path, init) =>
+  fetch(`${API}${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', Authorization: token, ...(init?.headers ?? {}) },
+  });
+
+await admin('/api/cqrs/admin/functions/probe_poison.js', {
+  method: 'PUT',
+  body: JSON.stringify({
+    source: '//@trigger event TaskCreated\nthrow new Error("probe: poisoned delivery");\n',
+  }),
+});
+await admin('/api/cqrs/admin/reload', { method: 'POST' }); // effect tier: any mode
+await sleep(500);
+
 const pendingBefore = await page.evaluate(() => document.querySelector('#dl-pending')?.textContent.trim());
-await fetch(`${API}/api/cqrs/task/probe-1/CreateTask`, {
+await admin(`/api/cqrs/task/probe-${Date.now()}/CreateTask`, {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json', Authorization: token },
   body: JSON.stringify({ title: 'probe' }),
 });
-// the effect function is poisoned again, so this becomes a dead letter; the
-// page is never reloaded — only the 2s poll and its OOB rider can show it
+// that delivery fails, so it becomes a dead letter. The page is never
+// reloaded — only the 2s poll and its out-of-band rider can show it.
 await sleep(6000);
 const pendingAfter = await page.evaluate(() => document.querySelector('#dl-pending')?.textContent.trim());
 const headAfter = await page.evaluate(() => document.querySelector('#log-head')?.textContent.trim());
 check(
-  /none pending/.test(pendingBefore ?? '') && /\d+ pending/.test(pendingAfter ?? ''),
+  pendingCount(pendingAfter) > pendingCount(pendingBefore),
   'a new dead letter reaches the header count with no reload (out-of-band swap)',
   `before="${pendingBefore}" after="${pendingAfter}"`,
 );

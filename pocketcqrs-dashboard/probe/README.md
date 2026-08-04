@@ -54,14 +54,13 @@ check, plus any page error or console warning — a probe that passes but logs
 a console error still fails, because that is usually a component failing
 quietly.
 
-`live.mjs` needs a **poisoned** effect function present so a dead letter can
-appear while the page sits open (that is how it proves the out-of-band swap
-works end to end). Use `pb_functions/` containing:
-
-```js
-//@trigger event TaskCreated
-throw new Error("poison: sink refused " + event.type);
-```
+The probes bring their own fixtures: `live.mjs` installs a poisoned effect
+function through the admin API so a dead letter appears while the page sits
+open (that is how it proves the out-of-band swap end to end), and
+`editor.mjs` writes the file it then edits. They assert that counts **move**
+rather than that they start at zero, so an instance you have already been
+using is fine — a probe that only passes against a hand-prepared instance is
+a probe nobody else can run.
 
 ## Configuration
 

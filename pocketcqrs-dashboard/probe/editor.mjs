@@ -35,7 +35,17 @@ page.on('console', (m) => {
 });
 await page.setCookie({ name: 'pcqrs_auth', value: token, domain: '127.0.0.1', path: '/', httpOnly: true });
 
-await page.goto(BASE + '/functions/audit.js', { waitUntil: 'networkidle2' });
+// The probe brings its own file rather than assuming one the instance
+// happens to contain: an editor probe that silently opens "no such file"
+// would report a missing editor rather than a missing fixture.
+const FILE = 'probe_editor.js';
+await fetch(`${API}/api/cqrs/admin/functions/${FILE}`, {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json', Authorization: token },
+  body: JSON.stringify({ source: '//@trigger event TaskCreated\nconsole.log("probe fixture");\n' }),
+});
+
+await page.goto(`${BASE}/functions/${FILE}`, { waitUntil: 'networkidle2' });
 await sleep(900);
 
 // 1. CodeMirror attached to the textarea
@@ -74,7 +84,7 @@ await page.evaluate(() => {
   document.querySelector('wa-button[value="save"]').click();
 });
 await sleep(1800);
-const saved = await (await fetch(`${API}/api/cqrs/admin/functions/audit.js`, { headers: { Authorization: token } })).json();
+const saved = await (await fetch(`${API}/api/cqrs/admin/functions/${FILE}`, { headers: { Authorization: token } })).json();
 check(
   (saved.source || '').includes('typed in the browser'),
   'the source typed in the browser is what reached the backend',
