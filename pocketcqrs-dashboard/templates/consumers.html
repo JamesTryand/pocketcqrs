@@ -211,7 +211,10 @@
 </wa-card>
 
 <wa-card>
-  <div slot="header" class="wa-cluster wa-gap-s wa-align-items-baseline">
+  {{/* aria-live sits on the STABLE wrapper, not on the badge: the badge is
+       replaced wholesale by the out-of-band swap, and a live region that is
+       itself replaced is not reliably announced. */}}
+  <div slot="header" class="wa-cluster wa-gap-s wa-align-items-baseline" aria-live="polite">
     <h2>Dead letters</h2>
     <span id="dl-pending">
       {{if gt .Pending 0}}<wa-tag size="s" variant="danger">{{.Pending}} pending</wa-tag>{{else}}<wa-tag size="s" variant="success" appearance="outlined">none pending</wa-tag>{{end}}

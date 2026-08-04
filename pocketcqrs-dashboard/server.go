@@ -36,7 +36,9 @@ var pages = []string{
 //
 // Both live panels are catalog-backed, and the catalog re-derives its log
 // statistics on each call, so this is deliberately one dial rather than a
-// per-panel guess. htmx 4 has no "stop polling" status code (2.x's 286 is
+// per-panel guess — measured at ~4ms per fragment (dashboard + backend round
+// trip, 20 requests) on the DASH.4 smoke instance, which two seconds carries
+// comfortably. htmx 4 has no "stop polling" status code (2.x's 286 is
 // gone from the 4.0.0-beta6 build): polling stops because the swapped-in
 // element carries no hx-trigger, which is why every polled fragment renders
 // its own trigger attributes.
