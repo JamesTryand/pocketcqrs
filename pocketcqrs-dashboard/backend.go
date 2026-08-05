@@ -323,14 +323,19 @@ func (c *BackendClient) DeleteFunction(ctx context.Context, token, name string) 
 // Scaffold generates a slice's source from a domain description. It writes
 // nothing: the files come back for review, dry run and save through the
 // ordinary function-file API.
-func (c *BackendClient) Scaffold(ctx context.Context, token string, domain any) ([]GeneratedFile, error) {
+func (c *BackendClient) Scaffold(ctx context.Context, token string, domain any) ([]GeneratedFile, []string, error) {
 	var out struct {
 		Files []GeneratedFile `json:"files"`
+		// Warnings name what the description left unfinished — a payload
+		// nobody specified, a command with more than one possible event.
+		// Generated code carries the same note in a comment, which is
+		// exactly where it would be missed.
+		Warnings []string `json:"warnings"`
 	}
 	if err := c.do(ctx, http.MethodPost, "/api/cqrs/admin/scaffold", token, domain, &out); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out.Files, nil
+	return out.Files, out.Warnings, nil
 }
 
 // GeneratedFile is one file the scaffolder produced, with the dry-run mode

@@ -223,8 +223,14 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
+		// Warnings are what the model left UNFINISHED — an event whose
+		// payload nobody specified, a command with several possible events
+		// and no rule choosing between them. They are not errors (a schema
+		// document routinely carries neither), but a generated comment is
+		// not somewhere anyone looks, so they are counted and named here.
 		return re.JSON(http.StatusOK, map[string]any{
-			"files": files,
+			"files":    files,
+			"warnings": domain.Warnings(),
 			"hint": "Nothing was written. Dry-run each file, save it, then reload — " +
 				"a generated decider and projection are a starting point, not a finished domain.",
 		})

@@ -529,17 +529,24 @@ func TestScaffoldedSliceWorks(t *testing.T) {
 	h.apiOK(http.MethodPost, "/api/cqrs/admin/scaffold", jsonBody(map[string]any{
 		"aggregate": "ticket",
 		"commands": []map[string]any{
-			{"name": "OpenTicket", "event": "TicketOpened", "once": true,
-				"fields": []map[string]string{{"name": "subject", "type": "text"}}},
-			{"name": "CloseTicket", "event": "TicketClosed", "requiresExisting": true,
-				"fields": []map[string]string{{"name": "resolution", "type": "text"}}},
+			{"name": "OpenTicket", "once": true,
+				"fields": []map[string]string{{"name": "subject", "type": "text"}},
+				// the event declares its OWN payload: the model never
+				// inherits one from the command, so that "carries nothing"
+				// and "nobody said yet" cannot look alike
+				"events": []map[string]any{{"name": "TicketOpened",
+					"fields": []map[string]string{{"name": "subject", "type": "text"}}}}},
+			{"name": "CloseTicket", "requiresExisting": true,
+				"fields": []map[string]string{{"name": "resolution", "type": "text"}},
+				"events": []map[string]any{{"name": "TicketClosed",
+					"fields": []map[string]string{{"name": "resolution", "type": "text"}}}}},
 		},
-		"readModel": map[string]any{
+		"readModels": []map[string]any{{
 			"collection": "tickets", "key": "ticketId",
 			"fields": []map[string]string{
 				{"name": "subject", "type": "text"}, {"name": "resolution", "type": "text"},
 			},
-		},
+		}},
 	}), &gen)
 	if len(gen.Files) != 2 {
 		t.Fatalf("expected a decider and a projection, got %d", len(gen.Files))

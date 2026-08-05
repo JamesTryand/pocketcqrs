@@ -89,6 +89,20 @@
   </div>
 </form>
 
+{{/* What the description left UNFINISHED, as opposed to wrong. The generated
+     code carries the same note in a comment, which is exactly where it would
+     be missed — a generated file that runs looks finished. */}}
+{{with .Warnings}}
+<wa-callout variant="warning">
+  <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+  <strong>The slice was generated, but {{len .}} thing(s) still need deciding.</strong>
+  <ul class="wa-body-s">
+    {{range .}}<li>{{.}}</li>{{end}}
+  </ul>
+  <p class="wa-caption-m">These are not errors &mdash; the generated code runs. They are the decisions a description cannot make for you, and they are listed here because a comment in the file is not somewhere anyone looks.</p>
+</wa-callout>
+{{end}}
+
 {{range .Generated}}
 <wa-card>
   <div slot="header" class="wa-cluster wa-gap-s wa-align-items-baseline">

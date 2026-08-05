@@ -290,7 +290,7 @@ func fakeBackend(t *testing.T) *httptest.Server {
 			json.NewEncoder(w).Encode(map[string]string{"message": err.Error()})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"files": files, "hint": "Nothing was written."})
+		json.NewEncoder(w).Encode(map[string]any{"files": files, "warnings": domain.Warnings(), "hint": "Nothing was written."})
 	}))
 	mux.HandleFunc("POST /api/cqrs/admin/dryrun", authed(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any

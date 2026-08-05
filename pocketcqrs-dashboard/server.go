@@ -821,10 +821,22 @@ func backendDetail(err error) string {
 // scaffoldCommand is one row of the wizard's command table.
 type scaffoldCommand struct {
 	Name             string              `json:"name"`
-	Event            string              `json:"event"`
+	Events           []scaffoldEvent     `json:"events"`
 	Fields           []map[string]string `json:"fields,omitempty"`
 	Once             bool                `json:"once,omitempty"`
 	RequiresExisting bool                `json:"requiresExisting,omitempty"`
+}
+
+// scaffoldEvent is the event a wizard row records.
+//
+// The model never inherits an event's payload from its command, so the
+// wizard COPIES the fields it collected onto the event here. It has the
+// data; materialising it at model-construction time is what keeps the model
+// explicit without making the form ask the same question twice.
+type scaffoldEvent struct {
+	Name     string              `json:"name"`
+	Fields   []map[string]string `json:"fields,omitempty"`
+	NoFields bool                `json:"noFields,omitempty"`
 }
 
 // scaffoldRow is one command row of the wizard, carrying what was typed so a
@@ -906,7 +918,7 @@ func (s *server) scaffoldGenerate(w http.ResponseWriter, r *http.Request, token 
 		return
 	}
 
-	files, err := s.backend.Scaffold(r.Context(), token, domain)
+	files, warnings, err := s.backend.Scaffold(r.Context(), token, domain)
 	if err != nil {
 		if errors.Is(err, ErrUnauthorized) {
 			clearAuthCookie(w)
@@ -940,6 +952,7 @@ func (s *server) scaffoldGenerate(w http.ResponseWriter, r *http.Request, token 
 	}
 
 	data["Generated"] = out
+	data["Warnings"] = warnings
 	data["Flash"] = flashMessage{"success",
 		"Generated and dry-run against the live log. Nothing has been written — open each file in the editor to save it."}
 	s.render(w, "scaffold", "layout", data)
@@ -971,10 +984,11 @@ func parseScaffoldForm(r *http.Request) (map[string]any, error) {
 			continue // an empty row is a row the operator did not fill in
 		}
 		cmd := scaffoldCommand{Name: name}
+		eventName := ""
 		if i < len(events) {
-			cmd.Event = strings.TrimSpace(events[i])
+			eventName = strings.TrimSpace(events[i])
 		}
-		if cmd.Event == "" {
+		if eventName == "" {
 			return nil, fmt.Errorf("command %q needs the event it records", name)
 		}
 		if i < len(fieldSpecs) {
@@ -984,6 +998,14 @@ func parseScaffoldForm(r *http.Request) (map[string]any, error) {
 			}
 			cmd.Fields = fields
 		}
+		// copy the command's fields onto the event, and say explicitly when
+		// there are none — an event with no fields and no NoFields reads as
+		// "nobody specified this yet", which is not what the form meant
+		cmd.Events = []scaffoldEvent{{
+			Name:     eventName,
+			Fields:   cmd.Fields,
+			NoFields: len(cmd.Fields) == 0,
+		}}
 		// the create checkbox posts the row index it belongs to
 		for _, v := range once {
 			if v == strconv.Itoa(i) {
@@ -1008,9 +1030,9 @@ func parseScaffoldForm(r *http.Request) (map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read model: %w", err)
 		}
-		domain["readModel"] = map[string]any{
+		domain["readModels"] = []map[string]any{{
 			"collection": collection, "key": key, "fields": fields,
-		}
+		}}
 	}
 	return domain, nil
 }

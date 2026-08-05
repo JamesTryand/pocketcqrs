@@ -1,17 +1,23 @@
-// Package scaffold generates a working vertical slice — a JS decider and a
-// JS projection — from a small description of a domain.
+// Package scaffold generates a working vertical slice — a JS decider, JS
+// projections and JS reactors — from a small description of a domain.
 //
 // It is deliberately built around an intermediate model rather than around
 // the wizard that first needed it. There are two front-ends to the same
 // generator: the dashboard's scaffolder, which collects the model from a
-// form, and (M14) the eventmodelschema importer, which maps a JSON document
-// onto it. Generating from the model, not from either input format, is what
-// keeps those two from growing separate opinions about what a decider looks
-// like.
+// form, and the eventmodelschema importer, which maps a JSON document onto
+// it. Generating from the model, not from either input format, is what keeps
+// those two from growing separate opinions about what a decider looks like.
+//
+// THE MODEL RECORDS WHAT CAN RESULT, NOT HOW THE RESULT IS CHOSEN. A command
+// may list several events; nothing here says which one applies when, because
+// that is business logic and it lives in decide(), which the author edits.
+// An earlier draft carried per-branch conditions and was rejected as
+// over-constraining — over-specifying the model narrows what it can describe
+// for no gain the generator can use.
 //
 // What it produces is a starting point, not a finished domain: the decider
 // records what happened and refuses the obvious contradictions, and the
-// projection maintains one read model. The interesting invariants are the
+// projections maintain read models. The interesting invariants are the
 // author's job, which is why every generated file is meant to be dry-run and
 // edited rather than shipped as-is.
 package scaffold
@@ -34,22 +40,31 @@ type Domain struct {
 	// Aggregate names the write-side stream family (lower camel by
 	// convention: "order", "supportTicket").
 	Aggregate string `json:"aggregate"`
-	// Commands are the intents accepted. Each produces exactly one event in
-	// the generated code — the common case, and the one worth generating.
+	// Commands are the intents accepted.
 	Commands []Command `json:"commands"`
-	// ReadModel is the collection the projection maintains. Optional: a
-	// slice may be write-only at first.
-	ReadModel *ReadModel `json:"readModel,omitempty"`
+	// ReadModels are the collections projections maintain. A slice may have
+	// none (write-only at first) or several — a schema document routinely
+	// declares several read models over one aggregate's events.
+	ReadModels []ReadModel `json:"readModels,omitempty"`
+	// Reactors map this aggregate's events to commands on another one.
+	Reactors []Reactor `json:"reactors,omitempty"`
 }
 
-// Command is one intent and the event it records.
+// Command is one intent and the events it may record.
 type Command struct {
 	Name string `json:"name"`
-	// Event is the event this command appends. Defaults to the command name
-	// in past tense where that is mechanical, but is explicit here because
-	// English is not.
-	Event string `json:"event"`
-	// Fields are the payload fields, carried onto the event unchanged.
+	// Events are the events this command MAY append. More than one covers
+	// both shapes a document can describe, which are indistinguishable in
+	// the model on purpose:
+	//
+	//   conjunction — all of them, together (OrderConfirmed + StockReserved)
+	//   disjunction — one of them, by state (PaymentAccepted xor Refused)
+	//
+	// The generator emits the first as a runnable default and says in a
+	// comment that the choice is the author's; the count is reported as a
+	// warning so the unfinished rule is named rather than buried.
+	Events []Event `json:"events"`
+	// Fields are the command's payload fields.
 	Fields []Field `json:"fields,omitempty"`
 	// Once marks a command that may only succeed on a fresh stream (the
 	// "create" of the slice); the generated decider refuses a repeat.
@@ -59,6 +74,22 @@ type Command struct {
 	RequiresExisting bool `json:"requiresExisting,omitempty"`
 }
 
+// Event is one event a command may record.
+//
+// Fields are NEVER inherited implicitly from the command. An event either
+// declares its payload or declares itself empty, because "this event carries
+// nothing" and "nobody has said what this event carries" must not look
+// alike — that ambiguity is the shape of defect this project keeps paying
+// for. A front-end that wants the command's fields on the event copies them
+// when it builds the model.
+type Event struct {
+	Name   string  `json:"name"`
+	Fields []Field `json:"fields,omitempty"`
+	// NoFields declares "this event genuinely carries no payload". Without
+	// it, an event with no fields is reported as UNSPECIFIED.
+	NoFields bool `json:"noFields,omitempty"`
+}
+
 // Field is one payload/schema field.
 type Field struct {
 	Name string `json:"name"`
@@ -66,7 +97,7 @@ type Field struct {
 	Type string `json:"type"`
 }
 
-// ReadModel is the projection's target collection.
+// ReadModel is a projection's target collection.
 type ReadModel struct {
 	Collection string `json:"collection"`
 	// Key is the field carrying the row identity — the aggregate id, in the
@@ -78,6 +109,23 @@ type ReadModel struct {
 	// On lists the events that update the row. Empty means every event the
 	// commands produce.
 	On []string `json:"on,omitempty"`
+}
+
+// Reactor maps events to a command on another aggregate — the automation
+// shape. The target id is derived from the source event so that delivery
+// being at-least-once cannot produce the reaction twice.
+type Reactor struct {
+	// Name is the file basename and the durable checkpoint suffix.
+	Name string `json:"name"`
+	// On lists the event types that trigger it.
+	On []string `json:"on"`
+	// Aggregate and Command name what it dispatches.
+	Aggregate string `json:"aggregate"`
+	Command   string `json:"command"`
+	// IDPrefix prefixes the source aggregate id to build the target id
+	// (e.g. "fulfill-" → "fulfill-<orderId>"). Deterministic on purpose:
+	// a replay then hits the target's own "already exists" rule.
+	IDPrefix string `json:"idPrefix,omitempty"`
 }
 
 // File is one generated source file.
@@ -97,6 +145,12 @@ var schemaTypes = map[string]bool{
 // model that cannot work produces files that fail at save time with an error
 // about the generated code, which points at the generator rather than at the
 // description that caused it.
+//
+// It is a HARD gate, shared by the wizard and the importer, so it reports
+// only what makes generation impossible. Things that are merely unfinished —
+// an event whose payload nobody specified, a command needing an outcome
+// rule — are Warnings, because a schema document routinely carries neither
+// and refusing those would make real documents unimportable.
 func (d Domain) Validate() error {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -114,16 +168,28 @@ func (d Domain) Validate() error {
 		if !identifier.MatchString(c.Name) {
 			add("command %d: name %q must be a letter followed by letters, digits or underscores", i+1, c.Name)
 		}
-		if !identifier.MatchString(c.Event) {
-			add("command %q: event name %q must be a letter followed by letters, digits or underscores", c.Name, c.Event)
-		}
 		if seenCmd[c.Name] {
 			add("command %q is declared twice", c.Name)
 		}
-		if seenEvent[c.Event] {
-			add("event %q is produced by more than one command; give each command its own event", c.Event)
+		seenCmd[c.Name] = true
+		if len(c.Events) == 0 {
+			add("command %q records no event; a command that changes nothing is a query", c.Name)
 		}
-		seenCmd[c.Name], seenEvent[c.Event] = true, true
+		for _, e := range c.Events {
+			if !identifier.MatchString(e.Name) {
+				add("command %q: event name %q must be a letter followed by letters, digits or underscores", c.Name, e.Name)
+			}
+			seenEvent[e.Name] = true
+			for _, f := range e.Fields {
+				if !identifier.MatchString(f.Name) {
+					add("command %q, event %q: field name %q is not a valid identifier", c.Name, e.Name, f.Name)
+				}
+				if !schemaTypes[f.Type] {
+					add("command %q, event %q: field %q has type %q; use text, number, bool, date or json",
+						c.Name, e.Name, f.Name, f.Type)
+				}
+			}
+		}
 		if c.Once {
 			creates++
 		}
@@ -143,25 +209,55 @@ func (d Domain) Validate() error {
 		add("more than one command is marked as the create; a stream has one beginning")
 	}
 
-	if rm := d.ReadModel; rm != nil {
+	// NOTE: an event produced by more than one command is NOT an error. A
+	// schema document may legitimately reference one event id from several
+	// slices, and refusing that would make a well-formed document
+	// unimportable for what would look like a generator bug.
+
+	seenCollection := map[string]bool{}
+	for _, rm := range d.ReadModels {
 		if !identifier.MatchString(rm.Collection) {
 			add("read model collection %q must be a letter followed by letters, digits or underscores", rm.Collection)
 		}
+		if seenCollection[rm.Collection] {
+			add("read model collection %q is declared twice", rm.Collection)
+		}
+		seenCollection[rm.Collection] = true
 		if !identifier.MatchString(rm.Key) {
-			add("read model key %q is not a valid field name", rm.Key)
+			add("read model %q: key %q is not a valid field name", rm.Collection, rm.Key)
 		}
 		for _, f := range rm.Fields {
 			if !identifier.MatchString(f.Name) {
-				add("read model field name %q is not a valid identifier", f.Name)
+				add("read model %q: field name %q is not a valid identifier", rm.Collection, f.Name)
 			}
 			if !schemaTypes[f.Type] {
-				add("read model field %q has type %q; use text, number, bool, date or json", f.Name, f.Type)
+				add("read model %q: field %q has type %q; use text, number, bool, date or json", rm.Collection, f.Name, f.Type)
 			}
 		}
 		for _, on := range rm.On {
 			if !seenEvent[on] {
-				add("read model listens for %q, which no command produces", on)
+				add("read model %q listens for %q, which no command produces", rm.Collection, on)
 			}
+		}
+	}
+
+	seenReactor := map[string]bool{}
+	for _, r := range d.Reactors {
+		if !identifier.MatchString(r.Name) {
+			add("reactor name %q must be a letter followed by letters, digits or underscores", r.Name)
+		}
+		if seenReactor[r.Name] {
+			add("reactor %q is declared twice", r.Name)
+		}
+		seenReactor[r.Name] = true
+		if len(r.On) == 0 {
+			add("reactor %q declares no trigger events, so it can never fire", r.Name)
+		}
+		if !identifier.MatchString(r.Aggregate) {
+			add("reactor %q: target aggregate %q is not a valid name", r.Name, r.Aggregate)
+		}
+		if !identifier.MatchString(r.Command) {
+			add("reactor %q: target command %q is not a valid name", r.Name, r.Command)
 		}
 	}
 
@@ -171,11 +267,53 @@ func (d Domain) Validate() error {
 	return nil
 }
 
-// Events returns every event the commands produce, in declaration order.
-func (d Domain) Events() []string {
-	out := make([]string, 0, len(d.Commands))
+// Warnings reports what is UNFINISHED rather than broken — the things a
+// generated slice will run with but an author still has to decide.
+//
+// They are warnings, not errors, because Validate is a hard gate the wizard
+// shares and because a schema document routinely specifies neither payloads
+// nor outcome rules; refusing those would make real documents unimportable.
+// They are reported at all because burying an unfinished rule in a generated
+// comment is how it stays unfinished.
+func (d Domain) Warnings() []string {
+	var out []string
 	for _, c := range d.Commands {
-		out = append(out, c.Event)
+		for _, e := range c.Events {
+			// "carries nothing" and "nobody said what it carries" must not
+			// look alike — an explicit NoFields is what tells them apart
+			if len(e.Fields) == 0 && !e.NoFields {
+				out = append(out, fmt.Sprintf(
+					"event %q of command %q does not say what its payload is: declare fields, or mark it as carrying none",
+					e.Name, c.Name))
+			}
+		}
+		if len(c.Events) > 1 {
+			names := make([]string, 0, len(c.Events))
+			for _, e := range c.Events {
+				names = append(names, e.Name)
+			}
+			out = append(out, fmt.Sprintf(
+				"command %q can result in %d different events (%s) and needs an outcome rule written in decide(); the generated code returns the first",
+				c.Name, len(c.Events), strings.Join(names, ", ")))
+		}
+	}
+	return out
+}
+
+// Events returns every event the commands may produce, flattened across
+// commands in declaration order and de-duplicated. It feeds //@handles and a
+// projection's default trigger list, where flattening is all that is wanted.
+func (d Domain) Events() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, c := range d.Commands {
+		for _, e := range c.Events {
+			if seen[e.Name] {
+				continue
+			}
+			seen[e.Name] = true
+			out = append(out, e.Name)
+		}
 	}
 	return out
 }
@@ -193,11 +331,18 @@ func (d Domain) Generate() ([]File, error) {
 		Source: d.decider(),
 		Kind:   "decider",
 	}}
-	if d.ReadModel != nil {
+	for _, rm := range d.ReadModels {
 		files = append(files, File{
-			Name:   d.ReadModel.Collection + ".js",
-			Source: d.projection(),
+			Name:   rm.Collection + ".js",
+			Source: d.projection(rm),
 			Kind:   "projection",
+		})
+	}
+	for _, r := range d.Reactors {
+		files = append(files, File{
+			Name:   r.Name + ".js",
+			Source: d.reactor(r),
+			Kind:   "reactor",
 		})
 	}
 	return files, nil
@@ -230,7 +375,23 @@ func (d Domain) decider() string {
 		if c.RequiresExisting {
 			fmt.Fprintf(&b, "      if (!state.exists) { throw new Error('%s does not exist'); }\n", d.Aggregate)
 		}
-		fmt.Fprintf(&b, "      return [{ type: '%s', data: %s }];\n", c.Event, payloadLiteral(c.Fields))
+		// More than one possible event means the description said WHAT can
+		// result, not WHICH applies. The generator must not invent the rule:
+		// it returns the first and says so, and Warnings() counts it so the
+		// gap is named somewhere an operator will actually look.
+		if len(c.Events) > 1 {
+			names := make([]string, 0, len(c.Events))
+			for _, e := range c.Events {
+				names = append(names, e.Name)
+			}
+			b.WriteString("      // THIS COMMAND CAN RESULT IN MORE THAN ONE EVENT:\n")
+			fmt.Fprintf(&b, "      //   %s\n", strings.Join(names, ", "))
+			b.WriteString("      // Which one applies is the domain rule, and only you can write it.\n")
+			b.WriteString("      // The line below returns the first as a placeholder so the slice\n")
+			b.WriteString("      // runs; replace it with the real decision.\n")
+		}
+		e := c.Events[0]
+		fmt.Fprintf(&b, "      return [{ type: '%s', data: %s }];\n", e.Name, payloadLiteral(e.Fields))
 	}
 	b.WriteString("    default:\n")
 	b.WriteString("      throw new Error('unknown command: ' + command.name);\n")
@@ -241,17 +402,16 @@ func (d Domain) decider() string {
 	b.WriteString("// than this file.\n")
 	b.WriteString("function evolve(state, event) {\n")
 	b.WriteString("  switch (event.type) {\n")
-	for _, c := range d.Commands {
-		fmt.Fprintf(&b, "    case '%s':\n", c.Event)
-		fmt.Fprintf(&b, "      return Object.assign({}, state, event.data, { exists: true });\n")
+	for _, name := range events {
+		fmt.Fprintf(&b, "    case '%s':\n", name)
+		b.WriteString("      return Object.assign({}, state, event.data, { exists: true });\n")
 	}
 	b.WriteString("    default:\n      return state;\n")
 	b.WriteString("  }\n}\n")
 	return b.String()
 }
 
-func (d Domain) projection() string {
-	rm := d.ReadModel
+func (d Domain) projection(rm ReadModel) string {
 	on := rm.On
 	if len(on) == 0 {
 		on = d.Events()
@@ -288,6 +448,34 @@ func (d Domain) projection() string {
 	fmt.Fprintf(&b, "    if (%s.includes(name)) { fields[name] = event.data[name]; }\n", columnNamesLiteral(fields, rm.Key))
 	b.WriteString("  }\n")
 	fmt.Fprintf(&b, "  return [{ upsert: { key: event.aggregateId, fields: fields } }];\n")
+	b.WriteString("}\n")
+	return b.String()
+}
+
+func (d Domain) reactor(r Reactor) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "//@trigger react %s\n", strings.Join(r.On, " "))
+	fmt.Fprintf(&b, "//@dispatches %s/%s\n", r.Aggregate, r.Command)
+	b.WriteString("//\n")
+	fmt.Fprintf(&b, "// %s — generated automation: %s's events become %s commands\n",
+		r.Name, d.Aggregate, r.Aggregate)
+	fmt.Fprintf(&b, "// on %s.\n", r.Aggregate)
+	b.WriteString("//\n")
+	b.WriteString("// react() RETURNS dispatch descriptors; the host sends them through the\n")
+	b.WriteString("// decider registry, so a reaction is a COMMAND that can be refused —\n")
+	b.WriteString("// never a direct append.\n")
+	b.WriteString("//\n")
+	b.WriteString("// Delivery is at-least-once. The target id below is derived from the\n")
+	b.WriteString("// source event, so a replay hits the target's own 'already exists' rule\n")
+	b.WriteString("// instead of dispatching twice. Keep it deterministic.\n\n")
+
+	b.WriteString("function react(event) {\n")
+	b.WriteString("  return [{\n")
+	fmt.Fprintf(&b, "    aggregate: '%s',\n", r.Aggregate)
+	fmt.Fprintf(&b, "    id: '%s' + event.aggregateId,\n", r.IDPrefix)
+	fmt.Fprintf(&b, "    command: '%s',\n", r.Command)
+	b.WriteString("    payload: Object.assign({}, event.data)\n")
+	b.WriteString("  }];\n")
 	b.WriteString("}\n")
 	return b.String()
 }
