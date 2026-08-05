@@ -456,6 +456,55 @@ function evolve(state, event) { return { made: true }; }
 		t.Fatal("a dry run appended events to the real log")
 	}
 
+	// A REFUSAL IS A 200 WITH A VERDICT, not a 4xx. The dry run itself
+	// worked; the decider gave a domain answer. This is the half of the
+	// contract a client cannot get from the status code, and the reason
+	// `rejected` exists: over HTTP a rejection used to be a 400, exactly
+	// like a malformed request, so a working decider saying "no" was
+	// indistinguishable from a broken one.
+	const refuser = `//@trigger decider probe
+//@handles ProbeCreated
+function initialState() { return { made: false }; }
+function decide(command, state) { throw new Error('probes are not accepting commands today'); }
+function evolve(state, event) { return { made: true }; }
+`
+	status, out = dry(map[string]any{"name": "probe.js", "source": refuser, "mode": "decide",
+		"streamId": "p1", "command": "MakeProbe"})
+	if status != http.StatusOK {
+		t.Fatalf("a domain rejection must answer 200, got %d: %v", status, out)
+	}
+	if rejected, _ := out["rejected"].(bool); !rejected {
+		t.Fatalf("a refused command must report rejected:true: %v", out)
+	}
+	if ok, _ := out["ok"].(bool); ok {
+		t.Errorf("a refused command must report ok:false: %v", out)
+	}
+	if msg, _ := out["message"].(string); !strings.Contains(msg, "not accepting commands") {
+		t.Errorf("the rejection must carry the decider's own reason, got %q", msg)
+	}
+	if _, present := out["produced"]; present {
+		t.Errorf("a rejection must not report produced events: %v", out)
+	}
+
+	// ...and the other side of the split: a candidate that cannot fold real
+	// history is a FAILED REQUEST, still a 4xx. If this ever returns 200
+	// with rejected:true, the two channels have collapsed back together and
+	// the editor can no longer tell a broken file from a domain answer.
+	//
+	// Note this targets `task`, which HAS history — pointed at an aggregate
+	// with an empty log the broken evolve never runs and the check passes
+	// vacuously, which is exactly how the first version of this test lied.
+	const unusable = `//@trigger decider task
+//@handles TaskCreated TaskCompleted
+function initialState() { return {}; }
+function decide(command, state) { return []; }
+function evolve(state, event) { throw new Error('cannot fold'); }
+`
+	if status, out := dry(map[string]any{"name": "task.js", "source": unusable, "mode": "decide",
+		"streamId": "t1", "command": "CompleteTask"}); status != http.StatusBadRequest {
+		t.Errorf("an unusable candidate must stay a 4xx, got %d: %v", status, out)
+	}
+
 	// an unknown mode is refused rather than guessed
 	if status, _ := dry(map[string]any{"name": "x.js", "source": fixedFn, "mode": "guess"}); status != http.StatusBadRequest {
 		t.Errorf("an unknown dryrun mode should be refused, got %d", status)

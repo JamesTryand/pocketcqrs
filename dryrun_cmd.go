@@ -104,17 +104,24 @@ func newDryrunCommand(c *components) *cobra.Command {
 				"now":   time.Now().UTC().Format("2006-01-02 15:04:05.000Z"),
 				"actor": "dryrun",
 			}
-			produced, err := functions.DryRunDecide(c.store, spec, args[1],
+			res, err := functions.DryRunDecide(c.store, spec, args[1],
 				decider.Command{Name: args[2], Payload: payload}, meta)
 			if err != nil {
 				return err
 			}
-			if len(produced) == 0 {
+			// a refusal is reported, not returned as an error: the CLI exits
+			// 0 because the dry run worked, and says plainly that the answer
+			// was "no" (same reasoning as the HTTP 200 verdict)
+			if res.Rejected {
+				cmd.Printf("The decider REFUSED this command: %s\nNothing was appended. This is a domain answer, not a failure.\n", res.Message)
+				return nil
+			}
+			if len(res.Produced) == 0 {
 				cmd.Println("The decider returned NO events.")
 				return nil
 			}
-			out, _ := json.MarshalIndent(produced, "", "  ")
-			cmd.Printf("The decider WOULD produce %d event(s) (nothing appended):\n%s\n", len(produced), out)
+			out, _ := json.MarshalIndent(res.Produced, "", "  ")
+			cmd.Printf("The decider WOULD produce %d event(s) (nothing appended):\n%s\n", len(res.Produced), out)
 			return nil
 		},
 	}

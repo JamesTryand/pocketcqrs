@@ -393,18 +393,33 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 			"now":   time.Now().UTC().Format("2006-01-02 15:04:05.000Z"),
 			"actor": "dryrun",
 		}
-		produced, err := functions.DryRunDecide(c.store, spec, req.StreamID,
+		res, err := functions.DryRunDecide(c.store, spec, req.StreamID,
 			decider.Command{Name: req.Command, Payload: cmdPayload}, meta)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
+		}
+		// A REFUSAL IS A 200. The status reports whether the simulation ran,
+		// not the verdict it reached — asking "would this be accepted?" and
+		// being told "no" is a successful answer, and nothing was attempted
+		// against a real resource. Same call this project already made for a
+		// failed dead-letter retry: 4xx is reserved for a malformed or
+		// unknown request, so the UI can tell a refusal from a broken
+		// endpoint. Clients branch on `rejected`, never on the status.
+		if res.Rejected {
+			return re.JSON(http.StatusOK, map[string]any{
+				"mode": req.Mode, "ok": false, "rejected": true,
+				"message": res.Message,
+				"summary": fmt.Sprintf("The decider REFUSED %q on %s/%s: %s. Nothing was appended, and this is a working decider giving a domain answer — not an error.",
+					req.Command, spec.Aggregate, req.StreamID, res.Message),
+			})
 		}
 		// "produced", not "events": the other modes report an event COUNT
 		// under that name, and one field meaning two shapes by mode is a
 		// trap for every client
 		return re.JSON(http.StatusOK, map[string]any{
-			"mode": req.Mode, "ok": true, "produced": produced,
+			"mode": req.Mode, "ok": true, "rejected": false, "produced": res.Produced,
 			"summary": fmt.Sprintf("%q on %s/%s would produce %d event(s). Nothing was appended.",
-				req.Command, spec.Aggregate, req.StreamID, len(produced)),
+				req.Command, spec.Aggregate, req.StreamID, len(res.Produced)),
 		})
 
 	case "projection":

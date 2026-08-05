@@ -453,12 +453,19 @@ type DryRunResult struct {
 	Events int `json:"events,omitempty"`
 	// Produced is what a command WOULD append (decide mode) — a separate
 	// field from Events, which is a count.
-	Produced    json.RawMessage `json:"produced,omitempty"`
-	Name        string          `json:"name,omitempty"`
-	Upserts     int             `json:"upserts,omitempty"`
-	Deletes     int             `json:"deletes,omitempty"`
-	Rows        int             `json:"rows,omitempty"`
-	Collections int             `json:"collections,omitempty"`
+	Produced json.RawMessage `json:"produced,omitempty"`
+	// Rejected reports that the decider REFUSED the command (decide mode).
+	// It arrives on a 200 with OK false, because the dry run itself worked:
+	// a working decider giving a domain answer must not look like a broken
+	// endpoint. Branch on this, never on the status code.
+	Rejected bool `json:"rejected,omitempty"`
+	// Message is the rejection's reason. Only set when Rejected.
+	Message     string `json:"message,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Upserts     int    `json:"upserts,omitempty"`
+	Deletes     int    `json:"deletes,omitempty"`
+	Rows        int    `json:"rows,omitempty"`
+	Collections int    `json:"collections,omitempty"`
 	// IgnoredValues counts values project() returned that are not row ops
 	// and would be discarded at runtime.
 	IgnoredValues int                 `json:"ignoredValues,omitempty"`

@@ -91,26 +91,93 @@ func TestDryRunDecide(t *testing.T) {
 	}
 
 	// when: a valid command on the folded stream -> outcome events, no append
-	produced, err := DryRunDecide(store, spec, "n1",
+	res, err := DryRunDecide(store, spec, "n1",
 		decider.Command{Name: "ArchiveNote", Payload: json.RawMessage(`{}`)},
 		map[string]any{"now": "dry", "actor": "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(produced) != 1 || produced[0].Type != "NoteArchived" {
-		t.Fatalf("unexpected produced events: %+v", produced)
+	if res.Rejected {
+		t.Fatalf("a valid command was reported as rejected: %s", res.Message)
+	}
+	if len(res.Produced) != 1 || res.Produced[0].Type != "NoteArchived" {
+		t.Fatalf("unexpected produced events: %+v", res.Produced)
 	}
 
-	// when: a domain-invalid command -> the decider's rejection
-	if _, err := DryRunDecide(store, spec, "n1",
-		decider.Command{Name: "CreateNote", Payload: json.RawMessage(`{"text":"dup"}`)}, nil); err == nil {
-		t.Fatal("expected domain rejection")
+	// when: a domain-invalid command -> a REJECTION VERDICT, not an error.
+	// The error return is reserved for a request that could not be answered;
+	// a decider saying no IS the answer.
+	res, err = DryRunDecide(store, spec, "n1",
+		decider.Command{Name: "CreateNote", Payload: json.RawMessage(`{"text":"dup"}`)}, nil)
+	if err != nil {
+		t.Fatalf("a domain rejection must not surface as an error: %v", err)
+	}
+	if !res.Rejected {
+		t.Fatal("expected a domain rejection")
+	}
+	if res.Message == "" {
+		t.Fatal("a rejection must carry the decider's reason")
+	}
+	if len(res.Produced) != 0 {
+		t.Fatalf("a rejection must produce nothing: %+v", res.Produced)
 	}
 
 	// and nothing was appended
 	stream, _ := store.LoadStream(ctx, "note", "n1")
 	if len(stream) != 1 {
 		t.Fatalf("dry run appended to the stream: %+v", stream)
+	}
+}
+
+// TestDryRunDecideSeparatesRejectionFromFailure is the test that fails if the
+// two ever collapse back into one channel. A rejection and an unusable
+// candidate took the same path before this split, which made a working
+// decider's "no" indistinguishable from a broken file.
+func TestDryRunDecideSeparatesRejectionFromFailure(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	if _, err := store.Append(ctx, "note", "n1", 0, []events.NewEvent{
+		{Type: "NoteCreated", Data: json.RawMessage(`{"text":"a"}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewGojaRuntime(nil)
+
+	// a decider whose //@handles does not cover history in the log is
+	// UNUSABLE — the contract gate must fail it as an error, never report it
+	// as the domain refusing a command
+	incomplete, err := LoadDeciderFile(rt, writeTempFn(t, "incomplete.js", `//@trigger decider note
+//@handles NoteArchived
+`+noteDeciderJS))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := DryRunDecide(store, incomplete, "n1",
+		decider.Command{Name: "ArchiveNote", Payload: json.RawMessage(`{}`)}, nil)
+	if err == nil {
+		t.Fatalf("an unusable candidate must be an error, got verdict %+v", res)
+	}
+	if res != nil && res.Rejected {
+		t.Fatal("an unusable candidate was misreported as a domain rejection")
+	}
+
+	// an unreadable stream is likewise a failure of the request, not a
+	// verdict: nothing was asked of the domain at all
+	good, err := LoadDeciderFile(rt, writeTempFn(t, "good.js", `//@trigger decider note
+//@handles NoteCreated NoteArchived
+`+noteDeciderJS))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close() // force the load to fail
+	if _, err := DryRunDecide(store, good, "n1",
+		decider.Command{Name: "ArchiveNote", Payload: json.RawMessage(`{}`)}, nil); err == nil {
+		t.Fatal("a store failure must be an error, not a verdict")
 	}
 }
 

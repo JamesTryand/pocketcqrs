@@ -168,6 +168,20 @@
       </div>
       {{end}}
 
+      {{/* A refusal is a VERDICT, not a failure — the decider worked and said
+           no. It arrives as a 200 precisely so this panel can distinguish it
+           from a broken candidate, which renders as an error instead. Neutral
+           styling, not danger: refusing is usually the correct answer, and
+           half the cases worth dry-running expect it. */}}
+      {{if .Rejected}}
+      <wa-callout variant="neutral" size="s">
+        <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+        <strong>The decider refused this command.</strong>
+        <p class="wa-body-s"><code>{{.Message}}</code></p>
+        <p class="wa-caption-m">This decider works &mdash; it rejected the command on domain grounds, and nothing was appended. If you expected the command to succeed, the rule that refused it is in <code>decide()</code>.</p>
+      </wa-callout>
+      {{end}}
+
       {{with .Detail}}
       <div class="wa-stack wa-gap-2xs">
         <span class="wa-caption-m">{{if eq $.DryRun.Mode "decide"}}events this command would append (nothing was appended){{else}}folded state{{end}}</span>

@@ -118,11 +118,35 @@ func DryRunDecider(store *events.Store, spec *DeciderSpec, streamID string) (*De
 	return out, nil
 }
 
+// DecideDryRun reports what a command WOULD do against a stream.
+//
+// A domain rejection is a RESULT here, not an error. "The decider refuses
+// this" is a successful answer to "what would happen?", and it is the
+// ordinary answer for half the cases worth testing — so a caller must be
+// able to tell it apart from a candidate that will not load, a stream that
+// cannot be read, or history that will not fold. Those stay errors.
+//
+// Collapsing the two is exactly the failure this type exists to prevent: the
+// editor could not distinguish "your source is broken" from "your source
+// correctly refused", and an eventmodelschema `error` scenario — whose
+// EXPECTED outcome is a rejection — could not be asserted at all.
+type DecideDryRun struct {
+	// Produced is what decide() returned; empty when Rejected.
+	Produced []events.NewEvent
+	// Rejected reports that decide() refused the command: a domain verdict.
+	Rejected bool
+	// Message is the rejection's text. Only set when Rejected.
+	Message string
+}
+
 // DryRunDecide folds one stream to its current state and runs decide with
-// the given command, returning the events it WOULD produce. Nothing is
-// appended. This is the "given (prior events), when (command), then
-// (outcome messages)" half of the harness.
-func DryRunDecide(store *events.Store, spec *DeciderSpec, streamID string, cmd decider.Command, meta map[string]any) ([]events.NewEvent, error) {
+// the given command, reporting what it WOULD produce — or that the decider
+// refused. Nothing is appended. This is the "given (prior events), when
+// (command), then (outcome messages)" half of the harness.
+func DryRunDecide(store *events.Store, spec *DeciderSpec, streamID string, cmd decider.Command, meta map[string]any) (*DecideDryRun, error) {
+	// the contract gate: a candidate that cannot fold real history is
+	// unusable, which is a failure of the REQUEST, not a verdict on the
+	// command
 	if _, err := DryRunDecider(store, spec, ""); err != nil {
 		return nil, err
 	}
@@ -144,7 +168,13 @@ func DryRunDecide(store *events.Store, spec *DeciderSpec, streamID string, cmd d
 				spec.Aggregate, streamID, ev.Type, ev.Sequence, err)
 		}
 	}
-	return d.Decide(cmd, state, meta)
+
+	// from here down, and ONLY here, a failure is the domain's answer
+	produced, err := d.Decide(cmd, state, meta)
+	if err != nil {
+		return &DecideDryRun{Rejected: true, Message: err.Error()}, nil
+	}
+	return &DecideDryRun{Produced: produced}, nil
 }
 
 // ProjectionDryRun reports a projection simulation over history.
