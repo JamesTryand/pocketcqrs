@@ -16,6 +16,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/scaffold"
 )
@@ -315,6 +316,52 @@ type dryRunRequest struct {
 	Command  string          `json:"command,omitempty"`
 	Payload  json.RawMessage `json:"payload,omitempty"`
 	Diff     bool            `json:"diff,omitempty"`
+	// Fixture replaces real history for a projection run: "given exactly
+	// these events, what rows result?". Reads are isolated when it is set,
+	// so the answer cannot depend on live collections the fixture does not
+	// describe. Diff is meaningless against a fixture and is refused.
+	Fixture []fixtureEvent `json:"fixture,omitempty"`
+}
+
+// fixtureEvent is one hand-written event of a dry-run fixture. Position and
+// sequence are assigned in order, so a caller supplies only what it means.
+type fixtureEvent struct {
+	Aggregate   string          `json:"aggregate,omitempty"`
+	AggregateID string          `json:"aggregateId,omitempty"`
+	Type        string          `json:"type"`
+	Data        json.RawMessage `json:"data,omitempty"`
+}
+
+// toEvents numbers a fixture into real events. Positions start at 1 and
+// sequences count per stream, mirroring what the store would have done.
+func (c *components) fixtureEvents(in []fixtureEvent) ([]events.Event, error) {
+	out := make([]events.Event, 0, len(in))
+	seq := map[string]int64{}
+	for i, f := range in {
+		if f.Type == "" {
+			return nil, fmt.Errorf("fixture event %d has no type", i+1)
+		}
+		data := f.Data
+		if len(data) == 0 {
+			data = json.RawMessage(`{}`)
+		}
+		if !json.Valid(data) {
+			return nil, fmt.Errorf("fixture event %d (%s) has invalid JSON data", i+1, f.Type)
+		}
+		key := f.Aggregate + "/" + f.AggregateID
+		seq[key]++
+		out = append(out, events.Event{
+			Position:    int64(i + 1),
+			ID:          fmt.Sprintf("fixture-%d", i+1),
+			Aggregate:   f.Aggregate,
+			AggregateID: f.AggregateID,
+			Sequence:    seq[key],
+			Type:        f.Type,
+			Data:        data,
+			Created:     "1970-01-01 00:00:00.000Z",
+		})
+	}
+	return out, nil
 }
 
 // handleDryRun runs candidate source against real history without appending
@@ -455,7 +502,20 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
-		res, err := functions.DryRunProjection(c.store, spec)
+		var res *functions.ProjectionDryRun
+		if len(req.Fixture) > 0 {
+			if req.Diff {
+				return apis.NewBadRequestError(
+					"diff compares a simulation against LIVE collections, which a fixture run deliberately knows nothing about; drop one of them", nil)
+			}
+			fixture, ferr := c.fixtureEvents(req.Fixture)
+			if ferr != nil {
+				return apis.NewBadRequestError(ferr.Error(), ferr)
+			}
+			res, err = functions.DryRunProjectionOver(spec, fixture)
+		} else {
+			res, err = functions.DryRunProjection(c.store, spec)
+		}
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}

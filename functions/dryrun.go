@@ -199,8 +199,7 @@ type ProjectionDryRun struct {
 // pb.query calls) and nothing is written.
 func DryRunProjection(store *events.Store, spec *ProjectionSpec) (*ProjectionDryRun, error) {
 	ctx := context.Background()
-	out := &ProjectionDryRun{Name: spec.Name, Rows: map[string]map[string]map[string]any{}}
-
+	var log []events.Event
 	var pos int64
 	for {
 		batch, err := store.Poll(ctx, pos, 100)
@@ -212,48 +211,72 @@ func DryRunProjection(store *events.Store, spec *ProjectionSpec) (*ProjectionDry
 		}
 		for _, ev := range batch {
 			pos = ev.Position
-			if !contains(spec.EventTypes, ev.Type) {
-				continue
-			}
-			out.Events++
+			log = append(log, ev)
+		}
+	}
+	return runProjectionOver(spec, log, false)
+}
 
-			result, err := spec.runtime.runProjection(spec, ev)
-			if err != nil {
-				return nil, fmt.Errorf("dryrun: projection %s failed at event %d: %w", spec.Name, ev.Position, err)
-			}
-			ops, ignored, err := normalizeOps(result)
+// DryRunProjectionOver runs a candidate projection over the SUPPLIED events
+// instead of the real log — "given exactly these events, what rows result?".
+//
+// Reads are ISOLATED: the projection's `pb` binding returns nothing. A
+// read-modify-write projection querying live collections mid-simulation
+// would give an answer that depends on the real database, which is how a
+// fixture assertion passes vacuously. That makes this stricter than
+// DryRunProjection, which deliberately keeps live reads because it is
+// simulating against real history.
+//
+// Useful well beyond schema work: it reproduces a projection defect from a
+// hand-written log, with no instance state involved at all.
+func DryRunProjectionOver(spec *ProjectionSpec, fixture []events.Event) (*ProjectionDryRun, error) {
+	return runProjectionOver(spec, fixture, true)
+}
+
+func runProjectionOver(spec *ProjectionSpec, log []events.Event, isolated bool) (*ProjectionDryRun, error) {
+	out := &ProjectionDryRun{Name: spec.Name, Rows: map[string]map[string]map[string]any{}}
+	for _, ev := range log {
+		if !contains(spec.EventTypes, ev.Type) {
+			continue
+		}
+		out.Events++
+
+		result, err := spec.runtime.runProjectionWith(spec, ev, isolated)
+		if err != nil {
+			return nil, fmt.Errorf("dryrun: projection %s failed at event %d: %w", spec.Name, ev.Position, err)
+		}
+		ops, ignored, err := normalizeOps(result)
+		if err != nil {
+			return nil, fmt.Errorf("dryrun: projection %s: %w", spec.Name, err)
+		}
+		out.IgnoredValues += ignored
+		for _, op := range ops {
+			s, err := spec.resolveSchema(op)
 			if err != nil {
 				return nil, fmt.Errorf("dryrun: projection %s: %w", spec.Name, err)
 			}
-			out.IgnoredValues += ignored
-			for _, op := range ops {
-				s, err := spec.resolveSchema(op)
-				if err != nil {
-					return nil, fmt.Errorf("dryrun: projection %s: %w", spec.Name, err)
-				}
-				rows := out.Rows[s.Collection]
-				if rows == nil {
-					rows = map[string]map[string]any{}
-					out.Rows[s.Collection] = rows
-				}
-				key := fmt.Sprint(op.key)
-				if op.delete {
-					out.Deletes++
-					delete(rows, key)
+			rows := out.Rows[s.Collection]
+			if rows == nil {
+				rows = map[string]map[string]any{}
+				out.Rows[s.Collection] = rows
+			}
+			key := fmt.Sprint(op.key)
+			if op.delete {
+				out.Deletes++
+				delete(rows, key)
+				continue
+			}
+			out.Upserts++
+			row := rows[key]
+			if row == nil {
+				row = map[string]any{s.Key: op.key}
+				rows[key] = row
+			}
+			for name, value := range op.fields {
+				if reservedRowFields[name] || name == s.Key {
 					continue
 				}
-				out.Upserts++
-				row := rows[key]
-				if row == nil {
-					row = map[string]any{s.Key: op.key}
-					rows[key] = row
-				}
-				for name, value := range op.fields {
-					if reservedRowFields[name] || name == s.Key {
-						continue
-					}
-					row[name] = value
-				}
+				row[name] = value
 			}
 		}
 	}

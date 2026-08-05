@@ -99,6 +99,13 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 // Math.random is replaced by a PRNG seeded from the event position, so
 // replays produce identical sequences. Use event.created for time.
 func (r *GojaRuntime) runProjection(spec *ProjectionSpec, ev events.Event) (result any, err error) {
+	return r.runProjectionWith(spec, ev, false)
+}
+
+// runProjectionWith runs project(event); isolated cuts the `pb` read binding
+// off from live collections, for fixture runs where reading real rows would
+// make the answer depend on state the fixture does not describe.
+func (r *GojaRuntime) runProjectionWith(spec *ProjectionSpec, ev events.Event, isolated bool) (result any, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			result = nil
@@ -106,7 +113,11 @@ func (r *GojaRuntime) runProjection(spec *ProjectionSpec, ev events.Event) (resu
 		}
 	}()
 
-	vm, timer := r.newVM(spec.Name)
+	newVM := r.newVM
+	if isolated {
+		newVM = r.newVMIsolated
+	}
+	vm, timer := newVM(spec.Name)
 	defer timer.Stop()
 	seedRandom(vm, ev.Position)
 

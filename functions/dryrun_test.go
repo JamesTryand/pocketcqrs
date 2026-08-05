@@ -320,3 +320,97 @@ function project(event) {
 		t.Fatalf("unexpected diffs: %v", diffs)
 	}
 }
+
+// TestDryRunProjectionOverFixture: "given exactly these events, what rows
+// result?" — the shape an eventmodelschema stateView scenario asserts, and a
+// way to reproduce a projection defect from a hand-written log with no
+// instance state involved.
+func TestDryRunProjectionOverFixture(t *testing.T) {
+	rt := NewGojaRuntime(nil)
+	spec, err := LoadProjectionSource(rt, nil, "titles.js", `//@trigger projection titles on NoteCreated NoteArchived
+//@schema note_titles noteId:text title:text
+//@key noteId
+function project(event) {
+  if (event.type === 'NoteArchived') { return [{ delete: event.aggregateId }]; }
+  return [{ upsert: { key: event.aggregateId, fields: { noteId: event.aggregateId, title: event.data.title } } }];
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the fixture carries a THIRD event type the projection does not
+	// declare, so a run that ignored its trigger filter would fail here
+	res, err := DryRunProjectionOver(spec, []events.Event{
+		{Position: 1, AggregateID: "n1", Type: "NoteCreated", Data: json.RawMessage(`{"title":"first"}`)},
+		{Position: 2, AggregateID: "n2", Type: "NoteCreated", Data: json.RawMessage(`{"title":"second"}`)},
+		{Position: 3, AggregateID: "n1", Type: "NoteRenamed", Data: json.RawMessage(`{"title":"ignored"}`)},
+		{Position: 4, AggregateID: "n2", Type: "NoteArchived", Data: json.RawMessage(`{}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Events != 3 {
+		t.Errorf("expected 3 matching events (NoteRenamed is not declared), got %d", res.Events)
+	}
+	rows := res.Rows["note_titles"]
+	if len(rows) != 1 {
+		t.Fatalf("expected one surviving row after the archive, got %v", rows)
+	}
+	if rows["n1"]["title"] != "first" {
+		t.Errorf("unexpected row state: %v", rows)
+	}
+}
+
+// TestDryRunProjectionOverFixtureIsolatesReads is the M7 caveat, enforced.
+// A read-modify-write projection querying live collections mid-simulation
+// gives an answer that depends on the real database — which is exactly how a
+// fixture assertion passes vacuously. Over a fixture, `pb` reads nothing.
+func TestDryRunProjectionOverFixtureIsolatesReads(t *testing.T) {
+	rt := NewGojaRuntime(nil)
+	rt.SetReader(stubReader{})
+	spec, err := LoadProjectionSource(rt, nil, "rmw.js", `//@trigger projection rmw on Ping
+//@schema pings pingId:text seen:text
+//@key pingId
+function project(event) {
+  var prior = pb.findRecord('pings', event.aggregateId);
+  return [{ upsert: { key: event.aggregateId, fields: { pingId: event.aggregateId, seen: prior ? 'live' : 'isolated' } } }];
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := []events.Event{{Position: 1, AggregateID: "p1", Type: "Ping", Data: json.RawMessage(`{}`)}}
+
+	res, err := DryRunProjectionOver(spec, fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Rows["pings"]["p1"]["seen"]; got != "isolated" {
+		t.Fatalf("a fixture run must not read live collections, got %v", got)
+	}
+
+	// ...and the ordinary whole-log run still reads, because it is
+	// simulating against real history where those rows genuinely exist
+	live, err := rt.runProjectionWith(spec, fixture[0], false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops, _, err := normalizeOps(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 || ops[0].fields["seen"] != "live" {
+		t.Fatalf("a non-isolated run should still see the reader: %+v", ops)
+	}
+}
+
+// stubReader stands in for live collections.
+type stubReader struct{}
+
+func (stubReader) FindRecord(collection, id string) (map[string]any, error) {
+	return map[string]any{"id": id}, nil
+}
+func (stubReader) Query(collection, filter string, limit int) ([]map[string]any, error) {
+	return nil, nil
+}
