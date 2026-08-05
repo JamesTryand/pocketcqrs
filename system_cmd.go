@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // newSystemCommand builds the `system` CLI command group.

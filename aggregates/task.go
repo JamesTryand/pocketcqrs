@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/JamesTryand/pocketcqrs/decider"
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // TaskAggregate is the stream/aggregate name for tasks.

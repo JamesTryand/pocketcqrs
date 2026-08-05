@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JamesTryand/pocketcqrs/events"
-	"github.com/JamesTryand/pocketcqrs/functions"
+	"github.com/jamestryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/functions"
 )
 
 // TestRetryDeadLettersAdjudication covers the shared decision behind both

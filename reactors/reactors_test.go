@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/JamesTryand/pocketcqrs/aggregates"
-	"github.com/JamesTryand/pocketcqrs/decider"
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/aggregates"
+	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 func setup(t *testing.T) (*events.Store, *decider.Registry) {

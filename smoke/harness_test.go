@@ -74,7 +74,7 @@ func startBackend(t *testing.T, functions map[string]string) *harness {
 		}
 	}
 
-	bin := build(t, "github.com/JamesTryand/pocketcqrs", filepath.Join(dir, "pocketcqrs"))
+	bin := build(t, "github.com/jamestryand/pocketcqrs", filepath.Join(dir, "pocketcqrs"))
 	dataDir := filepath.Join(dir, "pb_data")
 
 	// the superuser has to exist before serving: every operational route is
@@ -98,7 +98,7 @@ func startBackend(t *testing.T, functions map[string]string) *harness {
 func (h *harness) startDashboard() {
 	h.t.Helper()
 	dir := h.t.TempDir()
-	bin := build(h.t, "github.com/JamesTryand/pocketcqrs/pocketcqrs-dashboard",
+	bin := build(h.t, "github.com/jamestryand/pocketcqrs/pocketcqrs-dashboard",
 		filepath.Join(dir, "pocketcqrs-dashboard"))
 
 	addr := freeAddr(h.t)

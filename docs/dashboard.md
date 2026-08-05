@@ -8,7 +8,7 @@ the deliverable, and the dashboard is the proof that it is genuinely usable
 from outside.
 
 ```sh
-go install github.com/JamesTryand/pocketcqrs/pocketcqrs-dashboard@latest
+go install github.com/jamestryand/pocketcqrs/pocketcqrs-dashboard@latest
 pocketcqrs-dashboard --backend http://127.0.0.1:8090 --listen 127.0.0.1:8091
 ```
 

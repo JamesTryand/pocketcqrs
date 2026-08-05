@@ -20,7 +20,7 @@ import (
 
 	"github.com/pocketbase/pocketbase/core"
 
-	"github.com/JamesTryand/pocketcqrs/functions"
+	"github.com/jamestryand/pocketcqrs/functions"
 )
 
 // Manifest describes a domain pack.

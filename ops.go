@@ -13,7 +13,7 @@ import (
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // registerOpsRoutes binds the superuser-only operational API:

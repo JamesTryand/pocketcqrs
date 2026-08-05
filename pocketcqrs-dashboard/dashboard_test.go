@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JamesTryand/pocketcqrs/scaffold"
+	"github.com/jamestryand/pocketcqrs/scaffold"
 )
 
 // sampleCatalog mirrors the public GET /api/cqrs/catalog JSON. maxPosition

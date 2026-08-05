@@ -2,7 +2,7 @@
 
 Fixtures for M14 (eventmodelschema import/export). Copied verbatim, unmodified.
 
-- **Source**: `github.com/JamesTryand/eventmodelschema`
+- **Source**: `github.com/jamestryand/eventmodelschema`
 - **Commit**: `852989a21956496f9556aa5406a05b8fed4a76ec` — *"v2 M3: multi-file
   composition layer"*, 2026-08-05
 - **Copied**: 2026-08-05

@@ -9,9 +9,9 @@ import (
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
-	"github.com/JamesTryand/pocketcqrs/events"
-	"github.com/JamesTryand/pocketcqrs/functions"
-	"github.com/JamesTryand/pocketcqrs/writeguard"
+	"github.com/jamestryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/functions"
+	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
 // reloadReport summarizes one hot reload (POST /api/cqrs/admin/reload).

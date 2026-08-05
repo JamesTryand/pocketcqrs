@@ -1,4 +1,4 @@
-module github.com/JamesTryand/pocketcqrs
+module github.com/jamestryand/pocketcqrs
 
 go 1.25.0
 

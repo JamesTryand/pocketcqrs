@@ -41,8 +41,8 @@ Two binaries, two install paths (`go install <module>@latest` covers only the
 root main package):
 
 ```sh
-go install github.com/JamesTryand/pocketcqrs@latest                    # the backend
-go install github.com/JamesTryand/pocketcqrs/pocketcqrs-dashboard@latest  # the ops dashboard
+go install github.com/jamestryand/pocketcqrs@latest                    # the backend
+go install github.com/jamestryand/pocketcqrs/pocketcqrs-dashboard@latest  # the ops dashboard
 ```
 
 `@latest` resolves to the newest semver tag (see the repo's tags; pin an

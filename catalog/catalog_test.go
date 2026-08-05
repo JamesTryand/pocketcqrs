@@ -10,11 +10,11 @@ import (
 
 	"github.com/pocketbase/pocketbase/tests"
 
-	"github.com/JamesTryand/pocketcqrs/consumers"
-	"github.com/JamesTryand/pocketcqrs/decider"
-	"github.com/JamesTryand/pocketcqrs/events"
-	"github.com/JamesTryand/pocketcqrs/functions"
-	"github.com/JamesTryand/pocketcqrs/projections"
+	"github.com/jamestryand/pocketcqrs/consumers"
+	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/functions"
+	"github.com/jamestryand/pocketcqrs/projections"
 )
 
 // stubProjection stands in for a built-in Go projection (with declared

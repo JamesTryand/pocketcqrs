@@ -21,8 +21,8 @@ import (
 	"github.com/dop251/goja"
 	"github.com/pocketbase/pocketbase/tools/cron"
 
-	"github.com/JamesTryand/pocketcqrs/consumers"
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/consumers"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // Runtime hosts user-defined functions.

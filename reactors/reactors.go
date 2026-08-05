@@ -14,9 +14,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/JamesTryand/pocketcqrs/consumers"
-	"github.com/JamesTryand/pocketcqrs/decider"
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/consumers"
+	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // Reaction is a command to dispatch in response to an event.

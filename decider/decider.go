@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // ErrUnknownAggregate is returned when no decider is registered for an aggregate.

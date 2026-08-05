@@ -3,9 +3,9 @@ package reactors
 import (
 	"encoding/json"
 
-	"github.com/JamesTryand/pocketcqrs/aggregates"
-	"github.com/JamesTryand/pocketcqrs/decider"
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/aggregates"
+	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // Fulfillment returns the reactor that opens a fulfillment task for every

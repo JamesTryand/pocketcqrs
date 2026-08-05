@@ -8,9 +8,9 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/spf13/cobra"
 
-	"github.com/JamesTryand/pocketcqrs/consumers"
-	"github.com/JamesTryand/pocketcqrs/projections"
-	"github.com/JamesTryand/pocketcqrs/writeguard"
+	"github.com/jamestryand/pocketcqrs/consumers"
+	"github.com/jamestryand/pocketcqrs/projections"
+	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
 // allProjections is the single source of truth for the platform's

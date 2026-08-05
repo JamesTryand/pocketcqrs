@@ -15,9 +15,9 @@ import (
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
-	"github.com/JamesTryand/pocketcqrs/decider"
-	"github.com/JamesTryand/pocketcqrs/functions"
-	"github.com/JamesTryand/pocketcqrs/scaffold"
+	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/functions"
+	"github.com/jamestryand/pocketcqrs/scaffold"
 )
 
 // functionNamePattern is the whole allowed shape of a function file name:

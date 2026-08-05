@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // Consumer processes events from the log in position order.

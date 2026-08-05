@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JamesTryand/pocketcqrs/functions"
+	"github.com/jamestryand/pocketcqrs/functions"
 )
 
 // TestResolveFunctionPathRejects is the security test for the function-file

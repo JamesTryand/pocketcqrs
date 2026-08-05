@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JamesTryand/pocketcqrs/decider"
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 func writeTempFn(t *testing.T, name, src string) string {

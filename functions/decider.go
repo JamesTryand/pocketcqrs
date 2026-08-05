@@ -8,8 +8,8 @@ import (
 
 	"github.com/dop251/goja"
 
-	"github.com/JamesTryand/pocketcqrs/decider"
-	"github.com/JamesTryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // DeciderSpec is a JS decider: its aggregate, declared event coverage,
