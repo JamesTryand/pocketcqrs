@@ -1,0 +1,30 @@
+{
+  "place-order": {
+    "name": "Place Order",
+    "description": "Customer submits a new order.",
+    "reason": "A customer wants to buy items.",
+    "aggregate": "Order",
+    "fields": [
+      {
+        "name": "customerId",
+        "type": "uuid"
+      },
+      {
+        "name": "items",
+        "type": "custom",
+        "cardinality": "list"
+      }
+    ]
+  },
+  "ship-order": {
+    "name": "Ship Order",
+    "description": "Warehouse fulfills a pending order.",
+    "reason": "A pending order needs to leave the warehouse.",
+    "aggregate": "Order"
+  },
+  "notify-shipping-partner": {
+    "name": "Notify Shipping Partner",
+    "description": "Informs the external shipping partner that an order has shipped.",
+    "reason": "The shipping partner needs to know about the shipment to process it."
+  }
+}

@@ -1,0 +1,180 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "1.0.0",
+  "id": "order-fulfillment",
+  "name": "Order Fulfillment",
+  "description": "Worked example exercising every notation in the schema: all 3 slice patterns, all 3 scenario kinds, a hotspot, a chapter, and an actor lane. The shipping-partner notification slice also demonstrates automation without a read model (a boundary-crossing Bridge/Reactor: event straight to command, no persisted state needed).",
+  "swimlanes": [
+    { "id": "sales", "name": "Sales", "kind": "team" },
+    { "id": "warehouse", "name": "Warehouse", "kind": "system" },
+    { "id": "shipping-partner", "name": "Shipping Partner", "kind": "system", "description": "External carrier integration boundary." }
+  ],
+  "chapters": {
+    "order-lifecycle": { "name": "Order Lifecycle", "description": "From placement through shipment notification." }
+  },
+  "actorLanes": {
+    "customer": { "name": "Customer" }
+  },
+  "events": {
+    "order-placed": {
+      "name": "Order Placed",
+      "description": "A customer placed an order.",
+      "swimlaneId": "sales",
+      "aggregate": "Order",
+      "fields": [
+        { "name": "orderId", "type": "uuid", "idAttribute": true },
+        { "name": "customerEmail", "type": "string", "pii": true },
+        {
+          "name": "items",
+          "type": "custom",
+          "cardinality": "list",
+          "subfields": [
+            { "name": "sku", "type": "string" },
+            { "name": "qty", "type": "integer" }
+          ]
+        }
+      ]
+    },
+    "order-shipped": { "name": "Order Shipped", "description": "The warehouse shipped an order.", "swimlaneId": "warehouse", "aggregate": "Order" },
+    "shipment-notified": { "name": "Shipment Notified", "description": "The shipping partner was notified of a shipment.", "swimlaneId": "shipping-partner" }
+  },
+  "commands": {
+    "place-order": {
+      "name": "Place Order",
+      "description": "Customer submits a new order.",
+      "reason": "A customer wants to buy items.",
+      "aggregate": "Order",
+      "fields": [
+        { "name": "customerId", "type": "uuid" },
+        { "name": "items", "type": "custom", "cardinality": "list" }
+      ]
+    },
+    "ship-order": { "name": "Ship Order", "description": "Warehouse fulfills a pending order.", "reason": "A pending order needs to leave the warehouse.", "aggregate": "Order" },
+    "notify-shipping-partner": { "name": "Notify Shipping Partner", "description": "Informs the external shipping partner that an order has shipped.", "reason": "The shipping partner needs to know about the shipment to process it." }
+  },
+  "readModels": {
+    "order-summary": {
+      "name": "Order Summary",
+      "description": "Current status of a single order.",
+      "question": "What's the current status of my order?",
+      "builtFromEventIds": ["order-placed", "order-shipped"],
+      "fields": [
+        { "name": "orderId", "type": "uuid", "idAttribute": true },
+        { "name": "status", "type": "string" }
+      ]
+    },
+    "pending-shipments": {
+      "name": "Pending Shipments",
+      "description": "Orders waiting to be shipped.",
+      "question": "Which orders are waiting to be shipped?",
+      "builtFromEventIds": ["order-placed"]
+    }
+  },
+  "screens": {
+    "place-order-screen": { "name": "Place Order", "actorLaneId": "customer" },
+    "order-status-screen": { "name": "Order Status", "actorLaneId": "customer" }
+  },
+  "automations": {
+    "auto-ship-pending-orders": { "name": "Auto-Ship Pending Orders", "description": "Reacts to newly placed orders by shipping them." },
+    "notify-shipping-partner-automation": { "name": "Notify Shipping Partner", "description": "Reacts to a shipment leaving the warehouse by notifying the external shipping partner. A Bridge: no local state needed, straight from event to command." }
+  },
+  "slices": [
+    {
+      "id": "place-order-slice",
+      "name": "Place Order",
+      "pattern": "stateChange",
+      "swimlaneId": "sales",
+      "chapterId": "order-lifecycle",
+      "businessCapability": "Allow customers to place orders",
+      "status": "done",
+      "screenId": "place-order-screen",
+      "commandId": "place-order",
+      "eventIds": ["order-placed"],
+      "scenarios": [
+        {
+          "id": "place-order-happy-path",
+          "name": "Placing an order records Order Placed",
+          "kind": "stateChange",
+          "given": [],
+          "when": { "commandId": "place-order", "data": { "customerId": "cust-1", "items": [{ "sku": "WIDGET-1", "qty": 2 }] } },
+          "then": { "events": [{ "eventId": "order-placed", "data": { "orderId": "order-1", "customerId": "cust-1" } }] }
+        }
+      ]
+    },
+    {
+      "id": "order-status-slice",
+      "name": "Order Status",
+      "pattern": "stateView",
+      "swimlaneId": "sales",
+      "chapterId": "order-lifecycle",
+      "businessCapability": "Let customers check their order status",
+      "status": "done",
+      "screenId": "order-status-screen",
+      "readModelId": "order-summary",
+      "scenarios": [
+        {
+          "id": "view-order-summary-after-placement",
+          "name": "Order summary reflects a placed order before shipment",
+          "kind": "stateView",
+          "given": [{ "eventId": "order-placed", "data": { "orderId": "order-1" } }],
+          "when": { "readModelId": "order-summary", "queryParams": { "orderId": "order-1" } },
+          "then": { "result": { "orderId": "order-1", "status": "placed" } }
+        }
+      ]
+    },
+    {
+      "id": "auto-ship-slice",
+      "name": "Auto-Ship Pending Orders",
+      "pattern": "automation",
+      "swimlaneId": "warehouse",
+      "chapterId": "order-lifecycle",
+      "businessCapability": "Ship orders without manual warehouse intervention",
+      "status": "inProgress",
+      "automationId": "auto-ship-pending-orders",
+      "triggerEventIds": ["order-placed"],
+      "readModelId": "pending-shipments",
+      "commandId": "ship-order",
+      "resultEventIds": ["order-shipped"],
+      "scenarios": [
+        {
+          "id": "auto-ship-triggers-on-order-placed",
+          "name": "A placed order automatically triggers shipment",
+          "kind": "stateChange",
+          "given": [{ "eventId": "order-placed", "data": { "orderId": "order-1" } }],
+          "when": { "commandId": "ship-order", "data": { "orderId": "order-1" } },
+          "then": { "events": [{ "eventId": "order-shipped", "data": { "orderId": "order-1" } }] }
+        }
+      ]
+    },
+    {
+      "id": "notify-shipping-partner-slice",
+      "name": "Notify Shipping Partner",
+      "pattern": "automation",
+      "swimlaneId": "shipping-partner",
+      "chapterId": "order-lifecycle",
+      "businessCapability": "Keep the external shipping partner informed of shipments",
+      "status": "planned",
+      "automationId": "notify-shipping-partner-automation",
+      "triggerEventIds": ["order-shipped"],
+      "commandId": "notify-shipping-partner",
+      "resultEventIds": ["shipment-notified"],
+      "scenarios": [
+        {
+          "id": "notify-partner-on-shipment",
+          "name": "A warehouse shipment automatically notifies the shipping partner",
+          "kind": "stateChange",
+          "given": [{ "eventId": "order-shipped", "data": { "orderId": "order-1" } }],
+          "when": { "commandId": "notify-shipping-partner", "data": { "orderId": "order-1" } },
+          "then": { "events": [{ "eventId": "shipment-notified", "data": { "orderId": "order-1" } }] }
+        }
+      ]
+    }
+  ],
+  "hotspots": {
+    "unclear-status-timing": {
+      "note": "Unclear whether the Order Status screen should show 'processing' before the shipment automation fires, or jump straight from 'placed' to 'shipped'.",
+      "target": { "kind": "ordering", "sliceIds": ["order-status-slice", "auto-ship-slice"] },
+      "resolved": false
+    }
+  }
+}

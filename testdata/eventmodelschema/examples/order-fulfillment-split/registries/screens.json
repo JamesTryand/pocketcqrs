@@ -1,0 +1,10 @@
+{
+  "place-order-screen": {
+    "name": "Place Order",
+    "actorLaneId": "customer"
+  },
+  "order-status-screen": {
+    "name": "Order Status",
+    "actorLaneId": "customer"
+  }
+}

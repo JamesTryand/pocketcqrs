@@ -1,0 +1,499 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "title": "EventModeling Document",
+  "description": "Structural schema for a document describing an EventModeling model (eventmodeling.org methodology): swimlanes, the 5 elements (Event/Command/ReadModel/Screen/Automation), the 3 slice patterns (State Change/State View/Automation), scenarios, and the optional notation layer (hotspots, chapters, actor lanes, slice status). Events are only ever produced by a Command; a Read Model can be consulted for context but never originates an Event -- see docs/design-notes.md for why this schema has no separate 'translation' pattern. This schema enforces structural well-formedness only -- methodology rules such as 'every command has a reason' or anti-pattern cardinality checks are deliberately NOT enforced here; see docs/design-notes.md.",
+  "type": "object",
+  "required": ["eventModelingSchemaVersion", "id", "name", "swimlanes", "slices"],
+  "properties": {
+    "$schema": { "type": "string", "format": "uri" },
+    "eventModelingSchemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "default": "1.0.0"
+    },
+    "id": { "$ref": "#/$defs/id" },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "swimlanes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/swimlane" },
+      "minItems": 1
+    },
+    "chapters": { "$ref": "#/$defs/chapterRegistry" },
+    "actorLanes": { "$ref": "#/$defs/actorLaneRegistry" },
+    "events": { "$ref": "#/$defs/eventRegistry" },
+    "commands": { "$ref": "#/$defs/commandRegistry" },
+    "readModels": { "$ref": "#/$defs/readModelRegistry" },
+    "screens": { "$ref": "#/$defs/screenRegistry" },
+    "automations": { "$ref": "#/$defs/automationRegistry" },
+    "slices": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/slice" }
+    },
+    "hotspots": { "$ref": "#/$defs/hotspotRegistry" }
+  },
+  "additionalProperties": false,
+
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+
+    "swimlaneKind": { "enum": ["team", "system"] },
+
+    "sliceStatus": {
+      "enum": ["created", "done", "assigned", "inProgress", "review", "blocked", "planned", "informational"]
+    },
+
+    "slicePattern": {
+      "enum": ["stateChange", "stateView", "automation"]
+    },
+
+    "scenarioKind": {
+      "enum": ["stateChange", "stateView", "error"]
+    },
+
+    "swimlane": {
+      "type": "object",
+      "required": ["id", "name", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/swimlaneKind" },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "fieldType": {
+      "enum": ["string", "boolean", "integer", "long", "decimal", "double", "date", "dateTime", "uuid", "custom"]
+    },
+
+    "fieldCardinality": { "enum": ["single", "list"] },
+
+    "field": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "$ref": "#/$defs/fieldType" },
+        "description": { "type": "string" },
+        "optional": { "type": "boolean" },
+        "cardinality": { "$ref": "#/$defs/fieldCardinality" },
+        "idAttribute": { "type": "boolean" },
+        "pii": { "type": "boolean" },
+        "subfields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "event": {
+      "type": "object",
+      "required": ["name", "swimlaneId"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "swimlaneId": { "$ref": "#/$defs/id" },
+        "aggregate": { "type": "string", "minLength": 1 },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "command": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "reason": { "type": "string" },
+        "aggregate": { "type": "string", "minLength": 1 },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "readModel": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "question": { "type": "string" },
+        "builtFromEventIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "screen": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "actorLaneId": { "$ref": "#/$defs/id" }
+      },
+      "additionalProperties": false
+    },
+
+    "automation": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "chapter": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "actorLane": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "eventRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/event" }
+    },
+    "commandRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/command" }
+    },
+    "readModelRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/readModel" }
+    },
+    "screenRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/screen" }
+    },
+    "automationRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/automation" }
+    },
+    "chapterRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/chapter" }
+    },
+    "actorLaneRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/actorLane" }
+    },
+    "hotspotRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/hotspot" }
+    },
+
+    "eventRef": {
+      "type": "object",
+      "required": ["eventId"],
+      "properties": {
+        "eventId": { "$ref": "#/$defs/id" },
+        "data": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "commandRef": {
+      "type": "object",
+      "required": ["commandId"],
+      "properties": {
+        "commandId": { "$ref": "#/$defs/id" },
+        "data": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "readModelQuery": {
+      "type": "object",
+      "required": ["readModelId"],
+      "properties": {
+        "readModelId": { "$ref": "#/$defs/id" },
+        "queryParams": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "eventsThen": {
+      "type": "object",
+      "required": ["events"],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/eventRef" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "errorThen": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": ["message"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "resultThen": {
+      "type": "object",
+      "required": ["result"],
+      "properties": {
+        "result": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "scenarioBase": {
+      "type": "object",
+      "required": ["id", "name", "kind", "given"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/scenarioKind" },
+        "given": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/eventRef" }
+        }
+      }
+    },
+
+    "scenario": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/scenarioBase" },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "stateChange" } } },
+          "then": {
+            "type": "object",
+            "required": ["when", "then"],
+            "properties": {
+              "when": { "$ref": "#/$defs/commandRef" },
+              "then": { "$ref": "#/$defs/eventsThen" }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "stateView" } } },
+          "then": {
+            "type": "object",
+            "required": ["when", "then"],
+            "properties": {
+              "when": { "$ref": "#/$defs/readModelQuery" },
+              "then": { "$ref": "#/$defs/resultThen" }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "error" } } },
+          "then": {
+            "type": "object",
+            "required": ["when", "then"],
+            "properties": {
+              "when": { "$ref": "#/$defs/commandRef" },
+              "then": { "$ref": "#/$defs/errorThen" }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "sliceBase": {
+      "type": "object",
+      "required": ["id", "name", "pattern", "swimlaneId", "status", "scenarios"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "pattern": { "$ref": "#/$defs/slicePattern" },
+        "swimlaneId": { "$ref": "#/$defs/id" },
+        "chapterId": { "$ref": "#/$defs/id" },
+        "businessCapability": { "type": "string" },
+        "status": { "$ref": "#/$defs/sliceStatus", "default": "created" },
+        "scenarios": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/scenario" }
+        }
+      }
+    },
+
+    "slice": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/sliceBase" },
+        {
+          "if": { "type": "object", "properties": { "pattern": { "const": "stateChange" } } },
+          "then": {
+            "type": "object",
+            "required": ["screenId", "commandId", "eventIds"],
+            "properties": {
+              "screenId": { "$ref": "#/$defs/id" },
+              "commandId": { "$ref": "#/$defs/id" },
+              "eventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "scenarios": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": { "kind": { "enum": ["stateChange", "error"] } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "pattern": { "const": "stateView" } } },
+          "then": {
+            "type": "object",
+            "required": ["screenId", "readModelId"],
+            "properties": {
+              "screenId": { "$ref": "#/$defs/id" },
+              "readModelId": { "$ref": "#/$defs/id" },
+              "scenarios": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": { "kind": { "enum": ["stateView"] } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "pattern": { "const": "automation" } } },
+          "then": {
+            "type": "object",
+            "required": ["automationId", "triggerEventIds", "commandId", "resultEventIds"],
+            "properties": {
+              "automationId": { "$ref": "#/$defs/id" },
+              "triggerEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "readModelId": { "$ref": "#/$defs/id" },
+              "commandId": { "$ref": "#/$defs/id" },
+              "resultEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "scenarios": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": { "kind": { "enum": ["stateChange", "error"] } }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "hotspotTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "elementType", "elementId"],
+          "properties": {
+            "kind": { "const": "element" },
+            "elementType": {
+              "enum": ["swimlane", "event", "command", "readModel", "screen", "automation", "chapter", "actorLane"]
+            },
+            "elementId": { "$ref": "#/$defs/id" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "sliceId"],
+          "properties": {
+            "kind": { "const": "slice" },
+            "sliceId": { "$ref": "#/$defs/id" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "sliceIds"],
+          "properties": {
+            "kind": { "const": "ordering" },
+            "sliceIds": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "hotspot": {
+      "type": "object",
+      "required": ["note", "target"],
+      "properties": {
+        "note": { "type": "string", "minLength": 1 },
+        "target": { "$ref": "#/$defs/hotspotTarget" },
+        "resolved": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

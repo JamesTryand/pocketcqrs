@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "1.0.0",
+  "id": "minimal-example",
+  "name": "Minimal Example",
+  "description": "Smallest valid document: one swimlane, one State Change slice, no optional notation layer (no chapters, actor lanes, or hotspots).",
+  "swimlanes": [
+    { "id": "sales", "name": "Sales", "kind": "team" }
+  ],
+  "events": {
+    "order-placed": { "name": "Order Placed", "swimlaneId": "sales" }
+  },
+  "commands": {
+    "place-order": { "name": "Place Order" }
+  },
+  "screens": {
+    "place-order-screen": { "name": "Place Order" }
+  },
+  "slices": [
+    {
+      "id": "place-order-slice",
+      "name": "Place Order",
+      "pattern": "stateChange",
+      "swimlaneId": "sales",
+      "status": "created",
+      "screenId": "place-order-screen",
+      "commandId": "place-order",
+      "eventIds": ["order-placed"],
+      "scenarios": []
+    }
+  ]
+}

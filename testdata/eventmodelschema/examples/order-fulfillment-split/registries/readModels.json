@@ -1,0 +1,30 @@
+{
+  "order-summary": {
+    "name": "Order Summary",
+    "description": "Current status of a single order.",
+    "question": "What's the current status of my order?",
+    "builtFromEventIds": [
+      "order-placed",
+      "order-shipped"
+    ],
+    "fields": [
+      {
+        "name": "orderId",
+        "type": "uuid",
+        "idAttribute": true
+      },
+      {
+        "name": "status",
+        "type": "string"
+      }
+    ]
+  },
+  "pending-shipments": {
+    "name": "Pending Shipments",
+    "description": "Orders waiting to be shipped.",
+    "question": "Which orders are waiting to be shipped?",
+    "builtFromEventIds": [
+      "order-placed"
+    ]
+  }
+}

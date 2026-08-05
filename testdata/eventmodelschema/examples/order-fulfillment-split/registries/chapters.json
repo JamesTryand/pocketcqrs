@@ -1,0 +1,6 @@
+{
+  "order-lifecycle": {
+    "name": "Order Lifecycle",
+    "description": "From placement through shipment notification."
+  }
+}

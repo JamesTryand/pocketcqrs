@@ -1,0 +1,49 @@
+{
+  "id": "auto-ship-slice",
+  "name": "Auto-Ship Pending Orders",
+  "pattern": "automation",
+  "swimlaneId": "warehouse",
+  "chapterId": "order-lifecycle",
+  "businessCapability": "Ship orders without manual warehouse intervention",
+  "status": "inProgress",
+  "automationId": "auto-ship-pending-orders",
+  "triggerEventIds": [
+    "order-placed"
+  ],
+  "readModelId": "pending-shipments",
+  "commandId": "ship-order",
+  "resultEventIds": [
+    "order-shipped"
+  ],
+  "scenarios": [
+    {
+      "id": "auto-ship-triggers-on-order-placed",
+      "name": "A placed order automatically triggers shipment",
+      "kind": "stateChange",
+      "given": [
+        {
+          "eventId": "order-placed",
+          "data": {
+            "orderId": "order-1"
+          }
+        }
+      ],
+      "when": {
+        "commandId": "ship-order",
+        "data": {
+          "orderId": "order-1"
+        }
+      },
+      "then": {
+        "events": [
+          {
+            "eventId": "order-shipped",
+            "data": {
+              "orderId": "order-1"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

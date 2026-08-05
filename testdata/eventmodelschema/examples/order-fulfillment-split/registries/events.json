@@ -1,0 +1,46 @@
+{
+  "order-placed": {
+    "name": "Order Placed",
+    "description": "A customer placed an order.",
+    "swimlaneId": "sales",
+    "aggregate": "Order",
+    "fields": [
+      {
+        "name": "orderId",
+        "type": "uuid",
+        "idAttribute": true
+      },
+      {
+        "name": "customerEmail",
+        "type": "string",
+        "pii": true
+      },
+      {
+        "name": "items",
+        "type": "custom",
+        "cardinality": "list",
+        "subfields": [
+          {
+            "name": "sku",
+            "type": "string"
+          },
+          {
+            "name": "qty",
+            "type": "integer"
+          }
+        ]
+      }
+    ]
+  },
+  "order-shipped": {
+    "name": "Order Shipped",
+    "description": "The warehouse shipped an order.",
+    "swimlaneId": "warehouse",
+    "aggregate": "Order"
+  },
+  "shipment-notified": {
+    "name": "Shipment Notified",
+    "description": "The shipping partner was notified of a shipment.",
+    "swimlaneId": "shipping-partner"
+  }
+}

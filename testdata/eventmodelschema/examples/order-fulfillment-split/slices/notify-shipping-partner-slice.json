@@ -1,0 +1,48 @@
+{
+  "id": "notify-shipping-partner-slice",
+  "name": "Notify Shipping Partner",
+  "pattern": "automation",
+  "swimlaneId": "shipping-partner",
+  "chapterId": "order-lifecycle",
+  "businessCapability": "Keep the external shipping partner informed of shipments",
+  "status": "planned",
+  "automationId": "notify-shipping-partner-automation",
+  "triggerEventIds": [
+    "order-shipped"
+  ],
+  "commandId": "notify-shipping-partner",
+  "resultEventIds": [
+    "shipment-notified"
+  ],
+  "scenarios": [
+    {
+      "id": "notify-partner-on-shipment",
+      "name": "A warehouse shipment automatically notifies the shipping partner",
+      "kind": "stateChange",
+      "given": [
+        {
+          "eventId": "order-shipped",
+          "data": {
+            "orderId": "order-1"
+          }
+        }
+      ],
+      "when": {
+        "commandId": "notify-shipping-partner",
+        "data": {
+          "orderId": "order-1"
+        }
+      },
+      "then": {
+        "events": [
+          {
+            "eventId": "shipment-notified",
+            "data": {
+              "orderId": "order-1"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
