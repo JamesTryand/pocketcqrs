@@ -168,6 +168,38 @@
       </div>
       {{end}}
 
+      {{if eq .Mode "react"}}
+      <div class="wa-cluster wa-gap-l wa-tabular-nums">
+        <span class="wa-caption-m">reactor <strong>{{.Reactor}}</strong></span>
+        <span class="wa-caption-m">events replayed <strong>{{.Events}}</strong></span>
+        <span class="wa-caption-m">commands it would dispatch <strong>{{len .Dispatches}}</strong></span>
+      </div>
+      {{if gt .IgnoredValues 0}}
+      <wa-callout variant="warning" size="s">
+        <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
+        <strong>{{.IgnoredValues}} returned value(s) are not dispatches</strong> and would be discarded at runtime. <code>react(event)</code> must return <code>{aggregate, id, command, payload}</code> descriptors &mdash; anything else is dropped, so the reactor would send nothing.
+      </wa-callout>
+      {{end}}
+      {{with .Dispatches}}
+      <div class="wa-stack wa-gap-2xs">
+        <span class="wa-caption-m">commands this reactor would dispatch (nothing was dispatched, and no decider ran)</span>
+        <table class="wa-zebra-rows">
+          <thead><tr><th>caused by</th><th>target</th><th>command</th><th>payload</th></tr></thead>
+          <tbody>
+            {{range .}}
+            <tr>
+              <td class="wa-tabular-nums">{{.CausedBy}}</td>
+              <td><code>{{.Aggregate}}/{{.ID}}</code></td>
+              <td><code>{{.Command}}</code></td>
+              <td><code>{{printf "%s" .Payload}}</code></td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{end}}
+      {{end}}
+
       {{/* A refusal is a VERDICT, not a failure — the decider worked and said
            no. It arrives as a 200 precisely so this panel can distinguish it
            from a broken candidate, which renders as an error instead. Neutral

@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -679,5 +680,130 @@ function project(event) { return [{ upsert: { key: event.data.title, fields: { t
 		jsonBody(map[string]string{"title": "direct"}), nil)
 	if status != http.StatusForbidden {
 		t.Fatalf("direct writes to a projection-owned collection must be denied, got %d", status)
+	}
+}
+
+// TestJSReactorTier is the end-to-end proof of the fourth consumer kind: a
+// reactor defined in a function file maps a committed event to a COMMAND,
+// dispatched through the decider registry.
+//
+// The wiring between processes is where this project's worst defects have
+// lived, and a reactor crosses more of it than anything else — the loader,
+// the consumers engine, the registry, the checkpoint store and the catalog.
+func TestJSReactorTier(t *testing.T) {
+	h := startBackend(t, nil)
+
+	// a reactor that turns a completed task into a follow-up task. The
+	// target id is derived from the source event, which is what makes the
+	// at-least-once replay idempotent.
+	const reactorSrc = `//@trigger react TaskCompleted
+//@dispatches task/CreateTask
+
+function react(event) {
+  return [{
+    aggregate: 'task',
+    id: 'followup-' + event.aggregateId,
+    command: 'CreateTask',
+    payload: { title: 'follow up on ' + event.aggregateId }
+  }];
+}
+`
+	// the dry run reports what it WOULD send, and sends nothing
+	var dry map[string]any
+	status, raw := h.api(http.MethodPost, "/api/cqrs/admin/dryrun",
+		jsonBody(map[string]any{"name": "followup.js", "source": reactorSrc, "mode": "react"}), &dry)
+	if status != http.StatusOK {
+		t.Fatalf("reactor dry run: %d: %s", status, truncate(raw, 300))
+	}
+	if _, ok := dry["dispatches"]; !ok {
+		t.Errorf("a react dry run must report `dispatches`, not `events`: %v", dry)
+	}
+
+	h.apiOK(http.MethodPut, "/api/cqrs/admin/functions/followup.js",
+		jsonBody(map[string]string{"source": reactorSrc}), nil)
+
+	// A REACTOR ACTIVATES IN RUNNING MODE. It declares no schema, so it
+	// rides the effect tier — needing the maintenance barrier for an
+	// ordinary saga edit would make the tier far less useful, and this is
+	// the assertion that keeps it where it claims to be.
+	var mode struct {
+		Mode string `json:"mode"`
+	}
+	h.apiOK(http.MethodGet, "/api/cqrs/admin/mode", nil, &mode)
+	if mode.Mode != "running" {
+		t.Fatalf("this test must start in running mode, got %q", mode.Mode)
+	}
+	report := h.reload()
+	reloaded, _ := report["reactorsReloaded"].([]any)
+	if len(reloaded) != 1 || reloaded[0] != "followup" {
+		t.Fatalf("the reactor did not activate in running mode: %v", report)
+	}
+
+	// drive the trigger through the real command path
+	h.command("task", "chore", "CreateTask", map[string]string{"title": "sweep"})
+	h.command("task", "chore", "CompleteTask", map[string]string{})
+
+	// the reaction lands as a real event on a real stream
+	var feed struct {
+		Events []struct {
+			AggregateID string          `json:"aggregateId"`
+			Type        string          `json:"type"`
+			Metadata    json.RawMessage `json:"metadata"`
+		} `json:"events"`
+	}
+	eventually(t, "the JS reactor's dispatched command to land", func() bool {
+		h.apiOK(http.MethodGet, "/api/cqrs/events?aggregate=task&aggregateId=followup-chore", nil, &feed)
+		return len(feed.Events) == 1
+	})
+	if feed.Events[0].Type != "TaskCreated" {
+		t.Fatalf("unexpected reacted event: %+v", feed.Events[0])
+	}
+
+	// the metadata actor is what earns it a catalog flow edge, and the
+	// catalog kind is what the checkpoint prefix earns it
+	var meta map[string]any
+	if err := json.Unmarshal(feed.Events[0].Metadata, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["actor"] != "reactor:followup" {
+		t.Errorf("actor must be reactor:<name>, got %v", meta["actor"])
+	}
+
+	var cat struct {
+		Consumers []struct {
+			Name       string   `json:"name"`
+			Kind       string   `json:"kind"`
+			Dispatches []string `json:"dispatches"`
+		} `json:"consumers"`
+		Flows []struct {
+			Reactor string `json:"reactor"`
+			Cause   string `json:"cause"`
+			Target  string `json:"target"`
+		} `json:"flows"`
+	}
+	h.apiOK(http.MethodGet, "/api/cqrs/catalog", nil, &cat)
+	var found bool
+	for _, c := range cat.Consumers {
+		if c.Name == "fn-react:followup" {
+			found = true
+			if c.Kind != "js-reactor" {
+				t.Errorf("expected kind js-reactor, got %q", c.Kind)
+			}
+			if len(c.Dispatches) != 1 || c.Dispatches[0] != "task/CreateTask" {
+				t.Errorf("declared dispatches missing from the catalog: %+v", c.Dispatches)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the JS reactor is not in the catalog's consumers: %+v", cat.Consumers)
+	}
+	var flowed bool
+	for _, f := range cat.Flows {
+		if f.Reactor == "reactor:followup" && f.Cause == "task/TaskCompleted" && f.Target == "task/TaskCreated" {
+			flowed = true
+		}
+	}
+	if !flowed {
+		t.Errorf("the reaction did not produce a catalog flow edge: %+v", cat.Flows)
 	}
 }

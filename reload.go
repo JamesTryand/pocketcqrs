@@ -20,6 +20,7 @@ type reloadReport struct {
 	EffectsReloaded    []string `json:"effectsReloaded"`
 	HTTPReloaded       []string `json:"httpReloaded"`
 	CronReloaded       []string `json:"cronReloaded"`
+	ReactorsReloaded   []string `json:"reactorsReloaded,omitempty"`
 	SchemaTier         string   `json:"schemaTier"` // "reloaded" or "skipped: not in maintenance"
 	Projections        []string `json:"projectionsReloaded,omitempty"`
 	ProjectionsRemoved []string `json:"projectionsRemoved,omitempty"`
@@ -82,6 +83,22 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 		c.engine.Register(consumer)
 		report.EffectsReloaded = append(report.EffectsReloaded, consumer.Name())
 	}
+
+	// Reactors ride the effect tier: they declare no schema, so they swap in
+	// ANY mode. That is a behavioural claim (a reactor-only change must not
+	// need the maintenance barrier), and it is what makes the tier usable
+	// for ordinary saga edits. They dispatch through the registry, so the
+	// fresh runtime needs it before any delivery happens.
+	fresh.SetRegistry(c.registry)
+	for _, spec := range c.jsReactors {
+		c.engine.Unregister(spec.Name())
+	}
+	c.jsReactors = loaded.Reactors
+	for _, spec := range loaded.Reactors {
+		c.engine.Register(spec)
+		report.ReactorsReloaded = append(report.ReactorsReloaded, spec.Reactor)
+	}
+	sort.Strings(report.ReactorsReloaded)
 
 	c.httpFns.ReplaceFrom(loaded.HTTP)
 	report.HTTPReloaded = loaded.HTTP.Names()

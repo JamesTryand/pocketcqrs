@@ -15,6 +15,7 @@ type LoadResult struct {
 	HTTP        *HTTPRegistry
 	Projections []*ProjectionSpec
 	Deciders    []*DeciderSpec
+	Reactors    []*ReactorSpec
 }
 
 // Kind names what a function file declares, using the same branch the loader
@@ -30,6 +31,11 @@ const (
 	KindEffect     Kind = "effect"
 	KindProjection Kind = "projection"
 	KindDecider    Kind = "decider"
+	// KindReactor is a //@trigger react file: a durable consumer that maps
+	// events to COMMANDS, dispatched through the decider registry. It is
+	// effect-tier for reload purposes (it declares no schema) but it is its
+	// own kind, because it is the only tier that causes new writes.
+	KindReactor Kind = "reactor"
 )
 
 // Declaration is what one function file's directives declare.
@@ -48,6 +54,8 @@ type Declaration struct {
 	Aggregate   string   `json:"aggregate,omitempty"`
 	Handles     []string `json:"handles,omitempty"`
 	Commands    []string `json:"commands,omitempty"`
+	React       []string `json:"react,omitempty"`
+	Dispatches  []string `json:"dispatches,omitempty"`
 	// SchemaBearing reports whether ACTIVATING this file needs the
 	// maintenance barrier: projection schemas and deciders move only in
 	// maintenance, effect/http/cron functions move in any mode.
@@ -74,6 +82,8 @@ func declaration(name string, t triggers) (*Declaration, error) {
 		Aggregate:  t.decider,
 		Handles:    t.handles,
 		Commands:   t.commands,
+		React:      t.react,
+		Dispatches: t.dispatches,
 	}
 	if t.empty() {
 		return d, nil
@@ -95,17 +105,32 @@ func declaration(name string, t triggers) (*Declaration, error) {
 	if t.decider != "" {
 		kinds++
 	}
+	// react gets its OWN bucket rather than joining event/http/cron. A file
+	// declaring both //@trigger event X and //@trigger react X is two
+	// delivery paths over one event, with two checkpoints, and there is no
+	// sensible reading of what it means — while a silent merge would give
+	// one of them no way to be noticed. Same call as the cron+projection
+	// quirk, made before it bites rather than after.
+	if len(t.react) > 0 {
+		kinds++
+	}
 	if kinds > 1 {
-		return nil, fmt.Errorf("functions: %s: projection and decider files must be single-purpose", name)
+		return nil, fmt.Errorf("functions: %s: projection, decider and reactor files must be single-purpose", name)
+	}
+	if len(t.dispatches) > 0 && len(t.react) == 0 {
+		return nil, fmt.Errorf("functions: %s: //@dispatches requires //@trigger react", name)
 	}
 
-	// Kind mirrors the branch LoadDir takes: projection and decider files
-	// are handled by name, everything else falls to the effect tier.
+	// Kind mirrors the branch LoadDir takes: projection, decider and
+	// reactor files are handled by name, everything else falls to the
+	// effect tier.
 	switch {
 	case t.projection != "":
 		d.Kind = KindProjection
 	case t.decider != "":
 		d.Kind = KindDecider
+	case len(t.react) > 0:
+		d.Kind = KindReactor
 	default:
 		d.Kind = KindEffect
 	}
@@ -140,6 +165,16 @@ func declaration(name string, t triggers) (*Declaration, error) {
 //	                                                ops then need a "collection".
 //	                                                Each //@key pairs with the most
 //	                                                recent //@schema.
+//	//@trigger react <EventTypes...>             -> JS reactor (tier 4): maps
+//	//@dispatches <aggregate>/<Command>...          events to COMMANDS through
+//	                                                the decider registry.
+//	                                                react(event) RETURNS
+//	                                                {aggregate,id,command,payload}
+//	                                                descriptors; //@dispatches
+//	                                                declares them for the
+//	                                                catalog, since a command
+//	                                                leaves no trace until it
+//	                                                has actually fired.
 //	//@trigger decider <aggregate>               -> JS decider (tier 3);
 //	//@handles <EventTypes...>                      requires //@handles
 //	//@commands <Names...>                       -> optional: the commands this
@@ -205,6 +240,14 @@ func LoadDir(rt *GojaRuntime, app core.App, dir string) (*LoadResult, error) {
 			}
 			result.Deciders = append(result.Deciders, spec)
 			rt.logger("JS decider registered", "aggregate", spec.Aggregate)
+
+		case len(t.react) > 0:
+			spec, err := buildReactorSpec(rt, entry.Name(), src, t)
+			if err != nil {
+				return nil, err
+			}
+			result.Reactors = append(result.Reactors, spec)
+			rt.logger("JS reactor registered", "reactor", spec.Reactor, "on", spec.EventTypes)
 
 		default:
 			if len(t.eventTypes) > 0 {
@@ -303,12 +346,15 @@ type triggers struct {
 	decider      string      // //@trigger decider <aggregate>
 	handles      []string    // //@handles ...
 	commands     []string    // //@commands ... (optional; documentation)
+	react        []string    // //@trigger react <EventTypes...>
+	dispatches   []string    // //@dispatches <aggregate>/<Command>... (optional)
 	transforms   []TransformSpec
 }
 
 func (t triggers) empty() bool {
 	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && len(t.schemas) == 0 &&
-		t.decider == "" && len(t.handles) == 0 && len(t.commands) == 0 && len(t.transforms) == 0
+		t.decider == "" && len(t.handles) == 0 && len(t.commands) == 0 && len(t.transforms) == 0 &&
+		len(t.react) == 0 && len(t.dispatches) == 0
 }
 
 // parseTriggers scans the leading comment lines for //@ directives.
@@ -356,6 +402,11 @@ func parseTriggers(src string) (triggers, error) {
 					return t, fmt.Errorf("only one //@trigger cron per file")
 				}
 				t.cron = strings.Join(fields[2:], " ")
+			case "react":
+				if len(fields) < 3 {
+					return t, fmt.Errorf("//@trigger react wants: react <EventTypes...>")
+				}
+				t.react = append(t.react, fields[2:]...)
 			default:
 				return t, fmt.Errorf("unknown //@trigger kind %q", fields[1])
 			}
@@ -379,6 +430,22 @@ func parseTriggers(src string) (triggers, error) {
 			t.handles = append(t.handles, fields[1:]...)
 		case "commands":
 			t.commands = append(t.commands, fields[1:]...)
+		case "dispatches":
+			if len(fields) < 2 {
+				return t, fmt.Errorf("//@dispatches wants: dispatches <aggregate>/<Command>...")
+			}
+			// A malformed entry is REFUSED, not dropped. Same reasoning as
+			// //@schema: this list is the only declared record of what a
+			// reactor sends (the resulting event proves it only once it has
+			// actually fired), so silently discarding a typo would leave the
+			// catalog confidently reporting less than the truth.
+			for _, d := range fields[1:] {
+				agg, cmd, ok := strings.Cut(d, "/")
+				if !ok || agg == "" || cmd == "" {
+					return t, fmt.Errorf("//@dispatches entry %q must be <aggregate>/<Command>", d)
+				}
+			}
+			t.dispatches = append(t.dispatches, fields[1:]...)
 		case "transform":
 			if len(fields) != 4 {
 				return t, fmt.Errorf("//@transform wants: transform <Type> <from> <to>")

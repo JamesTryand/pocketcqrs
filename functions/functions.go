@@ -22,6 +22,7 @@ import (
 	"github.com/pocketbase/pocketbase/tools/cron"
 
 	"github.com/jamestryand/pocketcqrs/consumers"
+	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 )
 
@@ -37,9 +38,10 @@ const FunctionTimeout = 5 * time.Second
 
 // GojaRuntime executes JavaScript functions in goja VMs (trusted code only).
 type GojaRuntime struct {
-	logger func(msg string, args ...any)
-	reader Reader
-	store  *events.Store
+	logger   func(msg string, args ...any)
+	reader   Reader
+	store    *events.Store
+	registry *decider.Registry
 
 	mu      sync.RWMutex
 	fns     []*eventFunction
@@ -83,6 +85,23 @@ func (r *GojaRuntime) SetReader(reader Reader) { r.reader = reader }
 // SetStore installs the event store used for dead-lettering failed
 // deliveries. Without it, failures are only logged.
 func (r *GojaRuntime) SetStore(store *events.Store) { r.store = store }
+
+// SetRegistry installs the decider registry that JS reactors dispatch
+// through. Without it a reactor fails loudly rather than quietly doing
+// nothing — a dry run compiles into a scratch runtime that has none, and
+// that must not look like a reactor whose triggers never matched.
+func (r *GojaRuntime) SetRegistry(registry *decider.Registry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registry = registry
+}
+
+// Registry returns the installed decider registry, or nil.
+func (r *GojaRuntime) Registry() *decider.Registry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.registry
+}
 
 // RegisterEventFunction implements Runtime.
 func (r *GojaRuntime) RegisterEventFunction(eventTypes []string, name, source string) error {

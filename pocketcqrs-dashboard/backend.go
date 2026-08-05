@@ -391,6 +391,8 @@ func (d *Declaration) DryRunMode() string {
 		return "decider"
 	case "projection":
 		return "projection"
+	case "reactor":
+		return "react"
 	default:
 		return "compile"
 	}
@@ -454,6 +456,18 @@ type DryRunResult struct {
 	// Produced is what a command WOULD append (decide mode) — a separate
 	// field from Events, which is a count.
 	Produced json.RawMessage `json:"produced,omitempty"`
+	// Reactor and Dispatches report a react-mode dry run: the commands the
+	// reactor WOULD send. Named separately from Produced for the same
+	// reason Produced is separate from Events — one field must not mean a
+	// different shape per mode.
+	Reactor    string `json:"reactor,omitempty"`
+	Dispatches []struct {
+		CausedBy  int64           `json:"causedBy"`
+		Aggregate string          `json:"aggregate"`
+		ID        string          `json:"id"`
+		Command   string          `json:"command"`
+		Payload   json.RawMessage `json:"payload,omitempty"`
+	} `json:"dispatches,omitempty"`
 	// Rejected reports that the decider REFUSED the command (decide mode).
 	// It arrives on a 200 with OK false, because the dry run itself worked:
 	// a working decider giving a domain answer must not look like a broken

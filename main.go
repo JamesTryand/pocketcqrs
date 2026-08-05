@@ -37,6 +37,10 @@ type components struct {
 	// jsDeciders tracks JS-managed aggregates (vs built-in Go deciders)
 	// with their active specs, for hot-reload swaps and upcaster rebuilds.
 	jsDeciders map[string]*functions.DeciderSpec
+	// jsReactors tracks the active JS reactors so a reload can unregister
+	// exactly what it registered (their checkpoint keys are stable, so a
+	// swapped reactor resumes where the old code left off).
+	jsReactors []*functions.ReactorSpec
 	// cronJobs lists the registered cron job ids ("fn:"+name).
 	cronJobs []string
 	// reloadMu serializes hot reloads.
@@ -193,6 +197,17 @@ func main() {
 		// sagas: reactors dispatch follow-up commands through the registry
 		c.engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.registry,
 			func(msg string, args ...any) { logger.Info(msg, args...) }))
+
+		// JS reactors (tier 4): same dispatch rule as the Go ones, reached
+		// from a function file. The registry must be installed BEFORE they
+		// are registered as consumers — a reactor without one fails loudly
+		// rather than quietly doing nothing.
+		rt.SetRegistry(c.registry)
+		c.jsReactors = loaded.Reactors
+		for _, spec := range loaded.Reactors {
+			c.engine.Register(spec)
+			logger.Info("JS reactor active", "reactor", spec.Reactor, "on", spec.EventTypes)
+		}
 
 		// write-guard: no out-of-band writes on projection-owned collections
 		guarded := allProjections(e.App)

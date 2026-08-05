@@ -310,7 +310,7 @@ func (c *components) checkFunctionSource(name, src string) (*functions.Declarati
 type dryRunRequest struct {
 	Name     string          `json:"name"`
 	Source   string          `json:"source"`
-	Mode     string          `json:"mode"` // decider | decide | projection | compile
+	Mode     string          `json:"mode"` // decider | decide | react | projection | compile
 	StreamID string          `json:"streamId,omitempty"`
 	Command  string          `json:"command,omitempty"`
 	Payload  json.RawMessage `json:"payload,omitempty"`
@@ -422,6 +422,34 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 				req.Command, spec.Aggregate, req.StreamID, len(res.Produced)),
 		})
 
+	case "react":
+		spec, err := functions.LoadReactorSource(rt, req.Name, req.Source)
+		if err != nil {
+			return apis.NewBadRequestError(err.Error(), err)
+		}
+		// No registry is installed on this scratch runtime, and that is the
+		// point: a dry run reports what WOULD be dispatched and cannot
+		// dispatch it even by accident.
+		res, err := functions.DryRunReactor(c.store, spec)
+		if err != nil {
+			return apis.NewBadRequestError(err.Error(), err)
+		}
+		summary := fmt.Sprintf("Replayed %d matching event(s) through %q: it would dispatch %d command(s). Nothing was dispatched and no decider ran.",
+			res.Events, res.Reactor, len(res.Dispatches))
+		if res.IgnoredValues > 0 {
+			summary += fmt.Sprintf(" %d returned value(s) were NOT dispatch descriptors and would be discarded at runtime.",
+				res.IgnoredValues)
+		}
+		// "dispatches", not "events": `events` already carries a COUNT in
+		// the decider and projection modes and a produced-event list in
+		// decide, and one field meaning three shapes by mode is a trap.
+		return re.JSON(http.StatusOK, map[string]any{
+			"mode": req.Mode, "ok": true, "reactor": res.Reactor,
+			"events": res.Events, "dispatches": res.Dispatches,
+			"ignoredValues": res.IgnoredValues,
+			"summary":       summary,
+		})
+
 	case "projection":
 		spec, err := functions.LoadProjectionSource(rt, c.app, req.Name, req.Source)
 		if err != nil {
@@ -459,7 +487,7 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 
 	default:
 		return apis.NewBadRequestError(
-			fmt.Sprintf("unknown dryrun mode %q: expected decider, decide, projection or compile", req.Mode), nil)
+			fmt.Sprintf("unknown dryrun mode %q: expected decider, decide, react, projection or compile", req.Mode), nil)
 	}
 }
 

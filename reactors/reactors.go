@@ -55,17 +55,46 @@ func (c *consumer) Name() string { return "reactor:" + c.reactor.Name() }
 
 // Apply implements consumers.Consumer.
 func (c *consumer) Apply(ctx context.Context, ev events.Event) error {
-	for _, reaction := range c.reactor.React(ev) {
+	return Dispatch(ctx, c.registry, c.reactor.Name(), ev, c.reactor.React(ev), c.logger)
+}
+
+// Dispatch sends reactions to the registry on behalf of the reactor named
+// name, in response to ev.
+//
+// It is exported because there are two reactor tiers — Go reactors and JS
+// `//@trigger react` function files — and the rule below is the whole
+// contract of both. Two copies would drift, and the halves that would drift
+// are the ones that matter: retry-vs-continue, and the causation metadata
+// the catalog's flow detection joins on.
+//
+// The metadata actor is deliberately "reactor:<name>" for BOTH tiers, even
+// though they use different durable checkpoint keys — events/stats.go's
+// ReactorFlows filters on that prefix, so matching it is what earns a JS
+// reactor its edges in the catalog, the explorer and the mermaid diagram.
+// Dispatcher is the slice of *decider.Registry that Dispatch needs. It is an
+// interface so the retry-vs-continue split below can be tested directly:
+// ErrConcurrency is genuinely hard to provoke against a real registry (it
+// needs a race between load and append), and that half of the rule is
+// exactly the half worth pinning.
+type Dispatcher interface {
+	HandleWithMeta(ctx context.Context, aggregate, id string, cmd decider.Command, meta map[string]any) ([]events.Event, error)
+}
+
+func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.Event, reactions []Reaction, logger func(string, ...any)) error {
+	if logger == nil {
+		logger = func(string, ...any) {}
+	}
+	for _, reaction := range reactions {
 		meta := map[string]any{
-			"actor":         "reactor:" + c.reactor.Name(),
+			"actor":         "reactor:" + name,
 			"causationId":   ev.ID,
 			"correlationId": correlationID(ev),
 		}
-		_, err := c.registry.HandleWithMeta(ctx, reaction.Aggregate, reaction.ID, reaction.Command, meta)
+		_, err := registry.HandleWithMeta(ctx, reaction.Aggregate, reaction.ID, reaction.Command, meta)
 		switch {
 		case err == nil:
-			c.logger("reaction dispatched",
-				"reactor", c.reactor.Name(), "cause", ev.ID,
+			logger("reaction dispatched",
+				"reactor", name, "cause", ev.ID,
 				"target", reaction.Aggregate+"/"+reaction.ID, "command", reaction.Command.Name)
 		case errors.Is(err, events.ErrConcurrency):
 			// the target stream moved between load and append; stop and
@@ -74,8 +103,8 @@ func (c *consumer) Apply(ctx context.Context, ev events.Event) error {
 		default:
 			// domain rejection (incl. the idempotency path, e.g. "already
 			// exists"): log and continue — never block the log
-			c.logger("reaction rejected",
-				"reactor", c.reactor.Name(), "cause", ev.ID,
+			logger("reaction rejected",
+				"reactor", name, "cause", ev.ID,
 				"target", reaction.Aggregate+"/"+reaction.ID, "command", reaction.Command.Name,
 				"error", err)
 		}

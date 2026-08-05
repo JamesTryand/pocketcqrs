@@ -24,6 +24,7 @@ func (c *components) buildCatalog(ctx context.Context) (*catalog.Catalog, error)
 		GoProjections: allProjections(c.app),
 		JSProjs:       c.jsProjs,
 		JSDeciders:    c.jsDeciders,
+		JSReactors:    c.jsReactors,
 	})
 }
 

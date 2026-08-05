@@ -79,10 +79,14 @@ type EventType struct {
 // Consumer is one engine consumer with its kind, triggers and checkpoint.
 type Consumer struct {
 	Name        string   `json:"name"`
-	Kind        string   `json:"kind"` // "go-projection" | "js-projection" | "reactor" | "effect-function"
+	Kind        string   `json:"kind"` // "go-projection" | "js-projection" | "reactor" | "js-reactor" | "effect-function"
 	EventTypes  []string `json:"eventTypes,omitempty"`
 	Collections []string `json:"collections,omitempty"`
-	Checkpoint  int64    `json:"checkpoint"`
+	// Dispatches are the commands a JS reactor DECLARES it sends. Declared,
+	// not observed: an automation that has never fired produces no flow
+	// edge, so this is the only way to report it before its first run.
+	Dispatches []string `json:"dispatches,omitempty"`
+	Checkpoint int64    `json:"checkpoint"`
 }
 
 // Collection is one PocketBase collection with its ownership facts.
@@ -125,6 +129,7 @@ type Inputs struct {
 	GoProjections []projections.Projection
 	JSProjs       []*functions.JSProjection
 	JSDeciders    map[string]*functions.DeciderSpec
+	JSReactors    []*functions.ReactorSpec
 }
 
 // Build collects the catalog from the live components and the event log.
@@ -215,6 +220,12 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 		projCollections[spec.Name] = p.Collections()
 		projEventTypes[spec.Name] = spec.EventTypes
 	}
+	reactorTypes := map[string][]string{}
+	reactorDispatches := map[string][]string{}
+	for _, spec := range in.JSReactors {
+		reactorTypes[spec.Name()] = spec.EventTypes
+		reactorDispatches[spec.Name()] = spec.Dispatches
+	}
 	for _, name := range in.Engine.Names() {
 		cons := Consumer{Name: name, Checkpoint: checkpoints[name]}
 		switch {
@@ -224,6 +235,15 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 			cons.EventTypes = projEventTypes[name]
 		case strings.HasPrefix(name, "reactor:"):
 			cons.Kind = "reactor"
+		// JS reactors checkpoint under their own prefix so they cannot
+		// collide with a same-named Go reactor's checkpoint. Without this
+		// branch they would list as "unknown" — while still producing
+		// correct FLOW edges, because those are joined on the metadata
+		// actor, which both tiers stamp as "reactor:<name>".
+		case strings.HasPrefix(name, "fn-react:"):
+			cons.Kind = "js-reactor"
+			cons.EventTypes = reactorTypes[name]
+			cons.Dispatches = reactorDispatches[name]
 		case strings.HasPrefix(name, "fn:"):
 			cons.Kind = "effect-function"
 			cons.EventTypes = effectTypes[name]

@@ -3,6 +3,7 @@ package reactors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -134,5 +135,52 @@ func TestCorrelationIDInherited(t *testing.T) {
 	ev = events.Event{ID: "root", Metadata: json.RawMessage(`{}`)}
 	if got := correlationID(ev); got != "root" {
 		t.Fatalf("expected self as root, got %q", got)
+	}
+}
+
+// fakeDispatcher lets the retry-vs-continue split be exercised directly.
+type fakeDispatcher struct {
+	err   error
+	calls int
+}
+
+func (f *fakeDispatcher) HandleWithMeta(ctx context.Context, aggregate, id string, cmd decider.Command, meta map[string]any) ([]events.Event, error) {
+	f.calls++
+	return nil, f.err
+}
+
+// TestDispatchRetriesOnConcurrencyAndContinuesOnRejection pins the two halves
+// of the reaction rule, which are shared by the Go and JS reactor tiers.
+//
+// They must go OPPOSITE ways: a concurrency conflict means the target stream
+// moved and the whole event should be retried, so the error propagates and
+// the consumer does not advance. A domain rejection is the ordinary
+// idempotency path ("already exists") and must NOT block the log, so it is
+// logged and the consumer moves on. Getting these the wrong way round either
+// wedges the log forever or silently drops reactions.
+func TestDispatchRetriesOnConcurrencyAndContinuesOnRejection(t *testing.T) {
+	ctx := context.Background()
+	trigger := events.Event{ID: "e1", Type: "OrderConfirmed"}
+	reactions := []Reaction{
+		{Aggregate: "task", ID: "t1", Command: decider.Command{Name: "CreateTask"}},
+		{Aggregate: "task", ID: "t2", Command: decider.Command{Name: "CreateTask"}},
+	}
+
+	// a concurrency conflict stops the batch so the event is retried whole
+	conflict := &fakeDispatcher{err: events.ErrConcurrency}
+	if err := Dispatch(ctx, conflict, "fulfillment", trigger, reactions, nil); err == nil {
+		t.Fatal("a concurrency conflict must propagate so the event is retried")
+	}
+	if conflict.calls != 1 {
+		t.Errorf("the batch should stop at the conflict, got %d calls", conflict.calls)
+	}
+
+	// a domain rejection is logged and the rest still go out
+	rejected := &fakeDispatcher{err: errors.New("task already exists")}
+	if err := Dispatch(ctx, rejected, "fulfillment", trigger, reactions, nil); err != nil {
+		t.Fatalf("a domain rejection must not block the log: %v", err)
+	}
+	if rejected.calls != 2 {
+		t.Errorf("every reaction should be attempted, got %d calls", rejected.calls)
 	}
 }
