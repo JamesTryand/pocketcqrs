@@ -3,6 +3,17 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased
+
+### Added
+
+- `pb_functions/task_completion_note.js`: a shipped JS reactor example.
+  `TaskCompleted` (Go `task` aggregate) dispatches `CreateNote` (JS `note`
+  aggregate) — the reactor tier previously had no runnable example in the
+  shipped fixture set, only the abstract one in the directive reference.
+  Wired into `getting-started.md`'s walkthrough. Documented in
+  `docs/domains/task.md` and `docs/domains/note.md`.
+
 ## v0.3.0 — M13 complete, then M14: EventModeling import/export and the reactor tier
 
 Two milestones landed in this range: DASH.6 finished M13, then M14 built on
