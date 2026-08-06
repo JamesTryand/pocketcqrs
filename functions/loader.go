@@ -54,8 +54,13 @@ type Declaration struct {
 	Aggregate   string   `json:"aggregate,omitempty"`
 	Handles     []string `json:"handles,omitempty"`
 	Commands    []string `json:"commands,omitempty"`
-	React       []string `json:"react,omitempty"`
-	Dispatches  []string `json:"dispatches,omitempty"`
+	// Produces maps a command name to the event types it may append. It is
+	// the one thing //@commands and //@handles could not say between them:
+	// each lists a side, neither joins a pair. Optional and documentation
+	// only, like //@commands — decide() still adjudicates.
+	Produces   map[string][]string `json:"produces,omitempty"`
+	React      []string            `json:"react,omitempty"`
+	Dispatches []string            `json:"dispatches,omitempty"`
 	// SchemaBearing reports whether ACTIVATING this file needs the
 	// maintenance barrier: projection schemas and deciders move only in
 	// maintenance, effect/http/cron functions move in any mode.
@@ -82,6 +87,7 @@ func declaration(name string, t triggers) (*Declaration, error) {
 		Aggregate:  t.decider,
 		Handles:    t.handles,
 		Commands:   t.commands,
+		Produces:   t.produces,
 		React:      t.react,
 		Dispatches: t.dispatches,
 	}
@@ -119,6 +125,34 @@ func declaration(name string, t triggers) (*Declaration, error) {
 	}
 	if len(t.dispatches) > 0 && len(t.react) == 0 {
 		return nil, fmt.Errorf("functions: %s: //@dispatches requires //@trigger react", name)
+	}
+	if len(t.produces) > 0 {
+		if t.decider == "" {
+			return nil, fmt.Errorf("functions: %s: //@produces requires //@trigger decider", name)
+		}
+		// A produced event that is not in //@handles cannot be folded back,
+		// so the decider could append something it can never replay. That is
+		// a contradiction inside one file, and refusing it here is cheaper
+		// than discovering it when a stream fails to load.
+		declared := map[string]bool{}
+		for _, h := range t.handles {
+			declared[h] = true
+		}
+		known := map[string]bool{}
+		for _, c := range t.commands {
+			known[c] = true
+		}
+		for cmd, evs := range t.produces {
+			if len(t.commands) > 0 && !known[cmd] {
+				return nil, fmt.Errorf("functions: %s: //@produces names command %q, which is not in //@commands", name, cmd)
+			}
+			for _, ev := range evs {
+				if !declared[ev] {
+					return nil, fmt.Errorf("functions: %s: //@produces says %q appends %q, which is not in //@handles",
+						name, cmd, ev)
+				}
+			}
+		}
 	}
 
 	// Kind mirrors the branch LoadDir takes: projection, decider and
@@ -322,6 +356,7 @@ func buildDeciderSpec(rt *GojaRuntime, filename, src string, t triggers) (*Decid
 		Aggregate:  t.decider,
 		Handles:    t.handles,
 		Commands:   t.commands,
+		Produces:   t.produces,
 		Transforms: t.transforms,
 		Prog:       prog,
 		runtime:    rt,
@@ -342,19 +377,20 @@ type triggers struct {
 	cron         string   // //@trigger cron <schedule>
 	projection   string   // //@trigger projection <name> on ...
 	projectionOn []string
-	schemas      []rawSchema // //@schema ... (+ its //@key), repeatable
-	decider      string      // //@trigger decider <aggregate>
-	handles      []string    // //@handles ...
-	commands     []string    // //@commands ... (optional; documentation)
-	react        []string    // //@trigger react <EventTypes...>
-	dispatches   []string    // //@dispatches <aggregate>/<Command>... (optional)
+	schemas      []rawSchema         // //@schema ... (+ its //@key), repeatable
+	decider      string              // //@trigger decider <aggregate>
+	handles      []string            // //@handles ...
+	commands     []string            // //@commands ... (optional; documentation)
+	produces     map[string][]string // //@produces <Command> <Event...> (optional)
+	react        []string            // //@trigger react <EventTypes...>
+	dispatches   []string            // //@dispatches <aggregate>/<Command>... (optional)
 	transforms   []TransformSpec
 }
 
 func (t triggers) empty() bool {
 	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && len(t.schemas) == 0 &&
 		t.decider == "" && len(t.handles) == 0 && len(t.commands) == 0 && len(t.transforms) == 0 &&
-		len(t.react) == 0 && len(t.dispatches) == 0
+		len(t.react) == 0 && len(t.dispatches) == 0 && len(t.produces) == 0
 }
 
 // parseTriggers scans the leading comment lines for //@ directives.
@@ -430,6 +466,22 @@ func parseTriggers(src string) (triggers, error) {
 			t.handles = append(t.handles, fields[1:]...)
 		case "commands":
 			t.commands = append(t.commands, fields[1:]...)
+		case "produces":
+			// //@produces <Command> <Event...> — the association //@commands
+			// and //@handles could not express between them. Each names the
+			// commands or the events; nothing joined a pair, so an export
+			// had to give every slice its aggregate's whole event set.
+			if len(fields) < 3 {
+				return t, fmt.Errorf("//@produces wants: produces <Command> <EventType...>")
+			}
+			if t.produces == nil {
+				t.produces = map[string][]string{}
+			}
+			cmd := fields[1]
+			if _, seen := t.produces[cmd]; seen {
+				return t, fmt.Errorf("//@produces declared twice for command %q; list its events on one line", cmd)
+			}
+			t.produces[cmd] = append([]string(nil), fields[2:]...)
 		case "dispatches":
 			if len(fields) < 2 {
 				return t, fmt.Errorf("//@dispatches wants: dispatches <aggregate>/<Command>...")

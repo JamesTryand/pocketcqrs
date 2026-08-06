@@ -177,9 +177,12 @@ func TestRoundTripLoss(t *testing.T) {
 	// declared commands and handled events are what the catalog reports
 	cat := &catalog.Catalog{}
 	for _, d := range mapped.Domains {
-		agg := catalog.Aggregate{Name: d.Aggregate, Origin: "js"}
+		agg := catalog.Aggregate{Name: d.Aggregate, Origin: "js", Produces: map[string][]string{}}
 		for _, c := range d.Commands {
 			agg.Commands = append(agg.Commands, c.Name)
+			for _, e := range c.Events {
+				agg.Produces[c.Name] = append(agg.Produces[c.Name], e.Name)
+			}
 		}
 		agg.Handles = d.Events()
 		cat.Aggregates = append(cat.Aggregates, agg)
@@ -263,26 +266,21 @@ func TestRoundTripLoss(t *testing.T) {
 
 	lossy := strings.Join(append(append([]string{}, rep.Warnings...), rep.Lossy...), "\n")
 	for _, mustMention := range []string{
-		"swimlane",                           // synthesized
-		"which command produces which event", // the biggest gap
-		"reason",                             // methodology prose
-		"chapters",                           // board state
+		"swimlane", // synthesized
+		"reason",   // methodology prose
+		"chapters", // board state
 	} {
 		if !strings.Contains(lossy, mustMention) {
 			t.Errorf("the report must name %q as lost or synthesized:\n%s", mustMention, lossy)
 		}
 	}
 
-	// The single biggest reconstruction gap, asserted rather than described:
-	// nothing in the runtime links a command to the events it produces, so
-	// every slice lists its aggregate's whole event set. A round trip
-	// therefore WIDENS eventIds, and that has to be visible here rather than
-	// discovered by someone diffing two documents.
+	// The gap //@produces closed, now asserted from the other side: an
+	// exported slice must list EXACTLY the events its command produces, not
+	// the aggregate's whole set. Before the directive existed this test
+	// asserted the widening instead.
 	for _, s := range out.Slices {
 		if s.Pattern != PatternStateChange {
-			continue
-		}
-		if len(s.EventIDs) <= 1 {
 			continue
 		}
 		var originalWidth int
@@ -292,10 +290,9 @@ func TestRoundTripLoss(t *testing.T) {
 				originalWidth = len(orig.EventIDs)
 			}
 		}
-		if originalWidth > 0 && len(s.EventIDs) <= originalWidth {
-			t.Errorf("expected the round trip to widen eventIds for %q (the documented gap); "+
-				"if it no longer does, the runtime learned to record the association and this "+
-				"test plus the report should be updated", s.ID)
+		if originalWidth > 0 && len(s.EventIDs) != originalWidth {
+			t.Errorf("slice %q should round-trip %d event(s), got %d (%v): //@produces exists "+
+				"precisely so this no longer widens", s.ID, originalWidth, len(s.EventIDs), s.EventIDs)
 		}
 	}
 }

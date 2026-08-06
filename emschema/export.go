@@ -96,7 +96,7 @@ func exportEvents(cat *catalog.Catalog, doc *Document, rep *Report) map[string][
 
 // exportStateChangeSlices emits one slice per declared command.
 func exportStateChangeSlices(cat *catalog.Catalog, doc *Document, rep *Report, eventsByAggregate map[string][]string) {
-	var unmappable int
+	var widened int
 	for _, agg := range cat.Aggregates {
 		events := eventsByAggregate[agg.Name]
 		if len(agg.Commands) == 0 {
@@ -116,6 +116,28 @@ func exportStateChangeSlices(cat *catalog.Catalog, doc *Document, rep *Report, e
 				Name:      DeriveName(cmdName),
 				Aggregate: agg.Name,
 			}
+			// //@produces is what makes a faithful slice possible: it names
+			// the events THIS command appends. Without it the association is
+			// unrecoverable and the slice has to list everything the
+			// aggregate can emit.
+			sliceEvents := events
+			if produced, ok := agg.Produces[cmdName]; ok && len(produced) > 0 {
+				sliceEvents = nil
+				for _, t := range produced {
+					evID := DeriveID(t)
+					if _, known := doc.Events[evID]; known {
+						sliceEvents = append(sliceEvents, evID)
+					}
+				}
+				sort.Strings(sliceEvents)
+			}
+			if len(sliceEvents) == 0 {
+				rep.warnf("command %q declares //@produces events this export does not know; "+
+					"falling back to the aggregate's whole event set", cmdName)
+				sliceEvents = events
+			} else if len(agg.Produces[cmdName]) == 0 {
+				widened++
+			}
 			// A SCREEN IS REQUIRED on a stateChange slice, so it is
 			// synthesized — omitting it produces an invalid document. Note
 			// this is emitted ONLY for stateChange and stateView: the
@@ -133,21 +155,20 @@ func exportStateChangeSlices(cat *catalog.Catalog, doc *Document, rep *Report, e
 				Status:     "informational",
 				ScreenID:   screenID,
 				CommandID:  cmdID,
-				EventIDs:   events,
+				EventIDs:   sliceEvents,
 				Scenarios:  []Scenario{},
 			})
-			unmappable++
 		}
 	}
-	if unmappable > 0 {
+	if widened > 0 {
 		// The honest statement of the biggest reconstruction gap. Nothing in
 		// the runtime records WHICH command produces WHICH event: //@commands
 		// names the commands, //@handles names the events, and no directive
 		// links a pair. So each slice lists the aggregate's whole event set.
-		rep.warnf("%d stateChange slice(s) list their aggregate's ENTIRE event set: nothing in the "+
-			"runtime records which command produces which event (//@commands and //@handles are "+
-			"separate lists), so the association cannot be recovered. A round trip will widen "+
-			"eventIds unless the document is edited back", unmappable)
+		rep.warnf("%d stateChange slice(s) list their aggregate's ENTIRE event set because their "+
+			"decider declares no //@produces. //@commands and //@handles each name one side and "+
+			"nothing joins a pair, so the association cannot be recovered without it and a round "+
+			"trip widens eventIds. Add //@produces <Command> <Event...> to close the gap", widened)
 	}
 }
 

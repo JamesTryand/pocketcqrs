@@ -374,6 +374,17 @@ func (d Domain) decider() string {
 	fmt.Fprintf(&b, "//@trigger decider %s\n", d.Aggregate)
 	fmt.Fprintf(&b, "//@handles %s\n", strings.Join(events, " "))
 	fmt.Fprintf(&b, "//@commands %s\n", strings.Join(commandNames(d.Commands), " "))
+	// //@produces records WHICH command appends WHICH events. //@commands
+	// and //@handles each name one side and nothing joins a pair, so
+	// without this an export has to give every slice the aggregate's whole
+	// event set — the model knows the association, so it declares it.
+	for _, c := range d.Commands {
+		names := make([]string, 0, len(c.Events))
+		for _, e := range c.Events {
+			names = append(names, e.Name)
+		}
+		fmt.Fprintf(&b, "//@produces %s %s\n", c.Name, strings.Join(names, " "))
+	}
 	b.WriteString("//\n")
 	fmt.Fprintf(&b, "// %s — generated slice. The shape is right; the RULES are yours:\n", d.Aggregate)
 	b.WriteString("// the checks below are the ones that can be derived from a description\n")

@@ -115,6 +115,7 @@ Round-tripping is a **loss measurement**, not a fidelity promise.
 | --- | --- |
 | event names | ✅ declared in `//@handles` and present in the log |
 | command names | ✅ the `//@commands` declared surface |
+| which events a command produces | ✅ **with `//@produces`**, otherwise widened to the whole aggregate |
 | read models and their source events | ✅ |
 | automation wiring | ✅ via `//@dispatches` |
 | field names and types | ⚠️ lossy both ways (ten types onto five) |

@@ -230,3 +230,47 @@ func TestDeclaresRefusesMixedPurpose(t *testing.T) {
 		t.Errorf("expected the effect tier, got %q", d.Kind)
 	}
 }
+
+// TestProducesRecordsTheAssociation covers the directive that closes the one
+// gap M14's export exposed: //@commands names an aggregate's commands and
+// //@handles names its events, but nothing joined a pair, so an export could
+// only list every event of the aggregate against every command.
+func TestProducesRecordsTheAssociation(t *testing.T) {
+	const src = `//@trigger decider payment
+//@handles PaymentAccepted PaymentRefused
+//@commands AttemptPayment
+//@produces AttemptPayment PaymentAccepted PaymentRefused
+`
+	d, err := functions.Declares("payment.js", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := d.Produces["AttemptPayment"]
+	if len(got) != 2 || got[0] != "PaymentAccepted" || got[1] != "PaymentRefused" {
+		t.Fatalf("the association was not recorded: %+v", d.Produces)
+	}
+
+	// The checks below are all cheap contradictions INSIDE one file, which is
+	// the only place a directive can catch anything. Each would otherwise
+	// surface much later and much less clearly.
+	for name, bad := range map[string]string{
+		"produces on a non-decider":  "//@trigger event X\n//@produces Cmd X\n",
+		"an event not in //@handles": "//@trigger decider p\n//@handles A\n//@produces Cmd B\n",
+		"a command not in //@commands": "//@trigger decider p\n//@handles A\n//@commands Other\n" +
+			"//@produces Cmd A\n",
+		"declared twice for one command": "//@trigger decider p\n//@handles A B\n" +
+			"//@produces Cmd A\n//@produces Cmd B\n",
+		"no events listed": "//@trigger decider p\n//@handles A\n//@produces Cmd\n",
+	} {
+		if _, err := functions.Declares("bad.js", bad); err == nil {
+			t.Errorf("%s must be refused", name)
+		}
+	}
+
+	// ...and it stays OPTIONAL: an aggregate that does not declare it still
+	// loads, exactly as before. Requiring it would break every existing file.
+	if _, err := functions.Declares("plain.js",
+		"//@trigger decider p\n//@handles A\n//@commands Cmd\n"); err != nil {
+		t.Errorf("//@produces must remain optional: %v", err)
+	}
+}

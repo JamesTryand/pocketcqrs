@@ -61,11 +61,17 @@ type Aggregate struct {
 	// Unlike events it cannot be observed: commands leave no trace in the
 	// log, so an aggregate that declares none reports none — which means
 	// "not stated", never "accepts nothing".
-	Commands   []string    `json:"commands,omitempty"`
-	Handles    []string    `json:"handles,omitempty"`
-	Transforms []string    `json:"transforms,omitempty"` // "Type v1->v2"
-	Streams    int64       `json:"streams"`
-	Events     []EventType `json:"events"`
+	Commands []string `json:"commands,omitempty"`
+	Handles  []string `json:"handles,omitempty"`
+	// Produces maps a declared command to the events it may append. It is
+	// the only record of that ASSOCIATION: Commands and Handles each name
+	// one side, and nothing in the log joins a pair, so without this an
+	// export can only say "this aggregate's commands" and "this
+	// aggregate's events" and not which caused which.
+	Produces   map[string][]string `json:"produces,omitempty"`
+	Transforms []string            `json:"transforms,omitempty"` // "Type v1->v2"
+	Streams    int64               `json:"streams"`
+	Events     []EventType         `json:"events"`
 }
 
 // EventType is one empirical event type of an aggregate.
@@ -191,6 +197,7 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 		if spec, ok := in.JSDeciders[name]; ok {
 			agg.Origin = "js"
 			agg.Handles = spec.Handles
+			agg.Produces = spec.Produces
 			for _, t := range spec.Transforms {
 				agg.Transforms = append(agg.Transforms, fmt.Sprintf("%s v%d->v%d", t.Type, t.From, t.To))
 			}

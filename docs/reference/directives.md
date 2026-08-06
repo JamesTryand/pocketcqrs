@@ -208,6 +208,41 @@ entry is refused rather than dropped.
 Declared dispatches appear on the consumer in `GET /api/cqrs/catalog`
 (`kind: "js-reactor"`).
 
+## `//@produces <Command> <EventType...>`
+
+Optional, deciders only: the events a given command may append.
+
+`//@commands` names an aggregate's commands and `//@handles` names its
+events, but until this directive existed **nothing joined a pair** — so an
+EventModeling export could only say "these are the commands" and "these are
+the events", giving every slice the aggregate's entire event set. Declaring
+the association is what lets `pocketcqrs schema export` produce a faithful
+slice.
+
+```js
+//@trigger decider payment
+//@handles PaymentAccepted PaymentRefused
+//@commands AttemptPayment RefundPayment
+//@produces AttemptPayment PaymentAccepted PaymentRefused
+//@produces RefundPayment PaymentRefunded
+```
+
+Documentation only, like `//@commands`: `decide()` still adjudicates, and an
+undeclared outcome is not rejected at runtime. But three contradictions
+*inside the file* are refused at load, because each is cheap to catch here and
+confusing later:
+
+- `//@produces` on a file that is not a decider;
+- an event that is not in `//@handles` (the decider could append something it
+  can never fold back);
+- a command that is not in `//@commands`, when that is declared.
+
+List one command per line; declaring the same command twice is refused rather
+than merged.
+
+The scaffolder and the schema importer emit it automatically — the model knows
+which command produces which events, so it says so.
+
 ## `//@transform <Type> <from> <to>`
 
 Declares an upcaster for event `<Type>` from version `<from>` to `<to>`

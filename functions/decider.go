@@ -19,7 +19,12 @@ type DeciderSpec struct {
 	Handles   []string
 	// Commands is the optional //@commands declaration — see
 	// decider.Decider.Commands for why it exists.
-	Commands   []string
+	Commands []string
+	// Produces is the optional //@produces declaration: command -> the
+	// events it may append. //@commands and //@handles each name one side
+	// and nothing joined a pair, so before this an export could not say
+	// which command caused which event and had to list them all.
+	Produces   map[string][]string
 	Transforms []TransformSpec
 	Prog       *goja.Program
 	runtime    *GojaRuntime
