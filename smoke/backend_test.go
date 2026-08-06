@@ -690,6 +690,43 @@ function project(event) { return [{ upsert: { key: event.data.title, fields: { t
 	}
 }
 
+// TestWriteGuardGuardsNothingWhenThereIsNothingToGuard pins the difference
+// between "guard no collections" and "guard every collection".
+//
+// PocketBase treats a tagged hook with an empty tag list as matching EVERY
+// collection, so registering the write-guard with no names would deny every
+// record write in the app rather than none. An instance with no projections
+// is an ordinary state — a fresh install, or anyone who has not written a
+// projection yet — and reload re-registers the guard from the JS projections
+// it just loaded, so this is reachable without the flag work that follows.
+func TestWriteGuardGuardsNothingWhenThereIsNothingToGuard(t *testing.T) {
+	h := startBackend(t, nil) // no function files, therefore no JS projections
+
+	h.apiOK(http.MethodPost, "/api/collections", jsonBody(map[string]any{
+		"name":   "smoke_scratch",
+		"type":   "base",
+		"fields": []map[string]any{{"name": "title", "type": "text"}},
+	}), nil)
+
+	// The reload path is the one that passes an empty list today, and it
+	// only re-registers the guard behind the maintenance barrier — a reload
+	// while running skips the schema tier entirely, so the ordinary
+	// on/reload/off dance is what reaches it.
+	h.setMode("maintenance")
+	h.reload()
+	h.setMode("running")
+
+	status, raw := h.api(http.MethodPost, "/api/collections/smoke_scratch/records",
+		jsonBody(map[string]string{"title": "mine"}), nil)
+	if status == http.StatusForbidden {
+		t.Fatalf("a collection nobody projects into must stay writable, got 403: %s",
+			truncate(raw, 300))
+	}
+	if status != http.StatusOK {
+		t.Fatalf("expected the write to succeed, got %d: %s", status, truncate(raw, 300))
+	}
+}
+
 // TestJSReactorTier is the end-to-end proof of the fourth consumer kind: a
 // reactor defined in a function file maps a committed event to a COMMAND,
 // dispatched through the decider registry.

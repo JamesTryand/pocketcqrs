@@ -27,7 +27,19 @@ func IsInternal(ctx context.Context) bool {
 // Register denies create/update/delete on the named collections for every
 // caller except internal writers (see MarkInternal). Superusers are denied
 // too: state changes must flow through the command API so they become events.
+//
+// Registering NO collections guards nothing. PocketBase treats a tagged hook
+// with an empty tag list as "match every collection"
+// (hook.TaggedHook.CanTriggerOn), so binding here without names would deny
+// every record write in the app — superuser creation included — rather than
+// the nothing the caller asked for. Callers legitimately pass an empty list
+// (an instance with no projections yet), so this is a guard, not a bug in
+// them.
 func Register(app core.App, collections ...string) {
+	if len(collections) == 0 {
+		return
+	}
+
 	deny := func(e *core.RecordEvent) error {
 		if IsInternal(e.Context) {
 			return e.Next()
