@@ -1,2 +1,0 @@
-//@trigger event TaskCreated
-console.log("probe fixture");

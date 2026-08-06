@@ -18,3 +18,8 @@ pocketcqrs
 # The probes are checked in; the browser driver they need is not.
 node_modules/
 package-lock.json
+
+# probe leftovers: the editor probe writes into pb_functions/, and a PUT keeps
+# a .prev copy as its undo. Neither belongs in the repo.
+pb_functions/probe_*.js
+*.js.prev
