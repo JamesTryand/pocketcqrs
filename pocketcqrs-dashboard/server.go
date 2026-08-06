@@ -998,14 +998,25 @@ func parseScaffoldForm(r *http.Request) (map[string]any, error) {
 			}
 			cmd.Fields = fields
 		}
-		// copy the command's fields onto the event, and say explicitly when
-		// there are none — an event with no fields and no NoFields reads as
-		// "nobody specified this yet", which is not what the form meant
-		cmd.Events = []scaffoldEvent{{
-			Name:     eventName,
-			Fields:   cmd.Fields,
-			NoFields: len(cmd.Fields) == 0,
-		}}
+		// A command may record more than one event — "PaymentAccepted,
+		// PaymentRefused" — because the model supports it and a form that
+		// did not would make that capability unreachable from the wizard.
+		// Which one applies is the author's rule; the generator says so and
+		// the warnings callout counts it.
+		for _, name := range splitList(eventName) {
+			// copy the command's fields onto the event, and say explicitly
+			// when there are none — an event with no fields and no NoFields
+			// reads as "nobody specified this yet", which is not what the
+			// form meant
+			cmd.Events = append(cmd.Events, scaffoldEvent{
+				Name:     name,
+				Fields:   cmd.Fields,
+				NoFields: len(cmd.Fields) == 0,
+			})
+		}
+		if len(cmd.Events) == 0 {
+			return nil, fmt.Errorf("command %q needs the event it records", name)
+		}
 		// the create checkbox posts the row index it belongs to
 		for _, v := range once {
 			if v == strconv.Itoa(i) {
@@ -1035,6 +1046,20 @@ func parseScaffoldForm(r *http.Request) (map[string]any, error) {
 		}}
 	}
 	return domain, nil
+}
+
+// splitList reads "A, B" or "A B" into names, which is how people type a
+// short list into a single-line field.
+func splitList(spec string) []string {
+	var out []string
+	for _, part := range strings.FieldsFunc(spec, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // parseFieldSpec reads "title:text, priority:number" into field objects.

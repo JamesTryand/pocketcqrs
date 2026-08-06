@@ -223,7 +223,7 @@ func exportAutomations(cat *catalog.Catalog, doc *Document, rep *Report, eventsB
 		if cons.Kind != "js-reactor" {
 			continue
 		}
-		name := strings.TrimPrefix(cons.Name, "fn-react:")
+		name := strings.TrimPrefix(cons.Name, "fn-reactor:")
 		id := DeriveID(TypeName(name, name))
 		if len(cons.Dispatches) == 0 {
 			rep.warnf("reactor %q declares no //@dispatches, so the command it sends cannot be "+

@@ -703,10 +703,10 @@ func TestJSReactorTier(t *testing.T) {
 	// a reactor that turns a completed task into a follow-up task. The
 	// target id is derived from the source event, which is what makes the
 	// at-least-once replay idempotent.
-	const reactorSrc = `//@trigger react TaskCompleted
+	const reactorSrc = `//@trigger reactor TaskCompleted
 //@dispatches task/CreateTask
 
-function react(event) {
+function reactTo(event) {
   return [{
     aggregate: 'task',
     id: 'followup-' + event.aggregateId,
@@ -718,7 +718,7 @@ function react(event) {
 	// the dry run reports what it WOULD send, and sends nothing
 	var dry map[string]any
 	status, raw := h.api(http.MethodPost, "/api/cqrs/admin/dryrun",
-		jsonBody(map[string]any{"name": "followup.js", "source": reactorSrc, "mode": "react"}), &dry)
+		jsonBody(map[string]any{"name": "followup.js", "source": reactorSrc, "mode": "reactor"}), &dry)
 	if status != http.StatusOK {
 		t.Fatalf("reactor dry run: %d: %s", status, truncate(raw, 300))
 	}
@@ -791,7 +791,7 @@ function react(event) {
 	h.apiOK(http.MethodGet, "/api/cqrs/catalog", nil, &cat)
 	var found bool
 	for _, c := range cat.Consumers {
-		if c.Name == "fn-react:followup" {
+		if c.Name == "fn-reactor:followup" {
 			found = true
 			if c.Kind != "js-reactor" {
 				t.Errorf("expected kind js-reactor, got %q", c.Kind)

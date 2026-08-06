@@ -177,7 +177,7 @@ func (m *mapper) mapAutomation(s Slice) {
 	}
 	if s.ReadModelID != "" {
 		m.rep.warnf("automation %q consults read model %q; the generated reactor does not read it — "+
-			"`pb.findRecord`/`pb.query` are available inside react() if the rule needs it",
+			"`pb.findRecord`/`pb.query` are available inside reactTo() if the rule needs it",
 			s.ID, s.ReadModelID)
 	}
 	m.domain(source).Reactors = append(m.domain(source).Reactors, scaffold.Reactor{

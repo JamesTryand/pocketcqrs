@@ -58,19 +58,6 @@ func (c *consumer) Apply(ctx context.Context, ev events.Event) error {
 	return Dispatch(ctx, c.registry, c.reactor.Name(), ev, c.reactor.React(ev), c.logger)
 }
 
-// Dispatch sends reactions to the registry on behalf of the reactor named
-// name, in response to ev.
-//
-// It is exported because there are two reactor tiers — Go reactors and JS
-// `//@trigger react` function files — and the rule below is the whole
-// contract of both. Two copies would drift, and the halves that would drift
-// are the ones that matter: retry-vs-continue, and the causation metadata
-// the catalog's flow detection joins on.
-//
-// The metadata actor is deliberately "reactor:<name>" for BOTH tiers, even
-// though they use different durable checkpoint keys — events/stats.go's
-// ReactorFlows filters on that prefix, so matching it is what earns a JS
-// reactor its edges in the catalog, the explorer and the mermaid diagram.
 // Dispatcher is the slice of *decider.Registry that Dispatch needs. It is an
 // interface so the retry-vs-continue split below can be tested directly:
 // ErrConcurrency is genuinely hard to provoke against a real registry (it
@@ -80,6 +67,19 @@ type Dispatcher interface {
 	HandleWithMeta(ctx context.Context, aggregate, id string, cmd decider.Command, meta map[string]any) ([]events.Event, error)
 }
 
+// Dispatch sends reactions to the registry on behalf of the reactor named
+// name, in response to ev.
+//
+// It is exported because there are two reactor tiers — Go reactors and JS
+// `//@trigger reactor` function files — and the rule below is the whole
+// contract of both. Two copies would drift, and the halves that would drift
+// are the ones that matter: retry-vs-continue, and the causation metadata
+// the catalog's flow detection joins on.
+//
+// The metadata actor is deliberately "reactor:<name>" for BOTH tiers, even
+// though they use different durable checkpoint keys — events/stats.go's
+// ReactorFlows filters on that prefix, so matching it is what earns a JS
+// reactor its edges in the catalog, the explorer and the mermaid diagram.
 func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.Event, reactions []Reaction, logger func(string, ...any)) error {
 	if logger == nil {
 		logger = func(string, ...any) {}

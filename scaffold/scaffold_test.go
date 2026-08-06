@@ -310,9 +310,9 @@ func TestReactorGeneration(t *testing.T) {
 		t.Fatalf("unexpected reactor file: %+v", last)
 	}
 	for _, want := range []string{
-		"//@trigger react TicketOpened",
+		"//@trigger reactor TicketOpened",
 		"//@dispatches audit/Record",
-		"function react(event)",
+		"function reactTo(event)",
 		"aggregate: 'audit'",
 		"id: 'audit-' + event.aggregateId", // deterministic: replay-safe
 		"command: 'Record'",

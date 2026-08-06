@@ -13,10 +13,10 @@ import (
 	"github.com/jamestryand/pocketcqrs/reactors"
 )
 
-const shipReactorJS = `//@trigger react OrderPlaced
+const shipReactorJS = `//@trigger reactor OrderPlaced
 //@dispatches shipment/StartShipment
 
-function react(event) {
+function reactTo(event) {
   return [{
     aggregate: 'shipment',
     id: 'ship-' + event.data.orderId,
@@ -57,8 +57,8 @@ func TestReactorDirectiveParsing(t *testing.T) {
 	if d.SchemaBearing {
 		t.Error("a reactor declares no schema, so it must reload in running mode")
 	}
-	if len(d.React) != 1 || d.React[0] != "OrderPlaced" {
-		t.Errorf("triggers not reported: %+v", d.React)
+	if len(d.Reactor) != 1 || d.Reactor[0] != "OrderPlaced" {
+		t.Errorf("triggers not reported: %+v", d.Reactor)
 	}
 	if len(d.Dispatches) != 1 || d.Dispatches[0] != "shipment/StartShipment" {
 		t.Errorf("declared dispatches not reported: %+v", d.Dispatches)
@@ -67,14 +67,14 @@ func TestReactorDirectiveParsing(t *testing.T) {
 	// an empty trigger list is refused rather than loading as a reactor
 	// that can never fire
 	if _, err := Declares("bad.js", "//@trigger react\n"); err == nil {
-		t.Error("//@trigger react with no event types must be refused")
+		t.Error("//@trigger reactor with no event types must be refused")
 	}
 
 	// a malformed //@dispatches is REFUSED, not dropped: it is the only
 	// declared record of what the reactor sends
-	for _, bad := range []string{"//@trigger react X\n//@dispatches nostroke\n",
-		"//@trigger react X\n//@dispatches /Command\n",
-		"//@trigger react X\n//@dispatches agg/\n"} {
+	for _, bad := range []string{"//@trigger reactor X\n//@dispatches nostroke\n",
+		"//@trigger reactor X\n//@dispatches /Command\n",
+		"//@trigger reactor X\n//@dispatches agg/\n"} {
 		if _, err := Declares("bad.js", bad); err == nil {
 			t.Errorf("a malformed //@dispatches must be refused: %q", bad)
 		}
@@ -91,11 +91,11 @@ func TestReactorDirectiveParsing(t *testing.T) {
 // event, with two checkpoints and no sensible reading.
 func TestReactorIsSinglePurpose(t *testing.T) {
 	for name, src := range map[string]string{
-		"react + event":      "//@trigger react X\n//@trigger event X\n",
-		"react + http":       "//@trigger react X\n//@trigger http\n",
-		"react + cron":       "//@trigger react X\n//@trigger cron * * * * *\n",
-		"react + projection": "//@trigger react X\n//@trigger projection p on X\n//@schema ps a:number\n//@key a\n",
-		"react + decider":    "//@trigger react X\n//@trigger decider a\n//@handles X\n",
+		"react + event":      "//@trigger reactor X\n//@trigger event X\n",
+		"react + http":       "//@trigger reactor X\n//@trigger http\n",
+		"react + cron":       "//@trigger reactor X\n//@trigger cron * * * * *\n",
+		"react + projection": "//@trigger reactor X\n//@trigger projection p on X\n//@schema ps a:number\n//@key a\n",
+		"react + decider":    "//@trigger reactor X\n//@trigger decider a\n//@handles X\n",
 	} {
 		if _, err := Declares("mixed.js", src); err == nil || !strings.Contains(err.Error(), "single-purpose") {
 			t.Errorf("%s must be refused as not single-purpose, got %v", name, err)
@@ -118,8 +118,8 @@ func TestReactorCheckpointKeyDoesNotCollide(t *testing.T) {
 	if spec.Name() == goKey {
 		t.Fatalf("JS and Go reactors share the checkpoint key %q", spec.Name())
 	}
-	if !strings.HasPrefix(spec.Name(), "fn-react:") {
-		t.Errorf("expected the fn-react: prefix, got %q", spec.Name())
+	if !strings.HasPrefix(spec.Name(), "fn-reactor:") {
+		t.Errorf("expected the fn-reactor: prefix, got %q", spec.Name())
 	}
 	// ...but the metadata ACTOR must still match, because the catalog's flow
 	// detection joins on `actor LIKE 'reactor:%'`. Two decisions that look

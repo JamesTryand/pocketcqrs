@@ -16,7 +16,7 @@ There is no multi-tenant isolation; see the trust-model note in
 | 1 — effect | integrate, serve HTTP, run on a schedule | `event`, `http`, `cron` | none required (best-effort) | `console`, read-only `pb` |
 | 2 — projection | fold events into collections | `projection` | replay-deterministic: `Math.random` is seeded per event; use `event.created` for time | `console`, read-only `pb` |
 | 3 — decider | the write side of an aggregate | `decider` | strict: no `Math.random` (throws), no `Date`, **no `pb`** | `console` only |
-| 4 — reactor | map events to **commands** (sagas, bridges) | `react` | `Math.random` seeded per event, because an at-least-once replay must decide the same thing twice | `console`, read-only `pb` |
+| 4 — reactor | map events to **commands** (sagas, bridges) | `reactor` | `Math.random` seeded per event, because an at-least-once replay must decide the same thing twice | `console`, read-only `pb` |
 
 There is deliberately **no write binding** anywhere: state changes must go
 through the command API so they become events (the write-guard enforces it).

@@ -247,7 +247,7 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 		// branch they would list as "unknown" — while still producing
 		// correct FLOW edges, because those are joined on the metadata
 		// actor, which both tiers stamp as "reactor:<name>".
-		case strings.HasPrefix(name, "fn-react:"):
+		case strings.HasPrefix(name, "fn-reactor:"):
 			cons.Kind = "js-reactor"
 			cons.EventTypes = reactorTypes[name]
 			cons.Dispatches = reactorDispatches[name]

@@ -397,7 +397,7 @@ func (d *Declaration) DryRunMode() string {
 	case "projection":
 		return "projection"
 	case "reactor":
-		return "react"
+		return "reactor"
 	default:
 		return "compile"
 	}
@@ -461,7 +461,7 @@ type DryRunResult struct {
 	// Produced is what a command WOULD append (decide mode) — a separate
 	// field from Events, which is a count.
 	Produced json.RawMessage `json:"produced,omitempty"`
-	// Reactor and Dispatches report a react-mode dry run: the commands the
+	// Reactor and Dispatches report a reactor-mode dry run: the commands the
 	// reactor WOULD send. Named separately from Produced for the same
 	// reason Produced is separate from Events — one field must not mean a
 	// different shape per mode.

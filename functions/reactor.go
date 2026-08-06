@@ -16,7 +16,7 @@ import (
 // ReactorSpec is a compiled JS reactor: a durable consumer that maps
 // committed events to COMMANDS.
 //
-// The file defines react(event) and RETURNS dispatch descriptors —
+// The file defines reactTo(event) and RETURNS dispatch descriptors —
 // {aggregate, id, command, payload} — rather than calling a host binding
 // that dispatches for it. That mirrors project() returning row ops and
 // decide() returning events: the function stays pure, so a dry run can
@@ -28,7 +28,7 @@ import (
 type ReactorSpec struct {
 	// Reactor is the logical name (the file's basename, no extension).
 	Reactor string
-	// EventTypes are the //@trigger react types.
+	// EventTypes are the //@trigger reactor types.
 	EventTypes []string
 	// Dispatches are the declared "<aggregate>/<Command>" pairs, if any.
 	// Declared because a command LEAVES NO TRACE: the event it causes is
@@ -41,14 +41,14 @@ type ReactorSpec struct {
 
 // Name implements consumers.Consumer — and is the durable checkpoint key.
 //
-// "fn-react:", NOT "reactor:", which Go reactors already use
+// "fn-reactor:", NOT "reactor:", which Go reactors already use
 // (reactors.consumer.Name). A JS reactor sharing that prefix with a
 // same-named Go reactor would share its CHECKPOINT, silently skipping events
 // for both. The metadata actor stamped on dispatched commands is a separate
 // decision that goes the other way — see reactors.Dispatch.
-func (s *ReactorSpec) Name() string { return "fn-react:" + s.Reactor }
+func (s *ReactorSpec) Name() string { return "fn-reactor:" + s.Reactor }
 
-// Apply implements consumers.Consumer: runs react() for a matching event and
+// Apply implements consumers.Consumer: runs reactTo() for a matching event and
 // dispatches whatever it returned.
 //
 // A reactor that throws is dead-lettered, like an effect function and unlike
@@ -102,7 +102,7 @@ func buildReactorSpec(rt *GojaRuntime, filename string, src string, t triggers) 
 	}
 	return &ReactorSpec{
 		Reactor:    name,
-		EventTypes: t.react,
+		EventTypes: t.reactor,
 		Dispatches: t.dispatches,
 		Prog:       prog,
 		runtime:    rt,
@@ -116,13 +116,13 @@ func LoadReactorSource(rt *GojaRuntime, name, src string) (*ReactorSpec, error) 
 	if err != nil {
 		return nil, fmt.Errorf("functions: %s: %w", name, err)
 	}
-	if len(t.react) == 0 {
-		return nil, fmt.Errorf("functions: %s: missing //@trigger react directive", name)
+	if len(t.reactor) == 0 {
+		return nil, fmt.Errorf("functions: %s: missing //@trigger reactor directive", name)
 	}
 	return buildReactorSpec(rt, name, src, t)
 }
 
-// runReactor executes react(event) in a fresh VM and returns what it gave
+// runReactor executes reactTo(event) in a fresh VM and returns what it gave
 // back, un-normalized.
 //
 // Math.random is seeded from the event position, exactly as a projection's
@@ -161,11 +161,11 @@ func (r *GojaRuntime) runReactor(spec *ReactorSpec, ev events.Event) (result any
 	if _, err := vm.RunProgram(spec.Prog); err != nil {
 		return nil, err
 	}
-	react, ok := goja.AssertFunction(vm.Get("react"))
+	reactTo, ok := goja.AssertFunction(vm.Get("reactTo"))
 	if !ok {
-		return nil, fmt.Errorf("reactor %s does not define react(event)", spec.Reactor)
+		return nil, fmt.Errorf("reactor %s does not define reactToToTo(event)", spec.Reactor)
 	}
-	v, err := react(goja.Undefined(), vm.ToValue(event))
+	v, err := reactTo(goja.Undefined(), vm.ToValue(event))
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (r *GojaRuntime) runReactor(spec *ReactorSpec, ev events.Event) (result any
 	return v.Export(), nil
 }
 
-// normalizeDispatches turns what react() returned into reactions, counting
+// normalizeDispatches turns what reactTo() returned into reactions, counting
 // anything that is not a dispatch descriptor rather than dropping it
 // silently. A descriptor is {aggregate, id, command, payload?}.
 //
@@ -239,7 +239,7 @@ type ReactorDryRun struct {
 	Reactor string
 	// Events is how many matching events were replayed.
 	Events int
-	// Dispatches is what react() returned across those events. Named for
+	// Dispatches is what reactTo() returned across those events. Named for
 	// its own shape: `events` already means a count in other modes, and one
 	// field meaning two things by mode is a trap for every client.
 	Dispatches []DispatchPreview

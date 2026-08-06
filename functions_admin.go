@@ -317,7 +317,7 @@ func (c *components) checkFunctionSource(name, src string) (*functions.Declarati
 type dryRunRequest struct {
 	Name     string          `json:"name"`
 	Source   string          `json:"source"`
-	Mode     string          `json:"mode"` // decider | decide | react | projection | compile
+	Mode     string          `json:"mode"` // decider | decide | reactor | projection | compile
 	StreamID string          `json:"streamId,omitempty"`
 	Command  string          `json:"command,omitempty"`
 	Payload  json.RawMessage `json:"payload,omitempty"`
@@ -475,7 +475,7 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 				req.Command, spec.Aggregate, req.StreamID, len(res.Produced)),
 		})
 
-	case "react":
+	case "reactor":
 		spec, err := functions.LoadReactorSource(rt, req.Name, req.Source)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
@@ -553,7 +553,7 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 
 	default:
 		return apis.NewBadRequestError(
-			fmt.Sprintf("unknown dryrun mode %q: expected decider, decide, react, projection or compile", req.Mode), nil)
+			fmt.Sprintf("unknown dryrun mode %q: expected decider, decide, reactor, projection or compile", req.Mode), nil)
 	}
 }
 

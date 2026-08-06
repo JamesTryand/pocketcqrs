@@ -195,7 +195,7 @@ func TestRoundTripLoss(t *testing.T) {
 		}
 		for _, r := range d.Reactors {
 			cat.Consumers = append(cat.Consumers, catalog.Consumer{
-				Name: "fn-react:" + r.Name, Kind: "js-reactor",
+				Name: "fn-reactor:" + r.Name, Kind: "js-reactor",
 				EventTypes: r.On, Dispatches: []string{r.Aggregate + "/" + r.Command},
 			})
 		}

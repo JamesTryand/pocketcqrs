@@ -1,6 +1,6 @@
 # Browser probes
 
-Four headless-browser checks for the things HTTP assertions cannot see. Each
+Six headless-browser checks for the things HTTP assertions cannot see. Each
 one exists because it caught a real defect that every other gate passed:
 
 | probe | what it proves | the bug that earned it |
@@ -10,6 +10,7 @@ one exists because it caught a real defect that every other gate passed:
 | `system.mjs` | the System page boots, the reload indicator is hidden while idle, and the report swaps in place | — |
 | `editor.mjs` | CodeMirror attaches, **writes through to the `<textarea>` htmx submits**, re-attaches after a swap, and the typed source is what reaches the backend | a save that landed and was then overwritten by a second request the same click fired; every endpoint's own test passed |
 | `scaffold.mjs` | the wizard's components boot, and filling it in a browser really generates a slice | Web Awesome inputs are form-associated custom elements: their values reach a plain form submit, which no server-side test can confirm |
+| `reactor.mjs` | the `mode=reactor` dry run renders its **dispatches table**, and the scaffolder's **warnings callout** appears for an unfinished slice | a populated `dispatches` array and a page rendering an empty panel are indistinguishable to every backend test; and the callout is the only thing saying a generated slice that *runs* is unfinished |
 
 They complement `go test -tags=smoke ./smoke/`, which covers everything
 reachable over HTTP. Anything involving a shadow DOM, a canvas, a timer or a

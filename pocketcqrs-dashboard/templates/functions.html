@@ -168,7 +168,7 @@
       </div>
       {{end}}
 
-      {{if eq .Mode "react"}}
+      {{if eq .Mode "reactor"}}
       <div class="wa-cluster wa-gap-l wa-tabular-nums">
         <span class="wa-caption-m">reactor <strong>{{.Reactor}}</strong></span>
         <span class="wa-caption-m">events replayed <strong>{{.Events}}</strong></span>
@@ -177,7 +177,7 @@
       {{if gt .IgnoredValues 0}}
       <wa-callout variant="warning" size="s">
         <wa-icon slot="icon" name="circle-xmark" library="system"></wa-icon>
-        <strong>{{.IgnoredValues}} returned value(s) are not dispatches</strong> and would be discarded at runtime. <code>react(event)</code> must return <code>{aggregate, id, command, payload}</code> descriptors &mdash; anything else is dropped, so the reactor would send nothing.
+        <strong>{{.IgnoredValues}} returned value(s) are not dispatches</strong> and would be discarded at runtime. <code>reactTo(event)</code> must return <code>{aggregate, id, command, payload}</code> descriptors &mdash; anything else is dropped, so the reactor would send nothing.
       </wa-callout>
       {{end}}
       {{with .Dispatches}}

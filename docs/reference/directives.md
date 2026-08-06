@@ -9,8 +9,8 @@ A file is **single-purpose** when it is a projection, a decider or a
 reactor: those roles may not combine with each other or with event/http/cron
 triggers. Event, http and cron triggers may combine freely in one file.
 
-`react` is deliberately not part of that combinable group. A file declaring
-both `//@trigger event X` and `//@trigger react X` would be two delivery
+`reactor` is deliberately not part of that combinable group. A file declaring
+both `//@trigger event X` and `//@trigger reactor X` would be two delivery
 paths over one event, with two checkpoints and no sensible reading — so it
 is refused by name rather than one of them being silently dropped.
 
@@ -135,17 +135,17 @@ Markdown, and fill the command table of a generated domain-doc skeleton
 (which otherwise stays a `TODO` row — an honest blank rather than a guess
 from event names).
 
-## `//@trigger react <EventType...>`
+## `//@trigger reactor <EventType...>`
 
 Registers a **JS reactor** (tier 4): a durable consumer that maps committed
-events to **commands**. The file must define `react(event)`, which returns
+events to **commands**. The file must define `reactTo(event)`, which returns
 dispatch descriptors.
 
 ```js
-//@trigger react OrderConfirmed
+//@trigger reactor OrderConfirmed
 //@dispatches task/CreateTask
 
-function react(event) {
+function reactTo(event) {
   return [{
     aggregate: 'task',
     id: 'fulfill-' + event.data.orderId,   // deterministic: see below
@@ -162,9 +162,9 @@ the resulting event stays a *decision*. This is the same rule the Go
 `reactors` package follows, and both tiers share one implementation
 (`reactors.Dispatch`) so they cannot drift.
 
-`react(event)` **returns** descriptors rather than calling a `dispatch()`
+`reactTo(event)` **returns** descriptors rather than calling a `dispatch()`
 host binding, matching `project()` returning row ops and `decide()`
-returning events. The function stays pure, so `mode=react` can report what
+returning events. The function stays pure, so `mode=reactor` can report what
 it *would* send without stubbing anything out.
 
 Anything returned that is not a descriptor is **counted and logged**, then
@@ -188,7 +188,7 @@ the consumer advances.
 Reactors declare no schema, so they **activate in `running` mode** — no
 maintenance barrier for an ordinary saga edit.
 
-The durable checkpoint key is `fn-react:<basename>`, deliberately *not*
+The durable checkpoint key is `fn-reactor:<basename>`, deliberately *not*
 `reactor:<name>`, which Go reactors use — a shared prefix would mean a
 shared checkpoint. The metadata `actor` stamped on dispatched commands
 *does* use `reactor:<name>`, because that is what the catalog's flow

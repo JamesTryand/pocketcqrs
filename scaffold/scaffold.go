@@ -484,14 +484,14 @@ func (d Domain) projection(rm ReadModel) string {
 
 func (d Domain) reactor(r Reactor) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "//@trigger react %s\n", strings.Join(r.On, " "))
+	fmt.Fprintf(&b, "//@trigger reactor %s\n", strings.Join(r.On, " "))
 	fmt.Fprintf(&b, "//@dispatches %s/%s\n", r.Aggregate, r.Command)
 	b.WriteString("//\n")
 	fmt.Fprintf(&b, "// %s — generated automation: %s's events become %s commands\n",
 		r.Name, d.Aggregate, r.Aggregate)
 	fmt.Fprintf(&b, "// on %s.\n", r.Aggregate)
 	b.WriteString("//\n")
-	b.WriteString("// react() RETURNS dispatch descriptors; the host sends them through the\n")
+	b.WriteString("// reactTo() RETURNS dispatch descriptors; the host sends them through the\n")
 	b.WriteString("// decider registry, so a reaction is a COMMAND that can be refused —\n")
 	b.WriteString("// never a direct append.\n")
 	b.WriteString("//\n")
@@ -499,7 +499,7 @@ func (d Domain) reactor(r Reactor) string {
 	b.WriteString("// source event, so a replay hits the target's own 'already exists' rule\n")
 	b.WriteString("// instead of dispatching twice. Keep it deterministic.\n\n")
 
-	b.WriteString("function react(event) {\n")
+	b.WriteString("function reactTo(event) {\n")
 	b.WriteString("  return [{\n")
 	fmt.Fprintf(&b, "    aggregate: '%s',\n", r.Aggregate)
 	fmt.Fprintf(&b, "    id: '%s' + event.aggregateId,\n", r.IDPrefix)
