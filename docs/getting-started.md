@@ -82,6 +82,7 @@ comment lines declare what a file is. The examples shipped:
 | `note.js` | full write side of a `note` aggregate (JS decider) |
 | `notes.js` | read side of `note` (JS projection, creates its own collection) |
 | `orders_by_customer.js` | JS projection rolling up the Go-maintained `orders` |
+| `task_completion_note.js` | reactor: on `TaskCompleted`, dispatches `CreateNote` |
 
 Try the note vertical — entirely user-defined, no Go code involved:
 
@@ -96,6 +97,26 @@ curl http://127.0.0.1:8090/api/collections/notes/records
 
 The `notes` collection was created by the `//@schema` directive in
 `notes.js` at boot — no migration, no admin UI clicking.
+
+## Your first reactor (a saga spanning two aggregates)
+
+Complete the task created in the first command above — a Go decider — and
+watch a JS reactor create a note about it on a JS decider, with no code of
+yours in between:
+
+```sh
+curl -X POST http://127.0.0.1:8090/api/cqrs/task/t1/CompleteTask \
+  -H "Authorization: Bearer <token>"
+
+curl http://127.0.0.1:8090/api/collections/notes/records
+# -> now also: { noteId: "completed-t1", text: "task t1 was completed", ... }
+```
+
+`task_completion_note.js` reacted to `TaskCompleted` by dispatching
+`CreateNote` **through the decider registry**, not by appending directly —
+so the reaction is a decision that could have been refused, and a replay
+lands on the same `completed-t1` id instead of creating a duplicate. See the
+[JS guide's reactor section](js-guide.md#reactors-tier-4).
 
 ## Change code without restarting
 

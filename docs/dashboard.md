@@ -99,6 +99,31 @@ The workflow the page is built around:
 A file marked **unreadable** in the list is blocking every reload until it is
 fixed or deleted; that is why it is listed rather than hidden.
 
+## Scaffold
+
+`describe → generate → dry run → save`. A wizard over the domain scaffolder
+(`scaffold.Domain`, the same intermediate model `pocketcqrs schema import`
+maps EventModeling documents onto): name the aggregate, up to four
+commands with the event each records and its payload fields, mark the
+**create**, optionally describe one read model.
+
+Submitting **writes nothing**. It generates a JS decider (and a JS
+projection, if a read model was described), dry-runs each generated file
+against the live log, and shows the source plus the dry-run result inline —
+a generator bug surfaces here, not at save time. **Open in the editor**
+carries the generated source into the Functions page through the same
+dry-run-then-save path as hand-written code; nothing is live until you save
+there and reload behind the maintenance barrier.
+
+The "event it records" field takes a comma-separated list
+(`PaymentAccepted, PaymentRefused`), because the underlying model allows a
+command to resolve one of several ways and a form that only took one name
+would make that capability unreachable from the wizard. This is what the
+**warnings** callout is for: whenever a command names more than one event,
+the response still generates runnable code (the first event, by default)
+and lists what still needs a human decision — which event actually applies,
+and when — in the same words the generated file's own comment uses.
+
 ## System
 
 The mode barrier and hot reload, on one page because the barrier is an

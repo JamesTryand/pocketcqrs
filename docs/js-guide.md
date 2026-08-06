@@ -174,6 +174,66 @@ function transform_NoteCreated_1_to_2(data) { data.priority = data.priority || 0
   type**. Transforms are applied at the store's read path, so *every*
   consumer (deciders, projections, effects) sees the latest version.
 
+## Reactors (tier 4)
+
+```js
+//@trigger reactor TaskCompleted
+//@dispatches note/CreateNote
+
+function reactTo(event) {
+  return [{
+    aggregate: 'note',
+    id: 'completed-' + event.aggregateId,   // deterministic: see below
+    command: 'CreateNote',
+    payload: { text: 'task ' + event.aggregateId + ' was completed' }
+  }];
+}
+```
+
+A reactor is a durable consumer that maps a committed event to **commands**,
+never to a direct append — the same shape the Go `reactors` package uses
+(both tiers share one `reactors.Dispatch`). It is the closest thing to a
+write binding this project has, and it proves the rule rather than breaking
+it: a reactor causes a write only by asking the decider registry, which can
+still refuse.
+
+- `reactTo(event)` **returns** dispatch descriptors instead of calling a
+  `dispatch()` host binding — mirrors `project()` returning row ops and
+  `decide()` returning events, keeps the function pure, and lets
+  `mode=reactor` report what *would* be sent without stubbing anything out.
+  Anything returned that isn't a recognisable descriptor is counted and
+  discarded (a bare object sends nothing, silently, unless you look at the
+  count); a descriptor missing `aggregate`, `id` or `command` fails loudly.
+- **Delivery is at-least-once, so reactions must be idempotent.** The
+  standard pattern, shown above: derive the target id from the source event.
+  A replay dispatches the same command to the same id, hits a domain
+  rejection ("note already exists"), and that rejection is logged and
+  skipped rather than the reaction firing twice. `Math.random` is seeded
+  from the event position for the same reason — a retry has to make the
+  same decision the attempt it's retrying made.
+- **Failure**: a reactor that throws is dead-lettered (like an effect
+  function), not blocking. A concurrency conflict on the target stream
+  propagates so the whole event retries; a domain rejection is logged and
+  the consumer advances — a note that already exists is not a bug.
+- **No schema, no barrier**: reactors declare nothing PocketBase-visible, so
+  they activate in **running** mode like effect functions — no maintenance
+  window for an ordinary saga edit.
+- **Checkpoints**: `fn-reactor:<basename>`, deliberately distinct from Go
+  reactors' `reactor:<name>` — a shared prefix would mean a shared
+  checkpoint. The metadata `actor` stamped on the dispatched command *does*
+  use `reactor:<name>`, because that's what the catalog's flow detection
+  joins on.
+- `//@dispatches <aggregate>/<Command>...` is optional and documentation-only
+  (same limits as `//@commands`), but worth adding: a dispatched command
+  leaves no trace of its own in the catalog until the reaction has actually
+  fired once, so a saga that has never run is otherwise invisible.
+- Dry-run before shipping: `pocketcqrs dryrun` has no CLI subcommand for
+  reactors yet, but `mode=reactor` over
+  [`POST /api/cqrs/admin/dryrun`](reference/gateway.md#dry-run) — and the
+  dashboard's Functions page — replays matching history and reports what it
+  would dispatch, with no registry installed so nothing can go out even by
+  accident.
+
 ## Changing code
 
 ### Workflow
@@ -198,6 +258,7 @@ would block every later reload, including the one that fixes it.
 | file kind | when | semantics |
 | --- | --- | --- |
 | event / http / cron | any mode | swapped immediately, checkpoints carry |
+| reactor | any mode | swapped immediately, checkpoint carries (`fn-reactor:` key, distinct from Go reactors') |
 | projection (+schema) | maintenance only | schema reconciled additively, consumer swapped, checkpoint carries |
 | decider | maintenance only | re-validated, then swapped; refusal keeps old code |
 
