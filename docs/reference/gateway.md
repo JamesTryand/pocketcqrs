@@ -170,18 +170,41 @@ check:
 | --- | --- |
 | `compile` | parses and compiles only — the whole check for effect/http/cron functions |
 | `decider` | applies the same gate a reload does — contract probe plus `//@handles` coverage — then folds existing streams (`streamId` limits it to one, and returns its final state). Passing means a reload would accept the decider, which folding alone would not tell you for an aggregate with no history yet |
-| `decide` | reports the events a command **would** produce on a real stream; needs `streamId` and `command` |
+| `decide` | reports the events a command **would** produce on a real stream, or the refusal if the decider rejects it; needs `streamId` and `command` |
+| `reactor` | replays matching history through `reactTo(event)` and reports the commands it **would** dispatch, without a registry installed — nothing can be dispatched even by accident |
 | `projection` | simulates the projection over the log in memory; `diff: true` also compares against the live collections |
 
 Every mode answers `200` with `ok`, a `summary` sentence and its mode-specific
 fields; a candidate that fails to load or fold is a `400` carrying the error.
 `projection` also reports `ignoredValues` — values `project()` returned that
 are **not** row ops and would be discarded at runtime, which is what turns a
-mysterious empty collection into a named mistake.
+mysterious empty collection into a named mistake. `reactor` reports the same
+kind of count under `ignoredValues` for return values that are not
+recognisable dispatch descriptors.
 `decider` and `projection` report `events` as the **count** of history they
 folded; `decide` reports the events it would append under **`produced`** — a
 separate field, because one name meaning two shapes by mode is a trap for
 every client.
+
+**A refused `decide` is still a `200`** — the status reports whether the
+simulation ran, not the verdict it reached, so a working decider saying "no"
+is distinguishable from a broken one (the dead-letter retry convention,
+applied here too). Clients branch on `rejected`, never on the HTTP status:
+
+```json
+// rejected
+{"mode": "decide", "ok": false, "rejected": true,
+ "message": "note already exists", "summary": "..."}
+
+// accepted
+{"mode": "decide", "ok": true, "rejected": false,
+ "produced": [{"type": "NoteCreated", "data": {...}}], "summary": "..."}
+```
+
+`reactor` reports `{ok: true, reactor, events, dispatches, ignoredValues,
+summary}` — `events` is the count of matching history replayed, `dispatches`
+the descriptors it would send (nothing is actually dispatched; no decider
+runs).
 The `diff` caveat from the CLI applies here too: read-modify-write projections
 read live state during simulation, so only absolute-recompute projections are
 expected to come back clean.
@@ -294,10 +317,12 @@ schema-bearing functions may be reloaded.
 ```
 POST /api/cqrs/admin/scaffold
 body: {"aggregate": "ticket",
-       "commands": [{"name": "OpenTicket", "event": "TicketOpened", "once": true,
-                     "fields": [{"name": "subject", "type": "text"}]}],
-       "readModel": {"collection": "tickets", "key": "ticketId",
-                     "fields": [{"name": "subject", "type": "text"}]}}
+       "commands": [{"name": "OpenTicket", "once": true,
+                     "fields": [{"name": "subject", "type": "text"}],
+                     "events": [{"name": "TicketOpened",
+                                 "fields": [{"name": "subject", "type": "text"}]}]}],
+       "readModels": [{"collection": "tickets", "key": "ticketId",
+                        "fields": [{"name": "subject", "type": "text"}]}]}
 ```
 
 Generates a JS decider and (when a read model is described) a JS projection
@@ -310,6 +335,13 @@ barrier. Generated code gets no shortcut.
 An invalid model is a `400` listing **every** problem at once, not the first —
 the description is written by a person or an importer, and fixing one issue at
 a time is a poor way to spend either's attention.
+
+A command's `events` is a list, not a single name — it records **what can
+result**, not how the result is chosen: `[TicketOpened]` for the ordinary
+case, `[PaymentAccepted, PaymentRefused]` when a command may resolve one of
+several ways. The generator emits the first event as a runnable default and
+a warning names any command whose outcome rule still needs writing —
+choosing between them is business logic, and it lives in `decide()`.
 
 Marking a command `once` makes it the slice's create: the generated decider
 refuses it on a stream that already exists, and `requiresExisting` refuses a

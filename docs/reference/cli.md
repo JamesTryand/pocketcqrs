@@ -75,7 +75,10 @@ pocketcqrs dryrun projection <file.js> [--diff]
   candidate code; prints stream/event counts, and the final state for a
   single id. Evolve errors and undeclared `//@handles` coverage fail the run.
 - **decide** — fold one stream, then show the events a command WOULD
-  produce (nothing is appended; domain rejections surface as errors).
+  produce (nothing is appended). **A domain rejection is a verdict, not a
+  command failure**: the CLI exits `0` and prints "The decider REFUSED this
+  command... This is a domain answer, not a failure." — the same
+  `{ok:false, rejected:true}` shape the HTTP dry-run returns as a `200`.
 - **projection** — simulate over the whole log in memory (upsert/delete
   counts, final rows per collection). `--diff` compares the simulation
   against each live collection and prints per-collection differences.
