@@ -151,6 +151,8 @@ go run . dryrun projection pb_functions/notes.js --diff
 
 ## Where next
 
+- [Tutorial](tutorial.md) — go from a design document to a running slice
+  with `pocketcqrs schema import`, instead of hand-writing files
 - [JS guide](js-guide.md) — directives, tiers, bindings, determinism, workflows
 - [Go guide](go-guide.md) — deciders, projections, reactors in Go
 - [Reference](reference/directives.md) — directive / [CLI](reference/cli.md) / [gateway](reference/gateway.md)

@@ -7,6 +7,10 @@ JSON Schema behind [EventModeling](https://eventmodeling.org) design tooling.
 Both directions are **one-shot**. There is no live connection between a
 document and a running platform, and importing does not activate anything.
 
+New to this? [The tutorial](tutorial.md) walks `import` end to end against a
+real document, including a real refusal and a real name collision, before
+this page's reference detail.
+
 ```sh
 pocketcqrs schema import order-fulfillment.json --out pb_functions_new
 pocketcqrs schema import ./order-fulfillment-split --out pb_functions_new

@@ -16,6 +16,7 @@ Early development — see milestones in the issue worktree (`task_plan.md`). Not
 ## Docs
 
 - [Getting started](docs/getting-started.md) — run it, first command, first function, hot reload
+- [Tutorial](docs/tutorial.md) — a design document to a running slice, with real output including a real collision and how it's handled
 - [JS guide](docs/js-guide.md) — directives, tiers, bindings, determinism, dry-run/dead-letter workflows
 - [Go guide](docs/go-guide.md) — deciders, projections, reactors in Go
 - [Ops dashboard](docs/dashboard.md) — browse the log, operate the barrier, retry dead letters, edit functions
