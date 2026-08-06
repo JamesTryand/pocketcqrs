@@ -45,4 +45,7 @@ audit effect function.
 - decider: `aggregates/task.go` (registered in `aggregates.RegisterAll`)
 - projection: `projections/projections.go` (`NewTasks`)
 - collection migration: `migrations/1754200000_tasks_collection.go`
-- effect function: `pb_functions/task_audit.js` (logs every task event)
+- effect function: `pb_functions/task_audit.js` (logs every task event) —
+  ships in `examples/pb_functions/`, copy it in to run it
+- reactor: `pb_functions/task_completion_note.js` — same, and it also needs
+  `note.js`/`notes.js` for the aggregate it dispatches into

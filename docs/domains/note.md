@@ -42,6 +42,9 @@ files; no Go code involved.
 
 ## Implementation
 
+Both files ship in `examples/pb_functions/`; the paths below are where they
+live once copied into your own functions directory.
+
 - decider: `pb_functions/note.js` (tier 3 — neutered VM: no `Math.random`,
   no `Date`, no `pb` bindings; `command.now` is the stamped time)
 - projection: `pb_functions/notes.js` (tier 2)

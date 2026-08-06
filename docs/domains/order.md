@@ -53,4 +53,5 @@ JS rollup projection on top.
 - projection: `projections/orders.go` (`NewOrders`)
 - collections migration: `migrations/1754300000_orders_collections.go`
 - saga: `reactors/fulfillment.go`
-- JS rollup: `pb_functions/orders_by_customer.js`
+- JS rollup: `pb_functions/orders_by_customer.js` — ships in
+  `examples/pb_functions/`, copy it in to run it

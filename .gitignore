@@ -19,7 +19,10 @@ pocketcqrs
 node_modules/
 package-lock.json
 
-# probe leftovers: the editor probe writes into pb_functions/, and a PUT keeps
-# a .prev copy as its undo. Neither belongs in the repo.
-pb_functions/probe_*.js
+# pb_functions/ is YOURS. The shipped examples live in examples/pb_functions/
+# (copy what you want into here); nothing in this directory is tracked. Both
+# the functions editor and the browser probes write here at runtime, and a PUT
+# keeps a .prev copy as its undo -- none of that belongs in the repo.
+pb_functions/*
+!pb_functions/.gitkeep
 *.js.prev

@@ -7,7 +7,7 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ### Added
 
-- `pb_functions/task_completion_note.js`: a shipped JS reactor example.
+- `examples/pb_functions/task_completion_note.js`: a shipped JS reactor example.
   `TaskCompleted` (Go `task` aggregate) dispatches `CreateNote` (JS `note`
   aggregate) — the reactor tier previously had no runnable example in the
   shipped fixture set, only the abstract one in the directive reference.

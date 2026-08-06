@@ -72,7 +72,8 @@ events; events become read models. No exceptions.
 ## Your first function (FaaS)
 
 Files in `pb_functions/` are loaded at boot; directives in the leading
-comment lines declare what a file is. The examples shipped:
+comment lines declare what a file is. The examples you copied in
+(their sources live in [`examples/pb_functions/`](../examples/pb_functions/README.md)):
 
 | file | role |
 | --- | --- |
