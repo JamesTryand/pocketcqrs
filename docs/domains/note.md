@@ -20,6 +20,12 @@ files; no Go code involved.
 | `NoteTextChanged` | `{ text: string }` | v1 | |
 | `NoteArchived` | `{}` | v1 | |
 
+## Flows (reactors/sagas)
+
+- `CreateNote` can arrive from a human, or dispatched by the JS reactor
+  `pb_functions/task_completion_note.js`: on `TaskCompleted` (see
+  [task](task.md)) → `CreateNote` on `note/completed-<taskId>`.
+
 ## Read models
 
 | collection | owner | shape | notes |

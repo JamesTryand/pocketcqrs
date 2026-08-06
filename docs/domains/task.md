@@ -28,6 +28,10 @@ audit effect function.
 
 - The fulfillment saga creates tasks: on `OrderConfirmed` → `CreateTask` on
   `task/fulfill-<orderId>` (see [order](order.md)).
+- `TaskCompleted` has a downstream consumer: the JS reactor
+  `pb_functions/task_completion_note.js` dispatches `CreateNote` on
+  `note/completed-<taskId>` (see [note](note.md)) — an example wiring one
+  Go-defined and one JS-defined aggregate through the reactor tier.
 
 ## Scenarios
 
