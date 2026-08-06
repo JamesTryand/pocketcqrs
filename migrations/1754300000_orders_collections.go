@@ -6,7 +6,7 @@ import (
 	"github.com/pocketbase/pocketbase/tools/types"
 )
 
-func init() {
+func registerOrdersCollections() {
 	migrations.Register(func(app core.App) error {
 		if _, err := app.FindCollectionByNameOrId("orders"); err == nil {
 			return nil // already exists
@@ -53,5 +53,5 @@ func init() {
 			}
 		}
 		return nil
-	})
+	}, "1754300000_orders_collections.go")
 }

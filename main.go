@@ -17,11 +17,10 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/gateway"
+	"github.com/jamestryand/pocketcqrs/migrations"
 	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/reactors"
 	"github.com/jamestryand/pocketcqrs/writeguard"
-
-	_ "github.com/jamestryand/pocketcqrs/migrations"
 )
 
 // components is filled during bootstrap, before the server starts.
@@ -82,6 +81,11 @@ func main() {
 	app.RootCmd.AddCommand(newPackCommand(c, &functionsDir))
 	app.RootCmd.AddCommand(newSchemaCommand(c, &functionsDir))
 	app.RootCmd.ParseFlags(os.Args[1:])
+
+	// The example migrations register here rather than from an init(), so
+	// that registering them can become a decision. It is unconditional for
+	// now; --tutorial gates it next.
+	migrations.RegisterExamples()
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
 		// run the default bootstrap first: it creates the data dir and,
