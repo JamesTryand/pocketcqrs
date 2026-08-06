@@ -124,12 +124,14 @@ Round-tripping is a **loss measurement**, not a fidelity promise.
 | `reason`, `question`, chapters, actor lanes, hotspots | ❌ one-way into the domain doc |
 | scenarios | ❌ one-way into dry-run assertions |
 
-**The largest gap, stated plainly**: nothing in the runtime links a command
-to the events it produces. `//@commands` names the commands, `//@handles`
-names the events, and no directive joins a pair — so every exported
-`stateChange` slice lists its aggregate's *whole* event set, and a round trip
-widens `eventIds`. A `//@produces <Command> <Event...>` directive is the
-obvious fix if this ever matters.
+**`//@produces` is what makes a faithful export possible.** `//@commands`
+names an aggregate's commands and `//@handles` names its events; neither
+joins a pair. A decider declaring `//@produces <Command> <Event...>` exports
+one slice per command listing exactly that command's events. A decider
+without it gets its aggregate's *whole* event set on every slice, and the
+report says how many slices were widened and why. The scaffolder and the
+importer emit the directive automatically, so anything generated round-trips
+faithfully; only hand-written deciders predating the directive widen.
 
 ## Names
 
