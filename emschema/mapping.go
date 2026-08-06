@@ -150,9 +150,6 @@ func (m *mapper) mapAutomation(s Slice) {
 	if !ok {
 		return
 	}
-	target := m.domain(agg)
-	target.Commands = append(target.Commands, m.command(agg, s.CommandID, cmd, s.ResultEventIDs, false))
-
 	// the reactor belongs to whichever aggregate OWNS the trigger events —
 	// that is the stream it consumes, and it may well not be the target
 	source := agg
@@ -162,6 +159,18 @@ func (m *mapper) mapAutomation(s Slice) {
 			break
 		}
 	}
+
+	// An automation that dispatches ACROSS aggregates opens a new stream
+	// every time it fires — the reactor derives the target id from the
+	// source event, so there is one target instance per trigger. That makes
+	// the dispatched command a create. An automation whose target is its own
+	// trigger's aggregate (auto-ship an order) is the opposite: the stream
+	// already exists. Getting this wrong makes the command's own scenario
+	// fail with "does not exist", which is how it was found.
+	crossAggregate := source != agg
+	target := m.domain(agg)
+	target.Commands = append(target.Commands,
+		m.command(agg, s.CommandID, cmd, s.ResultEventIDs, crossAggregate))
 	triggers := make([]string, 0, len(s.TriggerEventIDs))
 	for _, id := range s.TriggerEventIDs {
 		triggers = append(triggers, m.eventType(id))

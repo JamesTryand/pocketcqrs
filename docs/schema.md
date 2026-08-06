@@ -74,6 +74,39 @@ available and so always produces *an* answer, but swimlanes are
 organisational, so two unrelated aggregates sharing a team lane would be
 silently merged into one stream family — invisible until the log is wrong.
 
+### Scenarios are run, not just read
+
+A document's scenarios are given/when/then — which is exactly the shape of a
+dry run — so an import executes them against the code it just generated,
+before anything is written:
+
+```
+Scenarios checked against the generated code: 3 passed, 1 failed, 0 skipped
+  ✓ [stateChange] Placing an order records Order Placed
+      would append OrderPlaced — but the example data differs: …
+  ✗ [stateView] Order summary reflects a placed order before shipment
+      result: status missing
+```
+
+Nothing is appended and no decider is registered: each scenario runs in its
+own scratch store against source held in memory. `stateChange` and `error`
+scenarios are `mode=decide` runs — the `error` kind works only because a
+refusal is a *verdict* rather than an error, so "the decider correctly
+refused" is distinguishable from "the candidate is broken". `stateView`
+scenarios fold the fixture through the generated projection and query the
+resulting rows.
+
+**A failing scenario is not a broken import.** The generated slice records
+what happened and refuses the obvious contradictions; every other rule is the
+author's. A failure usually means the document describes behaviour nobody has
+written yet — like a read model field that no event carries — which is the
+most useful thing an import can tell you. Pass `--skip-scenarios` to turn the
+check off.
+
+Event **types** are the assertion; example `data` is reported but does not
+fail a scenario, because the source schema is explicit that scenario data is
+not cross-checked against declared fields.
+
 ### Field types
 
 Ten schema types fold onto five `//@schema` types:

@@ -39,6 +39,7 @@ func newSchemaCommand(c *components, functionsDir *string) *cobra.Command {
 			docsDir, _ := cmd.Flags().GetString("docs")
 			overrides, _ := cmd.Flags().GetStringSlice("aggregate")
 			force, _ := cmd.Flags().GetBool("force")
+			skipScenarios, _ := cmd.Flags().GetBool("skip-scenarios")
 
 			opts := emschema.Options{AggregateOverrides: map[string]string{}}
 			for _, kv := range overrides {
@@ -57,6 +58,24 @@ func newSchemaCommand(c *components, functionsDir *string) *cobra.Command {
 			printReport(cmd, mapped.Report)
 			if mapErr != nil {
 				return mapErr
+			}
+
+			// Run the document's own scenarios against the code just
+			// generated, before anything is written. A scenario is a
+			// given/when/then, which is exactly a dry run — so a document can
+			// say whether the slice it produced behaves as the model claims,
+			// at the one moment that is cheap to act on.
+			if !skipScenarios {
+				scratch, err := os.MkdirTemp("", "pcqrs-scenarios-")
+				if err != nil {
+					return err
+				}
+				defer os.RemoveAll(scratch)
+				results, err := emschema.Verify(doc, mapped, scratch)
+				if err != nil {
+					return err
+				}
+				printScenarios(cmd, results)
 			}
 
 			if outDir == "" {
@@ -79,6 +98,8 @@ func newSchemaCommand(c *components, functionsDir *string) *cobra.Command {
 	imp.Flags().StringSlice("aggregate", nil,
 		"map an untagged element to an aggregate: --aggregate notify-shipping-partner=shipmentNotice (repeatable)")
 	imp.Flags().Bool("force", false, "overwrite existing files")
+	imp.Flags().Bool("skip-scenarios", false,
+		"do not run the document's scenarios against the generated code")
 	cmd.AddCommand(imp)
 
 	exp := &cobra.Command{
@@ -138,6 +159,49 @@ func printReport(cmd *cobra.Command, rep *emschema.Report) {
 	}
 	if len(rep.Errors)+len(rep.Warnings)+len(rep.Lossy) == 0 {
 		cmd.Println("Mapped with nothing lost and nothing assumed.")
+	}
+}
+
+// printScenarios reports what the document's own examples say about the code
+// just generated.
+//
+// A failing scenario is NOT an error. The generated slice is a starting point
+// whose rules are the author's job, so a scenario failing usually means the
+// document describes behaviour nobody has written yet — which is worth
+// knowing precisely, and worth not treating as a broken import.
+func printScenarios(cmd *cobra.Command, results []emschema.ScenarioResult) {
+	if len(results) == 0 {
+		cmd.Println("\nThe document declares no scenarios, so nothing could be checked " +
+			"against the generated code.")
+		return
+	}
+	var passed, failed, skipped int
+	for _, r := range results {
+		switch {
+		case r.Skipped:
+			skipped++
+		case r.Passed:
+			passed++
+		default:
+			failed++
+		}
+	}
+	cmd.Printf("\nScenarios checked against the generated code: %d passed, %d failed, %d skipped\n",
+		passed, failed, skipped)
+	for _, r := range results {
+		mark := "✗"
+		switch {
+		case r.Skipped:
+			mark = "–"
+		case r.Passed:
+			mark = "✓"
+		}
+		cmd.Printf("  %s [%s] %s\n      %s\n", mark, r.Kind, r.Name, r.Detail)
+	}
+	if failed > 0 {
+		cmd.Println("\nA failing scenario is not a broken import: the generated slice records what " +
+			"happened and refuses the obvious contradictions, and every other rule is yours to write. " +
+			"These are the rules the document says are still missing.")
 	}
 }
 
