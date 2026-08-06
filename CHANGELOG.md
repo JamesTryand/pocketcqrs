@@ -150,8 +150,11 @@ is about operating it: **DASH.3** (browse), **DASH.4** (act), **DASH.5**
   deferred again.
 - A function save was a bare overwrite with no undo.
 
-Gates: `go vet` clean, 129 unit tests / 15 packages, 11 smoke tests, five
-checked-in browser probes.
+Gates: `go vet` clean, **123 unit tests / 14 packages**, 11 smoke tests, five
+checked-in browser probes — verified at the actual `v0.2.0` commit
+(`9ccb5d3`). DASH.6 (domain scaffolder, declared-command surface), which
+landed two commits later at `dcc6d14`/`34c2296`, is **not** part of this
+release — see the `v0.3.0` entry above.
 
 ```sh
 go install github.com/jamestryand/pocketcqrs@v0.2.0
