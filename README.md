@@ -23,6 +23,7 @@ Early development — see milestones in the issue worktree (`task_plan.md`). Not
 - Reference: [directives](docs/reference/directives.md) · [CLI](docs/reference/cli.md) · [gateway](docs/reference/gateway.md)
 - [Domain docs](docs/domains/README.md) — convention + dogfooded [task](docs/domains/task.md), [order](docs/domains/order.md), [note](docs/domains/note.md)
 - [Domain packs](docs/packs.md) — export/import domains, versioning contract, trust model
+- [EventModeling import/export](docs/schema.md) — map an eventmodelschema document onto a slice, and back; what round-trips and what does not
 - [Contributing](docs/contributing.md)
 
 ## Development

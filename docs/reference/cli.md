@@ -152,3 +152,36 @@ pocketcqrs superuser upsert <email> <password>
 ```
 
 Create/update a superuser (admin UI + reload endpoint auth).
+
+## schema
+
+```sh
+pocketcqrs schema import <document.json|manifest-dir> [--out dir] [--docs dir]
+    [--aggregate <elementId>=<name>]... [--force]
+pocketcqrs schema export <document.json>
+```
+
+Import and export [EventModeling](https://eventmodeling.org) documents —
+see [the guide](../schema.md) for the mapping and what survives a round trip.
+
+`import` accepts a single document or a split manifest directory. Without
+`--out` it maps and reports without writing anything, which is the quickest
+way to see what a document would produce. `--docs` writes per-aggregate
+domain docs carrying the methodology prose (`reason`, `question`,
+descriptions, hotspots) that has no home in code. Existing files are skipped
+unless `--force`, matching `catalog --skeletons`, so a re-import cannot
+overwrite prose someone has edited.
+
+`--aggregate` supplies the aggregate for an element the document leaves
+untagged. Import **refuses** rather than guessing: the write side is
+organised by aggregate, and deriving one from the swimlane would silently
+merge unrelated stream families.
+
+Nothing imported is live. Save the generated files through the editor or copy
+them into `--functionsDir`, then reload — schema-bearing files behind the
+maintenance barrier.
+
+`export` reconstructs a document from the running catalog, synthesizing the
+required-but-absent design-time pieces (one swimlane, a screen per
+screen-bearing slice, `status: informational`) and reporting everything it
+invented or could not carry.
