@@ -103,7 +103,7 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 			{Name: "AlsoCreate", Once: true, Events: []Event{{Name: "Created", NoFields: true}}},
 			{Name: "Silent"}, // no events at all
 		},
-		ReadModels: []ReadModel{{Collection: "ok", Key: "id", On: []string{"NeverProduced"}}},
+		ReadModels: []ReadModel{{Collection: "ok", Key: "id"}},
 	}.Validate()
 	if err == nil {
 		t.Fatal("expected the model to be refused")
@@ -114,7 +114,6 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 		"type \"guess\"",          // unknown field type
 		"more than one command",   // two creates
 		`command "Silent" records no event`,
-		"NeverProduced", // a read model listening for nothing
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("validation did not mention %q: %v", want, err)

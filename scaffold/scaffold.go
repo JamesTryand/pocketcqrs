@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // identifier matches names that are safe in a file name, a JS identifier,
@@ -234,11 +235,12 @@ func (d Domain) Validate() error {
 				add("read model %q: field %q has type %q; use text, number, bool, date or json", rm.Collection, f.Name, f.Type)
 			}
 		}
-		for _, on := range rm.On {
-			if !seenEvent[on] {
-				add("read model %q listens for %q, which no command produces", rm.Collection, on)
-			}
-		}
+		// NOTE: a read model listening for an event no command here produces
+		// is NOT an error. The schema gives read models no aggregate at all,
+		// deliberately — they are cross-cutting, and one routinely folds
+		// events from several aggregates. Refusing that would make a
+		// well-formed document unimportable. It IS reported by Warnings,
+		// because it is also what a typo looks like.
 	}
 
 	seenReactor := map[string]bool{}
@@ -295,6 +297,23 @@ func (d Domain) Warnings() []string {
 			out = append(out, fmt.Sprintf(
 				"command %q can result in %d different events (%s) and needs an outcome rule written in decide(); the generated code returns the first",
 				c.Name, len(c.Events), strings.Join(names, ", ")))
+		}
+	}
+
+	// a projection over events this aggregate does not produce is legitimate
+	// (read models are cross-cutting) and is also what a typo looks like, so
+	// it is named rather than refused or ignored
+	produced := map[string]bool{}
+	for _, n := range d.Events() {
+		produced[n] = true
+	}
+	for _, rm := range d.ReadModels {
+		for _, on := range rm.On {
+			if !produced[on] {
+				out = append(out, fmt.Sprintf(
+					"read model %q listens for %q, which no command of %q produces: intended if it folds another aggregate's events, a typo otherwise",
+					rm.Collection, on, d.Aggregate))
+			}
 		}
 	}
 	return out
@@ -513,4 +532,39 @@ func columnNamesLiteral(fields []Field, key string) string {
 	}
 	sort.Strings(names)
 	return "[" + strings.Join(names, ", ") + "]"
+}
+
+// SanitizeName renders an arbitrary string as a name this package accepts:
+// a letter followed by letters, digits or underscores.
+//
+// It exists for the importer, which receives names from a document that has
+// its own, wider, notion of what a name may contain. Sanitizing rather than
+// refusing is right here because the alternative is rejecting a valid
+// document over a hyphen — but the result is checked by Validate all the
+// same, so a string with nothing usable in it still fails loudly rather than
+// becoming a silently odd identifier.
+func SanitizeName(s string) string {
+	var b strings.Builder
+	upperNext := false
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r):
+			if upperNext && b.Len() > 0 {
+				r = unicode.ToUpper(r)
+			}
+			b.WriteRune(r)
+			upperNext = false
+		case unicode.IsDigit(r) || r == '_':
+			if b.Len() == 0 {
+				continue // an identifier cannot start with a digit
+			}
+			b.WriteRune(r)
+			upperNext = false
+		default:
+			// a separator joins the next word rather than vanishing, so
+			// "order-placed" becomes "orderPlaced" and not "orderplaced"
+			upperNext = true
+		}
+	}
+	return b.String()
 }

@@ -1,0 +1,301 @@
+package emschema
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/jamestryand/pocketcqrs/catalog"
+)
+
+// TestImportWorkedExample maps the real worked example and asserts what the
+// mapping is supposed to produce — including the two things it must refuse
+// to guess at.
+func TestImportWorkedExample(t *testing.T) {
+	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The worked example deliberately leaves `notify-shipping-partner`
+	// untagged, so a bare import MUST refuse rather than invent an
+	// aggregate. This is the decided behaviour, and the message has to say
+	// how to proceed.
+	_, err = Map(doc, Options{})
+	if err == nil {
+		t.Fatal("an untagged command must be refused, not guessed")
+	}
+	if !strings.Contains(err.Error(), "notify-shipping-partner") || !strings.Contains(err.Error(), "--aggregate") {
+		t.Fatalf("the refusal must name the element and how to resolve it: %v", err)
+	}
+
+	// with the operator's decision supplied, it maps
+	mapped, err := Map(doc, Options{AggregateOverrides: map[string]string{
+		"notify-shipping-partner": "shipmentNotice",
+	}})
+	if err != nil {
+		t.Fatalf("with an override supplied the document must import: %v", err)
+	}
+
+	byName := map[string]int{}
+	for i, d := range mapped.Domains {
+		byName[d.Aggregate] = i
+	}
+	order, ok := byName["order"]
+	if !ok {
+		t.Fatalf("expected an order aggregate, got %v", byName)
+	}
+	orderDomain := mapped.Domains[order]
+
+	// three commands touch Order: place, ship (from the automation's target)
+	// — the automation contributes its dispatched command to the target
+	var names []string
+	for _, c := range orderDomain.Commands {
+		names = append(names, c.Name)
+	}
+	if len(names) != 2 {
+		t.Fatalf("expected PlaceOrder and ShipOrder on Order, got %v", names)
+	}
+
+	// the id/name pair folded into one identifier
+	var placed bool
+	for _, c := range orderDomain.Commands {
+		if c.Name == "PlaceOrder" {
+			placed = true
+			if len(c.Events) != 1 || c.Events[0].Name != "OrderPlaced" {
+				t.Errorf("PlaceOrder should record OrderPlaced, got %+v", c.Events)
+			}
+			// order-placed's `items` field is a LIST with subfields, so it
+			// must fold to json rather than being dropped or mangled
+			var itemsType string
+			for _, f := range c.Events[0].Fields {
+				if f.Name == "items" {
+					itemsType = f.Type
+				}
+			}
+			if itemsType != "json" {
+				t.Errorf("a list-with-subfields field must fold to json, got %q", itemsType)
+			}
+		}
+	}
+	if !placed {
+		t.Errorf("PlaceOrder not mapped: %v", names)
+	}
+
+	// the read models land as projections, keyed on the idAttribute field
+	var summary bool
+	for _, rm := range orderDomain.ReadModels {
+		if rm.Collection == "orderSummary" {
+			summary = true
+			if rm.Key != "orderId" {
+				t.Errorf("idAttribute should have supplied the key, got %q", rm.Key)
+			}
+			if len(rm.On) != 2 {
+				t.Errorf("orderSummary folds two events, got %v", rm.On)
+			}
+		}
+	}
+	if !summary {
+		t.Errorf("orderSummary was not mapped: %+v", orderDomain.ReadModels)
+	}
+
+	// the automations became reactors
+	var reactors int
+	for _, d := range mapped.Domains {
+		reactors += len(d.Reactors)
+	}
+	if reactors != 2 {
+		t.Errorf("both automation slices should become reactors, got %d", reactors)
+	}
+
+	// every decision taken on the document's behalf is named
+	if len(mapped.Report.Warnings) == 0 {
+		t.Error("a mapping that folded types and supplied an override must report it")
+	}
+	joined := strings.Join(mapped.Report.Warnings, "\n")
+	if !strings.Contains(joined, "override") {
+		t.Errorf("the supplied override must be reported: %v", mapped.Report.Warnings)
+	}
+
+	// and the domain doc carries the prose that code cannot
+	orderDoc := mapped.DomainDocs["order"]
+	if !strings.Contains(orderDoc, "A customer wants to buy items.") {
+		t.Errorf("Command.reason must reach the domain doc:\n%s", orderDoc)
+	}
+	if !strings.Contains(orderDoc, "What's the current status of my order?") {
+		t.Errorf("ReadModel.question must reach the domain doc:\n%s", orderDoc)
+	}
+	if !strings.Contains(orderDoc, "unclear-status-timing") {
+		t.Errorf("hotspots must reach the domain doc:\n%s", orderDoc)
+	}
+}
+
+// TestGeneratedSliceLoads: every file the importer produces must actually
+// load, or the import has only pretended to work.
+func TestGeneratedSliceLoads(t *testing.T) {
+	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := Map(doc, Options{AggregateOverrides: map[string]string{
+		"notify-shipping-partner": "shipmentNotice",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range mapped.Domains {
+		files, err := d.Generate()
+		if err != nil {
+			t.Fatalf("%s did not generate: %v", d.Aggregate, err)
+		}
+		for _, f := range files {
+			if !strings.HasPrefix(f.Source, "//@trigger ") {
+				t.Errorf("%s does not start with a trigger directive:\n%s", f.Name, f.Source)
+			}
+		}
+	}
+}
+
+// TestRoundTripLoss is the loss MEASUREMENT: import a document, export what
+// a platform running it would report, and state exactly what survived.
+//
+// It is not a fidelity promise, and the assertions below are deliberately
+// about the recoverable core rather than equality — the interesting output
+// of this test is the documented list of what does NOT come back.
+func TestRoundTripLoss(t *testing.T) {
+	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := Map(doc, Options{AggregateOverrides: map[string]string{
+		"notify-shipping-partner": "shipmentNotice",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// stand in for a running platform that has loaded the imported slice:
+	// declared commands and handled events are what the catalog reports
+	cat := &catalog.Catalog{}
+	for _, d := range mapped.Domains {
+		agg := catalog.Aggregate{Name: d.Aggregate, Origin: "js"}
+		for _, c := range d.Commands {
+			agg.Commands = append(agg.Commands, c.Name)
+		}
+		agg.Handles = d.Events()
+		cat.Aggregates = append(cat.Aggregates, agg)
+		for _, rm := range d.ReadModels {
+			cat.Consumers = append(cat.Consumers, catalog.Consumer{
+				Name: rm.Collection, Kind: "js-projection",
+				Collections: []string{rm.Collection}, EventTypes: rm.On,
+			})
+		}
+		for _, r := range d.Reactors {
+			cat.Consumers = append(cat.Consumers, catalog.Consumer{
+				Name: "fn-react:" + r.Name, Kind: "js-reactor",
+				EventTypes: r.On, Dispatches: []string{r.Aggregate + "/" + r.Command},
+			})
+		}
+	}
+
+	out, rep := FromCatalog(cat)
+
+	// ---- the recoverable core ----
+
+	// every event name comes back, because it is declared AND in the log
+	original := map[string]bool{}
+	for _, d := range mapped.Domains {
+		for _, e := range d.Events() {
+			original[DeriveID(e)] = true
+		}
+	}
+	for id := range original {
+		if _, ok := out.Events[id]; !ok {
+			t.Errorf("event %q did not survive the round trip", id)
+		}
+	}
+
+	// every command name comes back, because DASH.6's declared surface
+	// records what the log cannot
+	for _, d := range mapped.Domains {
+		for _, c := range d.Commands {
+			if _, ok := out.Commands[DeriveID(c.Name)]; !ok {
+				t.Errorf("command %q did not survive the round trip", c.Name)
+			}
+		}
+	}
+
+	// read models and their source events come back
+	for _, d := range mapped.Domains {
+		for _, rm := range d.ReadModels {
+			id := DeriveID(TypeName(rm.Collection, rm.Collection))
+			exported, ok := out.ReadModels[id]
+			if !ok {
+				t.Errorf("read model %q did not survive", rm.Collection)
+				continue
+			}
+			if len(exported.BuiltFromEventIDs) != len(rm.On) {
+				t.Errorf("read model %q lost source events: %v vs %v",
+					rm.Collection, exported.BuiltFromEventIDs, rm.On)
+			}
+		}
+	}
+
+	// the exported document must be structurally valid on its own terms —
+	// swimlanes and screens were SYNTHESIZED, not omitted, because omitting
+	// a required property makes the document invalid rather than lossy
+	if lerr := Lint(out).Err(); lerr != nil {
+		t.Fatalf("the exported document does not satisfy its own schema: %v", lerr)
+	}
+	if len(out.Swimlanes) != 1 {
+		t.Errorf("export must synthesize exactly one swimlane, got %d", len(out.Swimlanes))
+	}
+	for _, s := range out.Slices {
+		if s.Pattern == PatternAutomation && s.ScreenID != "" {
+			t.Errorf("slice %q is an automation and must NOT carry a screenId: "+
+				"unevaluatedProperties would reject the document", s.ID)
+		}
+		if s.Pattern != PatternAutomation && s.ScreenID == "" {
+			t.Errorf("slice %q requires a synthesized screen", s.ID)
+		}
+	}
+
+	// ---- the documented loss ----
+
+	lossy := strings.Join(append(append([]string{}, rep.Warnings...), rep.Lossy...), "\n")
+	for _, mustMention := range []string{
+		"swimlane",                           // synthesized
+		"which command produces which event", // the biggest gap
+		"reason",                             // methodology prose
+		"chapters",                           // board state
+	} {
+		if !strings.Contains(lossy, mustMention) {
+			t.Errorf("the report must name %q as lost or synthesized:\n%s", mustMention, lossy)
+		}
+	}
+
+	// The single biggest reconstruction gap, asserted rather than described:
+	// nothing in the runtime links a command to the events it produces, so
+	// every slice lists its aggregate's whole event set. A round trip
+	// therefore WIDENS eventIds, and that has to be visible here rather than
+	// discovered by someone diffing two documents.
+	for _, s := range out.Slices {
+		if s.Pattern != PatternStateChange {
+			continue
+		}
+		if len(s.EventIDs) <= 1 {
+			continue
+		}
+		var originalWidth int
+		for _, orig := range doc.Slices {
+			if orig.Pattern == PatternStateChange && DeriveID(TypeName(
+				doc.Commands[orig.CommandID].Name, orig.CommandID)) == s.CommandID {
+				originalWidth = len(orig.EventIDs)
+			}
+		}
+		if originalWidth > 0 && len(s.EventIDs) <= originalWidth {
+			t.Errorf("expected the round trip to widen eventIds for %q (the documented gap); "+
+				"if it no longer does, the runtime learned to record the association and this "+
+				"test plus the report should be updated", s.ID)
+		}
+	}
+}
