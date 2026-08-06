@@ -60,7 +60,18 @@ type harness struct {
 // startBackend builds pocketcqrs, seeds a superuser and serves. Function
 // files given as name→source are written before boot, so boot-time
 // registration is part of what is exercised.
+//
+// It passes --tutorial: most of this suite drives the example task and order
+// aggregates, which the platform no longer registers by default. Tests about
+// the empty default call startBackendFlags directly.
 func startBackend(t *testing.T, functions map[string]string) *harness {
+	t.Helper()
+	return startBackendFlags(t, functions, "--tutorial")
+}
+
+// startBackendFlags is startBackend with extra serve flags, for the tests
+// that are about what boot does and does not wire up.
+func startBackendFlags(t *testing.T, functions map[string]string, extra ...string) *harness {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -86,8 +97,10 @@ func startBackend(t *testing.T, functions map[string]string) *harness {
 
 	addr := freeAddr(t)
 	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, client: newClient(t)}
-	serve(t, bin, dir, "backend",
-		"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir)
+	args := append([]string{
+		"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir,
+	}, extra...)
+	serve(t, bin, dir, "backend", args...)
 	waitFor(t, h.BackendURL+"/api/health")
 
 	h.Token = h.authenticate()

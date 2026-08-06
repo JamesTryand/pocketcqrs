@@ -21,7 +21,7 @@ func (c *components) buildCatalog(ctx context.Context) (*catalog.Catalog, error)
 		Engine:        c.engine,
 		Runtime:       c.fnRuntime,
 		HTTP:          c.httpFns,
-		GoProjections: allProjections(c.app),
+		GoProjections: c.allProjections(c.app),
 		JSProjs:       c.jsProjs,
 		JSDeciders:    c.jsDeciders,
 		JSReactors:    c.jsReactors,

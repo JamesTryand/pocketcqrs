@@ -28,7 +28,7 @@ func newPackCommand(c *components, functionsDir *string) *cobra.Command {
 			fns, _ := cmd.Flags().GetStringSlice("functions")
 			cols, _ := cmd.Flags().GetStringSlice("collections")
 
-			guarded := projections.GuardedCollections(allProjections(c.app)...)
+			guarded := projections.GuardedCollections(c.allProjections(c.app)...)
 			for _, p := range c.jsProjs {
 				guarded = append(guarded, p.Collections()...)
 			}

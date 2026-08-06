@@ -13,13 +13,18 @@ import (
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
-// allProjections is the single source of truth for the platform's
+// allProjections is the single source of truth for the platform's Go
 // projections, used by both the serve wiring and the projection CLI.
-func allProjections(app core.App) []projections.Projection {
-	return []projections.Projection{
-		projections.NewTasks(app),
-		projections.NewOrders(app),
+//
+// The platform ships none of its own: the Go projections in this repo are
+// example content, and exist only under --tutorial. It is a method rather
+// than a function taking a bool because every call site already holds the
+// components, which makes calling it with the wrong answer impossible.
+func (c *components) allProjections(app core.App) []projections.Projection {
+	if !c.tutorial {
+		return nil
 	}
+	return exampleProjections(app)
 }
 
 // newProjectionCommand builds the `projection` CLI command group.
@@ -39,7 +44,7 @@ func newProjectionCommand(c *components) *cobra.Command {
 			name := args[0]
 
 			var target projections.Projection
-			for _, p := range allProjections(c.app) {
+			for _, p := range c.allProjections(c.app) {
 				if p.Name() == name {
 					target = p
 					break

@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/pocketbase/pocketbase"
@@ -44,6 +46,12 @@ type components struct {
 	cronJobs []string
 	// reloadMu serializes hot reloads.
 	reloadMu sync.Mutex
+
+	// tutorial mirrors --tutorial. Set once immediately after ParseFlags,
+	// before anything reads it, so OnBootstrap and every subcommand's RunE
+	// see the same answer. When false this repo's example domains are not
+	// wired at all — the platform ships empty.
+	tutorial bool
 }
 
 func main() {
@@ -73,6 +81,14 @@ func main() {
 		"pb_functions",
 		"the directory with the user defined JS functions",
 	)
+	var tutorial bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&tutorial,
+		"tutorial",
+		false,
+		"register this repo's example domains (task, order) and their collections; off by default — pocketcqrs ships empty",
+	)
+
 	app.RootCmd.AddCommand(newProjectionCommand(c))
 	app.RootCmd.AddCommand(newDeadletterCommand(c))
 	app.RootCmd.AddCommand(newDryrunCommand(c))
@@ -81,11 +97,15 @@ func main() {
 	app.RootCmd.AddCommand(newPackCommand(c, &functionsDir))
 	app.RootCmd.AddCommand(newSchemaCommand(c, &functionsDir))
 	app.RootCmd.ParseFlags(os.Args[1:])
+	c.tutorial = tutorial
 
-	// The example migrations register here rather than from an init(), so
-	// that registering them can become a decision. It is unconditional for
-	// now; --tutorial gates it next.
-	migrations.RegisterExamples()
+	// Registering the example migrations is a decision, taken here: an
+	// unregistered migration is never applied AND never recorded, so the
+	// examples can be switched off and on again without either direction
+	// being a one-way door. See migrations.RegisterExamples.
+	if c.tutorial {
+		migrations.RegisterExamples()
+	}
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
 		// run the default bootstrap first: it creates the data dir and,
@@ -116,9 +136,13 @@ func main() {
 		}
 		c.store = store
 
-		// write side: deciders + command handling
+		// write side: deciders + command handling. The platform registers no
+		// aggregates of its own — task and order are example content, and
+		// without --tutorial their names are free for a JS decider to claim.
 		c.registry = decider.NewRegistry(store)
-		aggregates.RegisterAll(c.registry)
+		if c.tutorial {
+			aggregates.RegisterAll(c.registry)
+		}
 		c.jsDeciders = map[string]*functions.DeciderSpec{}
 
 		// the gateway rejects domain commands while the system is in
@@ -132,7 +156,7 @@ func main() {
 			func(msg string, args ...any) { logger.Warn(msg, args...) })
 
 		// read side: projections into PocketBase collections
-		projs := allProjections(e.App)
+		projs := c.allProjections(e.App)
 		for _, p := range projs {
 			c.engine.Register(p)
 		}
@@ -199,9 +223,14 @@ func main() {
 			c.engine.Register(p)
 		}
 
-		// sagas: reactors dispatch follow-up commands through the registry
-		c.engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.registry,
-			func(msg string, args ...any) { logger.Info(msg, args...) }))
+		// sagas: reactors dispatch follow-up commands through the registry.
+		// The fulfillment saga is example content — it wires the example
+		// order aggregate to the example task one, so it only exists when
+		// they do.
+		if c.tutorial {
+			c.engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.registry,
+				func(msg string, args ...any) { logger.Info(msg, args...) }))
+		}
 
 		// JS reactors (tier 4): same dispatch rule as the Go ones, reached
 		// from a function file. The registry must be installed BEFORE they
@@ -215,11 +244,39 @@ func main() {
 		}
 
 		// write-guard: no out-of-band writes on projection-owned collections
-		guarded := allProjections(e.App)
+		guarded := c.allProjections(e.App)
 		for _, p := range c.jsProjs {
 			guarded = append(guarded, p)
 		}
-		writeguard.Register(e.App, projections.GuardedCollections(guarded...)...)
+		cols := projections.GuardedCollections(guarded...)
+
+		// An example collection can outlive its projection: boot once with
+		// --tutorial and then without, and `tasks` is still there with
+		// nothing maintaining it. Keep guarding it — an unmaintained read
+		// model is bad, an unmaintained read model anyone can write to is
+		// worse — but say so, because a collection that quietly stopped
+		// updating is the kind of thing found months later.
+		if !c.tutorial {
+			var orphaned []string
+			for _, name := range exampleCollections(e.App) {
+				if slices.Contains(cols, name) {
+					continue // something else owns this name now, and maintains it
+				}
+				if _, err := e.App.FindCollectionByNameOrId(name); err != nil {
+					continue // never created, or since dropped
+				}
+				orphaned = append(orphaned, name)
+			}
+			if len(orphaned) > 0 {
+				cols = append(cols, orphaned...)
+				logger.Warn("example collections exist but nothing is projecting into them: "+
+					"they stay write-guarded and read-only, and will not be updated. "+
+					"Start with --tutorial to maintain them again, or delete them.",
+					"collections", strings.Join(orphaned, ", "))
+			}
+		}
+
+		writeguard.Register(e.App, cols...)
 
 		// effect functions: durable delivery through the consumers engine
 		for _, fc := range rt.Consumers() {
