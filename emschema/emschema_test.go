@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// fixtures live in the repo, copied from eventmodelschema@852989a, so these
+// fixtures live in the repo, copied from eventmodelschema@1b4a01c, so these
 // tests run against the REAL format rather than against a shape this
 // package invented for itself.
 func fixture(t *testing.T, rel string) string {
@@ -283,5 +283,62 @@ func TestUnknownRegistryIsRefused(t *testing.T) {
 	}
 	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "policies") {
 		t.Fatalf("an unknown registry must be refused by name, got %v", err)
+	}
+}
+
+// TestVersionIsReportedNotTrusted: upstream bumped to 2.0.0, which fixes the
+// signal going forward but cannot fix documents already written. A document
+// authored between the v2 schema changes and the bump declares 1.x while
+// being a v2 document, and a genuine v1 document declares the same — so the
+// header is a note and the SHAPE is the check.
+func TestVersionIsReportedNotTrusted(t *testing.T) {
+	base := func(version string) *Document {
+		return &Document{
+			EventModelingSchemaVersion: version,
+			Swimlanes:                  []Swimlane{{ID: "s", Name: "S", Kind: "team"}},
+			Events:                     map[string]Event{"e": {Name: "E", SwimlaneID: "s"}},
+			Commands:                   map[string]Command{"c": {Name: "C"}},
+			Screens:                    map[string]Screen{"sc": {Name: "Sc"}},
+			Slices: []Slice{{
+				ID: "sl", Name: "Sl", Pattern: PatternStateChange, SwimlaneID: "s",
+				Status: "created", ScreenID: "sc", CommandID: "c", EventIDs: []string{"e"},
+				Scenarios: []Scenario{},
+			}},
+		}
+	}
+
+	// a current document lints clean and says nothing about its version
+	rep := Lint(base(SchemaVersion))
+	if err := rep.Err(); err != nil {
+		t.Fatalf("a %s document must lint clean: %v", SchemaVersion, err)
+	}
+	for _, w := range rep.Warnings {
+		if strings.Contains(w, "eventModelingSchemaVersion") {
+			t.Errorf("a matching version should not be remarked on: %s", w)
+		}
+	}
+
+	// an older header is NOTED, not refused: the shape is v2-valid, so the
+	// document imports
+	rep = Lint(base("1.0.0"))
+	if err := rep.Err(); err != nil {
+		t.Fatalf("an old version header must not refuse a structurally valid document: %v", err)
+	}
+	var noted bool
+	for _, w := range rep.Warnings {
+		if strings.Contains(w, "1.0.0") && strings.Contains(w, SchemaVersion) {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Errorf("an older declared version should be reported: %v", rep.Warnings)
+	}
+
+	// ...and the SHAPE is what actually refuses a v1 document, whatever its
+	// header claims — here a 2.0.0 header on a translation slice
+	v1 := base(SchemaVersion)
+	v1.Slices[0].Pattern = "translation"
+	if err := Lint(v1).Err(); err == nil {
+		t.Error("a translation slice must be refused even when the header says 2.0.0")
 	}
 }

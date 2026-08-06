@@ -183,10 +183,17 @@ lower-camel convention (`Order` → `order`).
 
 ## Schema version
 
-**The document's `eventModelingSchemaVersion` cannot be used to tell schema
-generations apart.** v2 removed enum values — a breaking change — while the
-worked examples still declare `"1.0.0"` and the schema's own default is still
-`"1.0.0"`. Import therefore branches on the document's *shape*: a slice using
-the removed `translation` pattern is refused with an explanation of where it
-went (it collapses into `automation`, because a read model never originates
-an event).
+This project targets **schema 2.0.0**, and an export declares it.
+
+Upstream bumped to `2.0.0` on 2026-08-06 for the removal of the `translation`
+pattern, and now keeps a `CHANGELOG.md`. **Import reports a document's
+declared version but does not branch on it**, which is deliberate rather than
+left over: the bump fixes the signal going forward, but a document authored
+between the v2 schema changes and the bump declares `1.x` while being a v2
+document, and a genuine v1 document declares the same. Only the shape
+distinguishes them.
+
+So import checks the *shape*: a slice using the removed `translation` pattern
+is refused with an explanation of where it went — it collapses into
+`automation`, because a read model never originates an event — and a version
+that differs from `2.0.0` is noted without being treated as a problem.

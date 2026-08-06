@@ -29,7 +29,7 @@ func FromCatalog(cat *catalog.Catalog) (*Document, *Report) {
 	rep := &Report{}
 	doc := &Document{
 		Schema:                     "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
-		EventModelingSchemaVersion: "1.0.0",
+		EventModelingSchemaVersion: SchemaVersion,
 		ID:                         "pocketcqrs-export",
 		Name:                       "PocketCQRS export",
 		Description: "Reconstructed from a running PocketCQRS platform's catalog. " +

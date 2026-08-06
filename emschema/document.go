@@ -3,7 +3,7 @@
 // project's intermediate domain model.
 //
 // The types below mirror eventmodeling.schema.json as read at commit
-// 852989a ("v2 M3: multi-file composition layer", 2026-08-05). A vendored
+// 1b4a01c ("Bump eventModelingSchemaVersion to 2.0.0", 2026-08-06). A vendored
 // copy of that schema and its worked examples lives in
 // testdata/eventmodelschema/, with the hash recorded in PROVENANCE.md.
 //
@@ -14,10 +14,12 @@
 //     nothing upstream verifies that a swimlaneId, eventId or readModelId
 //     resolves. Lint does that here, because an importer that trusted the
 //     ids would fail deep inside generation with a confusing error.
-//   - Its version string CANNOT be branched on. v2 removed enum values (a
-//     breaking change) while both worked examples still declare "1.0.0" and
-//     the schema's own default is still "1.0.0". So generation is detected
-//     from the document's SHAPE — see checkGeneration.
+//   - Its version string is reported but NOT branched on. Upstream bumped to
+//     2.0.0 for the removal of the `translation` pattern, which fixes the
+//     signal going forward — but a document written before that bump declares
+//     1.x while being a v2 document, indistinguishable by header from a real
+//     v1 one. Generation is detected from the document's SHAPE; see
+//     checkGeneration.
 package emschema
 
 import "encoding/json"
@@ -202,6 +204,11 @@ type Hotspot struct {
 	Target   json.RawMessage `json:"target"`
 	Resolved bool            `json:"resolved,omitempty"`
 }
+
+// SchemaVersion is the generation this package targets, and what an export
+// declares. Upstream bumped to 2.0.0 on 2026-08-06; the breaking change that
+// warranted it is the removal of the `translation` pattern.
+const SchemaVersion = "2.0.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

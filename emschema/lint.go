@@ -104,11 +104,24 @@ func Lint(doc *Document) *Report {
 // generation this code understands — from its SHAPE, never its version
 // string.
 //
-// The version cannot be trusted: v2 removed enum values, which is breaking,
-// while both worked examples still declare "1.0.0" and the schema's own
-// default is still "1.0.0". So a document declaring 1.0.0 may be a v1
-// document that no longer validates, or a v2 one.
+// Upstream now bumps the version properly — 2.0.0 as of 2026-08-06, for the
+// removal of the `translation` pattern — but that fixes the signal only
+// GOING FORWARD. A document authored between the v2 schema changes and the
+// bump declares 1.x while being a v2 document, and a genuine v1 document
+// declares the same. Only the shape distinguishes them, and it stays correct
+// whatever the header says.
 func checkGeneration(doc *Document, r *Report) {
+	// The version is worth REPORTING now that upstream bumps it, and still
+	// not worth TRUSTING. A document written between the v2 schema changes
+	// and the 2.0.0 bump declares 1.x while being a v2 document, and a
+	// genuine v1 document declares the same — only the shape tells them
+	// apart. So this is a note, never a branch.
+	if v := doc.EventModelingSchemaVersion; v != "" && v != SchemaVersion {
+		r.warnf("the document declares eventModelingSchemaVersion %q; this importer targets %q. "+
+			"That is not in itself a problem — the version header cannot distinguish a v1 document "+
+			"from a v2 one written before the bump, so the document's SHAPE is what was checked",
+			v, SchemaVersion)
+	}
 	for _, s := range doc.Slices {
 		switch s.Pattern {
 		case PatternStateChange, PatternStateView, PatternAutomation:
