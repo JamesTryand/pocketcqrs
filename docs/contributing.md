@@ -34,13 +34,19 @@ go build -o pocketcqrs.exe .   # for smoke tests
   why. The durable plan lives in the issue worktree, not here.
 - **Go style**: standard `gofmt`; small packages with one job; comments
   explain invariants and semantics, not mechanics.
-- **Migrations**: built-in read-model collections are PocketBase Go
-  migrations in `migrations/` (collections-as-DDL); JS projection
-  collections come from `//@schema` and never from migrations.
-- **Registration surfaces**: a new built-in domain touches
-  `aggregates.RegisterAll` (decider), `allProjections` (projection +
+- **Migrations**: Go read-model collections are PocketBase Go migrations in
+  `migrations/` (collections-as-DDL); JS projection collections come from
+  `//@schema` and never from migrations. This repo's migrations belong to
+  the examples, so they register from `migrations.RegisterExamples` rather
+  than an `init()` — gating inside an `up` would record the migration as
+  applied and make `--tutorial` a one-way door.
+- **Registration surfaces**: a Go domain touches `aggregates.RegisterAll`
+  (decider), `exampleProjections` in `examples.go` (projection +
   write-guard), and usually a migration. JS-defined domains need no Go
   changes.
+- **Example content stays opt-in**: anything that only exists to teach goes
+  behind `--tutorial`, and `examples.go` is where its wiring lives. The
+  platform must boot with nothing registered.
 - **Docs**: user-visible behavior changes update `docs/` in the same
   commit — including the affected [domain docs](domains/README.md).
 

@@ -24,6 +24,11 @@ tables) belong in `collections.json`.
 
 ## Export
 
+The worked example below packs the `note` domain. Its two files ship in
+`examples/pb_functions/` — copy them into your functions directory first if
+you want to follow along (`cp examples/pb_functions/note*.js pb_functions/`).
+`note` needs no `--tutorial`: it is defined entirely in JS.
+
 ```sh
 pocketcqrs pack export ./notes-pack --name notes-domain --version 1.0.0 \
   --functions note.js,notes.js

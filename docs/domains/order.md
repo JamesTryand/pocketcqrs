@@ -1,5 +1,8 @@
 # Order
 
+> **Example content.** Run with `--tutorial` to register this aggregate; the
+> platform ships without it. See [getting started](../getting-started.md#run-it).
+
 A customer order: placed for a customer, lines added while open, then
 confirmed (needs at least one line) or cancelled. Demonstrates invariants in
 a Go decider, a two-collection Go projection, a cross-aggregate saga, and a

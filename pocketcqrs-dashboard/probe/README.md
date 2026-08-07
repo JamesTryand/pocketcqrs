@@ -23,9 +23,14 @@ Start an instance for the probes to drive. From the repo root:
 ```sh
 go build -o /tmp/pocketcqrs . && go build -o /tmp/pocketcqrs-dashboard ./pocketcqrs-dashboard
 /tmp/pocketcqrs superuser upsert smoketest@example.com smoke-pass-1234 --dir /tmp/probe-data
-/tmp/pocketcqrs serve --http 127.0.0.1:8390 --dir /tmp/probe-data --functionsDir pb_functions &
+/tmp/pocketcqrs serve --tutorial --http 127.0.0.1:8390 --dir /tmp/probe-data --functionsDir pb_functions &
 /tmp/pocketcqrs-dashboard --backend http://127.0.0.1:8390 --listen 127.0.0.1:8391 &
 ```
+
+`--tutorial` is required: `components.mjs`, `live.mjs` and `reactor.mjs` all
+assert against the example `task` aggregate, and without the flag the seeding
+commands below 404 silently — which shows up as "every element is missing"
+rather than "the aggregate is not registered".
 
 Give it some history to show — the probes assert against real data, and an
 empty log exercises none of the interesting UI:

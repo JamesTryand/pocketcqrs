@@ -8,14 +8,28 @@ are the query side; JavaScript functions extend both sides at runtime.
 
 Requires Go 1.25+.
 
+**PocketCQRS ships empty.** `go run . serve` gives you the gateway, the
+function runtime and an empty event log — no aggregates, no collections,
+nothing you did not write. That is the shape you want for real work, and
+what you get from `go install`.
+
+This walkthrough needs examples to walk through, so opt into both halves of
+them — the Go domains with a flag, the JS functions with a copy:
+
 ```sh
-go run . serve
+cp examples/pb_functions/*.js pb_functions/
+go run . serve --tutorial
 ```
 
-This starts PocketBase on `http://127.0.0.1:8090` (admin UI at `/_/`) with
-the CQRS gateway, the function runtime, and the example functions from
-`pb_functions/`. Data lives in `pb_data/` — `data.db` (PocketBase),
-`events.db` (the event log), `logs.db`.
+`--tutorial` registers this repo's example `task` and `order` aggregates,
+their projections and their collections. The copy puts the example function
+files where `--functionsDir` looks (it defaults to `pb_functions/`, which is
+*yours* — see [`examples/pb_functions/`](../examples/pb_functions/README.md)
+for what each file is and which of them need the flag).
+
+That starts PocketBase on `http://127.0.0.1:8090` (admin UI at `/_/`). Data
+lives in `pb_data/` — `data.db` (PocketBase), `events.db` (the event log),
+`logs.db`.
 
 Create a superuser (admin) account, needed for the admin UI and the
 reload endpoint:
@@ -45,7 +59,8 @@ curl -X POST http://127.0.0.1:8090/api/cqrs/task/t1/CreateTask \
 Response: the appended events, e.g. one `TaskCreated` at position 1 with
 `metadata.actor` / `actorCollection` / `now` stamped.
 
-(For local dev you can skip auth entirely: `go run . serve --cqrsAllowAnonymous`.)
+(For local dev you can skip auth entirely:
+`go run . serve --tutorial --cqrsAllowAnonymous`.)
 
 ## Your first query (read side)
 
@@ -118,6 +133,11 @@ curl http://127.0.0.1:8090/api/collections/notes/records
 so the reaction is a decision that could have been refused, and a replay
 lands on the same `completed-t1` id instead of creating a duplicate. See the
 [JS guide's reactor section](js-guide.md#reactors-tier-4).
+
+This is the one step that needs *both* halves of the opt-in at once: the Go
+`task` aggregate from `--tutorial`, and three copied files
+(`task_completion_note.js` plus `note.js`/`notes.js` for the aggregate it
+dispatches into). Miss either and the note never appears.
 
 ## Change code without restarting
 

@@ -5,6 +5,33 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ## Unreleased
 
+### Changed
+
+- **BREAKING: the example domains are opt-in.** PocketCQRS now boots empty.
+  The `task` and `order` Go aggregates, their projections, the fulfillment
+  saga and the `tasks`/`orders`/`order_lines` collection migrations register
+  only under the new **`--tutorial`** flag. Installing the binary and running
+  it no longer creates collections nobody asked for.
+
+  *Migrating*: add `--tutorial` to any command that depended on them. An
+  instance that already created those collections keeps them **and keeps
+  their write-guard** — losing a protection silently would be worse than
+  never having it — and boot logs a warning naming them. Because an
+  unregistered migration is never *recorded* either, the switch works in both
+  directions: turn the flag back on and the collections are created as
+  before.
+
+  Also: the names `task` and `order` are now free for your own JS deciders,
+  which a colliding registration previously refused.
+
+- **BREAKING: the example function files moved to `examples/pb_functions/`.**
+  `pb_functions/` is now yours and is empty in git; `--functionsDir` still
+  defaults to it. Copy what you want:
+  `cp examples/pb_functions/*.js pb_functions/`. Serving straight out of
+  `examples/` is deliberately not the documented path — the functions editor
+  and the reload endpoint write into `functionsDir`, so pointing it at
+  tracked files would dirty the tree on every save.
+
 ### Added
 
 - `examples/pb_functions/task_completion_note.js`: a shipped JS reactor example.
@@ -13,6 +40,16 @@ All notable changes to PocketCQRS. Format loosely follows
   shipped fixture set, only the abstract one in the directive reference.
   Wired into `getting-started.md`'s walkthrough. Documented in
   `docs/domains/task.md` and `docs/domains/note.md`.
+
+### Fixed
+
+- **`writeguard.Register` with an empty collection list denied every record
+  write in the app** rather than none. PocketBase treats a tagged hook with
+  no tags as matching every collection, so guarding nothing guarded
+  everything — superuser creation included. Reachable before this release:
+  `reload` re-registers the guard from the JS projections it just loaded, so
+  the ordinary maintenance-on/reload/maintenance-off dance on an instance
+  with no JS projections left every collection write-denied until restart.
 
 ## v0.3.0 — M13 complete, then M14: EventModeling import/export and the reactor tier
 

@@ -144,11 +144,15 @@ it, save it, then reload behind the barrier, exactly like hand-written code.
 
 ## The gotcha this walkthrough exists to show you
 
-Point a real instance at the generated files and boot it:
+Point a real instance at the generated files and boot it — with
+`--tutorial`, which registers this repo's own example domains. That flag is
+not incidental here: it is what puts a **built-in `order` aggregate in the
+way** of the one this document just generated, and that collision is the
+thing worth seeing.
 
 ```sh
 go run .. superuser upsert tutorial@example.com tutorial-pass-1234 --dir pb_data --dev=false
-go run .. serve --http 127.0.0.1:8398 --dir pb_data --functionsDir generated --dev=false &
+go run .. serve --tutorial --http 127.0.0.1:8398 --dir pb_data --functionsDir generated --dev=false &
 ```
 
 Authenticate, enter maintenance, and reload — the step that activates
@@ -174,23 +178,29 @@ curl -s -X POST http://127.0.0.1:8398/api/cqrs/admin/reload -H "Authorization: $
 }
 ```
 
-**`order` refused to load, on purpose.** This project already ships a Go
-`order` aggregate (`aggregates/order.go`), registered unconditionally in
-`main.go` before any JS file is read. The document's own `order` aggregate
-happens to share that name, so the generated `order.js` collides with it —
-and [built-in Go aggregates can never be displaced](reference/gateway.md#admin).
+**`order` refused to load, on purpose.** `--tutorial` registered this repo's
+example Go `order` aggregate (`aggregates/order.go`) in `main.go`, before any
+JS file was read. The document's own `order` aggregate happens to share that
+name, so the generated `order.js` collides with it — and
+[a Go aggregate, once registered, can never be displaced by JS](reference/gateway.md#admin).
 The reload report names the refusal instead of silently keeping whichever
 code loaded first, which is the difference between a surprise discovered
 under load and one discovered in a report you were already reading.
 
+Nothing about this is specific to the example domains. **Any** Go aggregate
+registered at boot claims its name ahead of every JS decider — that is the
+rule, and `--tutorial` is just a convenient way to have one in the way. On a
+real system the thing in the way is your own write side.
+
 This is not a defect in the document or the importer — it is what happens
 when a design document's boundaries and a running platform's boundaries are
-drawn by different people, which is the ordinary case. The fix is the same
-either way: rename one of them (`--aggregate` accepts an override per
-element, or edit the running Go aggregate's name — whichever is cheaper to
-change). This walkthrough leaves it refused, deliberately, because the two
-slices that *did* load are enough to show the rest of the flow end to end
-without a rename.
+drawn by different people, which is the ordinary case. The fix is to rename
+one of them: `--aggregate` accepts an override per element, or you change
+the Go aggregate — whichever is cheaper. (Here there is a third option that
+a real system does not have: drop `--tutorial`, and the name is free.) This
+walkthrough leaves it refused, deliberately, because the two slices that
+*did* load are enough to show the rest of the flow end to end without a
+rename.
 
 ## Go live with what did load
 

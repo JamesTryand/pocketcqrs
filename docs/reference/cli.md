@@ -10,19 +10,35 @@ PocketCQRS flags (persistent, on every command):
 | flag | default | meaning |
 | --- | --- | --- |
 | `--functionsDir` | `pb_functions` | directory with user-defined JS functions |
+| `--tutorial` | `false` | register this repo's example domains (`task`, `order`), their projections, the fulfillment saga and their collections |
 | `--cqrsAllowAnonymous` | `false` | dev: commands and `/api/fn` need no auth token (no actor metadata stamped) |
 | `--cqrsStrictBoot` | `false` | abort startup when a JS decider fails validation (default: skip it and keep serving) |
 
 ## serve
 
 ```sh
-pocketcqrs serve [--http 127.0.0.1:8090] [--dir pb_data]
+pocketcqrs serve [--http 127.0.0.1:8090] [--dir pb_data] [--tutorial]
 ```
 
 Boots the platform and serves HTTP: PocketBase API + admin UI (`/_`), the
 [gateway routes](gateway.md), the consumers engine, cron jobs. Bootstrap
 applies app migrations, validates JS deciders, reconciles JS projection
 schemas and starts catch-up from the event log.
+
+**Without `--tutorial` the platform registers nothing of its own**: no
+aggregates, no Go projections, no collections beyond PocketBase's own and
+whatever your JS projections declare. The example migrations are not
+registered either, so their collections are never created — and because an
+unregistered migration is also never *recorded*, turning the flag back on
+later still creates them. The switch works in both directions.
+
+Two consequences worth knowing:
+
+- The names `task` and `order` are free for your own JS deciders. With
+  `--tutorial` they are taken, and a colliding JS decider is refused.
+- If a previous run *did* create the example collections, they stay behind
+  when you drop the flag. They keep their write-guard rather than silently
+  becoming writable, and boot logs a warning naming them.
 
 ## projection
 
@@ -32,7 +48,8 @@ pocketcqrs projection rebuild <name>
 
 Offline (stop `serve` first). Wipes the projection's collections, resets its
 durable checkpoint and replays the whole event log through the current code.
-Works for Go projections (`tasks`, `orders`) and JS projections alike.
+Works for JS projections and, under `--tutorial`, the example Go projections
+(`tasks`, `orders`) alike.
 
 ## deadletter
 

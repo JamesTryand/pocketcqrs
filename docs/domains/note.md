@@ -1,5 +1,10 @@
 # Note
 
+> **Example content**, and the only one that needs no `--tutorial`: it is
+> defined entirely in JS, so copying `note.js` and `notes.js` from
+> `examples/pb_functions/` into your functions directory is enough. The saga
+> below is the exception — that one needs the flag, for the `task` half.
+
 A plain text note: created, edited, archived. The fully JS-defined vertical —
 write side, read side and collection schema all come from `pb_functions/`
 files; no Go code involved.

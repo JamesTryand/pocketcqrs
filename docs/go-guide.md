@@ -1,10 +1,14 @@
 # Go guide
 
 The platform itself is Go: the event store, the decider registry, the
-consumers engine, the gateway, and the built-in domains (`aggregates/`,
-`projections/`, `reactors/`). Write new built-in domains in Go when you want
+consumers engine, the gateway. Write your domains in Go when you want
 compile-time safety; use [JS functions](js-guide.md) for runtime-defined
 behavior.
+
+The domains in `aggregates/`, `projections/orders.go` and
+`reactors/fulfillment.go` are **examples**, not part of the platform — they
+register only under `--tutorial`, and this guide uses them as worked
+illustrations of what your own Go domain would look like.
 
 ## Layout
 
@@ -12,14 +16,14 @@ behavior.
 | --- | --- |
 | `events` | append-only event store (`events.db`): streams, global positions, checkpoints, dead letters, meta kv, read-path upcasting |
 | `decider` | the Decider pattern + registry (fold → decide → append) |
-| `aggregates` | built-in domain deciders (task, order) |
+| `aggregates` | the **example** domain deciders (task, order) — registered only under `--tutorial` |
 | `consumers` | checkpointed poll engine shared by projections, reactors, effect functions |
-| `projections` | Go projections into PocketBase collections |
-| `reactors` | durable event→command mapping (sagas) |
+| `projections` | the `Projection` interface and write-guard helper, plus the example `tasks`/`orders` projections (`--tutorial`) |
+| `reactors` | durable event→command mapping (sagas): the generic tier, plus the example fulfillment saga (`--tutorial`) |
 | `gateway` | the command HTTP route |
 | `writeguard` | rejects out-of-band writes on projection-owned collections |
 | `functions` | the JS runtime (goja): effects, projections, deciders, schema reconcile, dry-run |
-| `migrations` | PocketBase Go migrations — collections-as-DDL for built-in read models |
+| `migrations` | PocketBase Go migrations — collections-as-DDL for Go read models (this repo's are the examples', registered under `--tutorial`) |
 
 ## A Go decider
 

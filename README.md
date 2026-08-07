@@ -22,7 +22,7 @@ Early development — see milestones in the issue worktree (`task_plan.md`). Not
 - [Ops dashboard](docs/dashboard.md) — browse the log, operate the barrier, retry dead letters, edit functions
 - [Consuming](docs/consuming.md) — deployment patterns for frontends, ops tooling and external read-model sinks (with Caddyfiles)
 - Reference: [directives](docs/reference/directives.md) · [CLI](docs/reference/cli.md) · [gateway](docs/reference/gateway.md)
-- [Domain docs](docs/domains/README.md) — convention + dogfooded [task](docs/domains/task.md), [order](docs/domains/order.md), [note](docs/domains/note.md)
+- [Domain docs](docs/domains/README.md) — convention + dogfooded [task](docs/domains/task.md), [order](docs/domains/order.md), [note](docs/domains/note.md) (all three need `--tutorial`)
 - [Domain packs](docs/packs.md) — export/import domains, versioning contract, trust model
 - [EventModeling import/export](docs/schema.md) — map an eventmodelschema document onto a slice, and back; what round-trips and what does not
 - [Contributing](docs/contributing.md)
@@ -33,8 +33,15 @@ Early development — see milestones in the issue worktree (`task_plan.md`). Not
 Requires Go 1.25+.
 
 ```sh
-go run . serve
+go run . serve              # empty: no aggregates, no collections but your own
+go run . serve --tutorial   # + this repo's example task/order domains
 ```
+
+**PocketCQRS ships empty**, which is what you want for real work — a
+framework should not create collections you did not ask for. `--tutorial`
+opts into the example domains the docs walk through; their JS half lives in
+[`examples/pb_functions/`](examples/pb_functions/README.md) and is copied in
+rather than loaded from there.
 
 Then open the PocketBase admin UI at `http://127.0.0.1:8090/_/`.
 

@@ -1,5 +1,8 @@
 # Task
 
+> **Example content.** Run with `--tutorial` to register this aggregate; the
+> platform ships without it. See [getting started](../getting-started.md#run-it).
+
 A minimal work item with a lifecycle: created, then completed. The smallest
 Go-defined vertical in the platform — one decider, one projection, one
 audit effect function.
