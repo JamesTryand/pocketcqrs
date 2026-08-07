@@ -3,7 +3,16 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased
+## v0.4.0 — the platform ships empty
+
+A framework should not create collections nobody asked for. Until now
+`pocketcqrs` registered its own example domains unconditionally, so
+installing the binary and running it gave you a `task` aggregate, an `order`
+aggregate and three collections you never chose. They are teaching material,
+and they are now opt-in.
+
+Nothing was removed: everything still ships, `--tutorial` turns it on, and
+the docs walk through it exactly as before.
 
 ### Changed
 
@@ -50,6 +59,36 @@ All notable changes to PocketCQRS. Format loosely follows
   `reload` re-registers the guard from the JS projections it just loaded, so
   the ordinary maintenance-on/reload/maintenance-off dance on an instance
   with no JS projections left every collection write-denied until restart.
+
+- A latent race in the `TestScaffoldedSliceWorks` smoke test, which waited
+  for the projected row to *exist* and then asserted a field the second
+  event sets — so it raced the update and could report a merge bug that was
+  not there. It now waits for the row's final state.
+
+### Docs
+
+- `docs/tutorial.md` boots with `--tutorial`, which its central lesson
+  depends on: the walkthrough exists to show a generated `order.js`
+  colliding with a Go `order` aggregate, and with nothing registered there
+  is no collision to see. The point is generalised rather than tied to the
+  examples — *any* Go aggregate registered at boot claims its name ahead of
+  JS.
+- `docs/getting-started.md` opens on the two-part opt-in (a flag for the Go
+  domains, a copy for the JS files) and says plainly that a plain `serve` is
+  an empty platform, which is the intended production shape.
+- `examples/pb_functions/README.md` is new: what each example file is, and
+  which of them need `--tutorial` (only `note.js` + `notes.js` stand alone).
+- `--tutorial` documented in the CLI reference with both directions of the
+  switch; `go-guide.md` and `contributing.md` corrected where they described
+  example content as built-in.
+
+Gates: `go vet` clean, `gofmt` clean, 164 unit tests / 16 packages, 16 smoke
+tests, six browser probes.
+
+```sh
+go install github.com/jamestryand/pocketcqrs@v0.4.0
+go install github.com/jamestryand/pocketcqrs/pocketcqrs-dashboard@v0.4.0
+```
 
 ## v0.3.0 — M13 complete, then M14: EventModeling import/export and the reactor tier
 
