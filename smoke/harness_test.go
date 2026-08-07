@@ -35,6 +35,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -136,7 +137,11 @@ func build(t *testing.T, pkg, out string) string {
 // goes to a file the test names on failure — a smoke failure is usually
 // explained by what the server logged, and losing that costs far more time
 // than keeping it.
-func serve(t *testing.T, bin, dir, label string, args ...string) {
+//
+// The returned stop is idempotent, so a test that needs the process gone
+// before it continues (two boots over one data dir, say) can call it and
+// still leave the cleanup registered.
+func serve(t *testing.T, bin, dir, label string, args ...string) (stop func()) {
 	t.Helper()
 	logPath := filepath.Join(dir, label+".log")
 	logFile, err := os.Create(logPath)
@@ -148,16 +153,23 @@ func serve(t *testing.T, bin, dir, label string, args ...string) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting %s: %v", label, err)
 	}
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+			logFile.Close()
+		})
+	}
 	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-		logFile.Close()
+		stop()
 		if t.Failed() {
 			if raw, err := os.ReadFile(logPath); err == nil && len(raw) > 0 {
 				t.Logf("---- %s log ----\n%s", label, raw)
 			}
 		}
 	})
+	return stop
 }
 
 // freeAddr reserves a loopback port by binding and releasing it.

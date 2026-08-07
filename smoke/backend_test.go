@@ -601,9 +601,15 @@ func TestScaffoldedSliceWorks(t *testing.T) {
 			Resolution string `json:"resolution"`
 		} `json:"items"`
 	}
-	eventually(t, "the generated projection to materialise its row", func() bool {
+	// Wait for the row to reach its FINAL state, not merely to exist. Two
+	// events feed this row and the second one sets `resolution`, so waiting
+	// on row-existence alone returns after the first and races the update —
+	// which is how this read a half-projected row and reported a merge bug
+	// that was not there.
+	eventually(t, "the generated projection to apply both events to its row", func() bool {
 		status, _ := h.api(http.MethodGet, "/api/collections/tickets/records", nil, &rows)
-		return status == http.StatusOK && len(rows.Items) == 1
+		return status == http.StatusOK && len(rows.Items) == 1 &&
+			rows.Items[0].Resolution != ""
 	})
 	got := rows.Items[0]
 	if got.TicketID != "tk1" || got.Subject != "printer on fire" || got.Resolution != "extinguished" {
