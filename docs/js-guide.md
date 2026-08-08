@@ -9,6 +9,10 @@ Functions are **trusted, owner-authored code** running in-process (goja).
 There is no multi-tenant isolation; see the trust-model note in
 [contributing](contributing.md).
 
+Planning to move a domain to Go once its rules settle? See
+[Converting a domain from JS to Go](go-guide.md#converting-a-domain-from-js-to-go)
+for what maps directly and what doesn't.
+
 ## The four tiers
 
 | tier | role | triggers | determinism rules | bindings |

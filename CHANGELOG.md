@@ -3,6 +3,24 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased
+
+### Added
+
+- `docs/go-guide.md`: **"Converting a domain from JS to Go"** — the JS→Go
+  graduation path is a deliberate, supported progression (prototype in
+  hot-reloadable JS, compile the proven domain once its rules settle) and no
+  document described it. A per-tier table says which tiers are structural
+  peers (decider, projection, reactor — both languages land on the same
+  registry/engine) and which only exist as named JS concepts because a `.js`
+  file has no other way to reach `Consumer` registration, the router or the
+  cron scheduler. `docs/js-guide.md` links to it.
+
+  It states the scope honestly: converting a decider is a rewrite, not a
+  migration, and there is deliberately no JS→Go transpiler. A partial
+  migration is caught rather than silent, because the registry already
+  refuses a name collision between a JS and a Go decider.
+
 ## v0.4.0 — the platform ships empty
 
 A framework should not create collections nobody asked for. Until now

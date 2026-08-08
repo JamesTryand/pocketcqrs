@@ -25,6 +25,43 @@ illustrations of what your own Go domain would look like.
 | `functions` | the JS runtime (goja): effects, projections, deciders, schema reconcile, dry-run |
 | `migrations` | PocketBase Go migrations — collections-as-DDL for Go read models (this repo's are the examples', registered under `--tutorial`) |
 
+## Converting a domain from JS to Go
+
+Every domain that starts as JS functions can move to Go later — this is a
+deliberate, supported progression: prototype fast with hot-reloadable JS,
+then graduate the proven domain to a compiled Go aggregate once its rules
+have settled. Whether a given tier has a direct Go counterpart determines
+what "converting" actually involves:
+
+| JS tier | Go equivalent | What converting means |
+| --- | --- | --- |
+| Decider | `decider.Decider[S]` | Structural peer — port `initialState`/`decide`/`evolve` to a typed state struct; register in `aggregates.RegisterAll` |
+| Projection | `projections.Projection` | Structural peer — port `project()` to `Apply`; the `//@schema` collection becomes an ordinary PocketBase migration instead |
+| Reactor | `reactors.Reactor` | Structural peer — port `reactTo()` to `React()`; both dispatch through the same `reactors.Dispatch` |
+| Effect (`//@trigger event`) | no named type | Implement `consumers.Consumer` directly — there's nothing to port *to*, just a Go type doing the same job |
+| HTTP function (`//@trigger http`) | no named type | Add a route directly via `core.ServeEvent.Router`, same as this project's own routes (`gateway/gateway.go`, `ops.go`) |
+| Cron function (`//@trigger cron`) | no named type | Call `app.Cron().Add(...)` directly in your bootstrap code |
+
+Decider/projection/reactor are true peers because both languages end up on
+the same registry/engine underneath — a JS decider and a Go decider are
+indistinguishable to the rest of the system. Effect/HTTP/cron only exist as
+named JS concepts because a `.js` file has no other way to reach `Consumer`
+registration, the router, or the cron scheduler; Go code already has direct
+access to all three, so there's nothing to convert — just write the Go call
+directly.
+
+**A word of caution on scope**: converting a decider is a rewrite, not a
+migration. There is, deliberately, no automatic JS→Go transpiler — the
+generated JS skeleton was always a starting point whose actual rules the
+author wrote by hand, and that authored logic is exactly what has to be
+re-expressed in Go, not mechanically translated. Use the live JS file as
+your reference while writing the Go version, dry-run and test the Go
+version independently, and only then remove the JS file — the registry
+refuses a name collision between a JS and a Go decider, so a partial
+migration is caught immediately rather than silently.
+
+See [js-guide.md](js-guide.md) for the JS-side detail on each tier.
+
 ## A Go decider
 
 ```go
