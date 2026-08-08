@@ -12,14 +12,27 @@ All notable changes to PocketCQRS. Format loosely follows
   hot-reloadable JS, compile the proven domain once its rules settle) and no
   document described it. A per-tier table says which tiers are structural
   peers (decider, projection, reactor — both languages land on the same
-  registry/engine) and which only exist as named JS concepts because a `.js`
-  file has no other way to reach `Consumer` registration, the router or the
-  cron scheduler. `docs/js-guide.md` links to it.
+  registry/engine) and which have no Go counterpart to port *to*: the effect
+  tier's three triggers are named JS concepts only because a `.js` file has
+  no other way to reach `Consumer` registration, the router or the cron
+  scheduler. `docs/js-guide.md` links to it.
 
   It states the scope honestly: converting a decider is a rewrite, not a
   migration, and there is deliberately no JS→Go transpiler. A partial
   migration is caught rather than silent, because the registry already
   refuses a name collision between a JS and a Go decider.
+
+### Fixed
+
+- **`docs/go-guide.md` told you to register your own Go domain in the
+  example wiring**, which v0.4.0 had put behind `--tutorial`. It named
+  `aggregates.RegisterAll` for deciders and `allProjections` for projections;
+  both are gated (`main.go`, `projection_cmd.go:23`), so following the guide
+  gave you a decider or projection that silently did not load without the
+  tutorial flag. The guide now names the real call
+  (`decider.Register(registry, ...)` at bootstrap) and says explicitly that
+  the example wiring is example-only. `allProjections` was also cited as
+  living in `main.go`; it is a method in `projection_cmd.go`.
 
 ## v0.4.0 — the platform ships empty
 

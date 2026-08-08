@@ -40,10 +40,13 @@ go build -o pocketcqrs.exe .   # for smoke tests
   the examples, so they register from `migrations.RegisterExamples` rather
   than an `init()` — gating inside an `up` would record the migration as
   applied and make `--tutorial` a one-way door.
-- **Registration surfaces**: a Go domain touches `aggregates.RegisterAll`
-  (decider), `exampleProjections` in `examples.go` (projection +
-  write-guard), and usually a migration. JS-defined domains need no Go
-  changes.
+- **Registration surfaces**: a Go *example* domain touches
+  `aggregates.RegisterAll` (decider), `exampleProjections` in `examples.go`
+  (projection + write-guard), and usually a migration — all three gated
+  behind `--tutorial`. Someone adding a Go domain to *their own* build
+  registers it outside that gate; see
+  [go-guide](go-guide.md#converting-a-domain-from-js-to-go). JS-defined
+  domains need no Go changes.
 - **Example content stays opt-in**: anything that only exists to teach goes
   behind `--tutorial`, and `examples.go` is where its wiring lives. The
   platform must boot with nothing registered.

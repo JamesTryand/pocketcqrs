@@ -33,22 +33,30 @@ then graduate the proven domain to a compiled Go aggregate once its rules
 have settled. Whether a given tier has a direct Go counterpart determines
 what "converting" actually involves:
 
-| JS tier | Go equivalent | What converting means |
+| JS side | Go equivalent | What converting means |
 | --- | --- | --- |
-| Decider | `decider.Decider[S]` | Structural peer — port `initialState`/`decide`/`evolve` to a typed state struct; register in `aggregates.RegisterAll` |
-| Projection | `projections.Projection` | Structural peer — port `project()` to `Apply`; the `//@schema` collection becomes an ordinary PocketBase migration instead |
-| Reactor | `reactors.Reactor` | Structural peer — port `reactTo()` to `React()`; both dispatch through the same `reactors.Dispatch` |
-| Effect (`//@trigger event`) | no named type | Implement `consumers.Consumer` directly — there's nothing to port *to*, just a Go type doing the same job |
-| HTTP function (`//@trigger http`) | no named type | Add a route directly via `core.ServeEvent.Router`, same as this project's own routes (`gateway/gateway.go`, `ops.go`) |
-| Cron function (`//@trigger cron`) | no named type | Call `app.Cron().Add(...)` directly in your bootstrap code |
+| Decider (tier 3) | `decider.Decider[S]` | Structural peer — port `initialState`/`decide`/`evolve` to a typed state struct, then `decider.Register(registry, "yourAggregate", YourDecider())` at bootstrap |
+| Projection (tier 2) | `projections.Projection` | Structural peer — port `project()` to `Apply`; the `//@schema` collection becomes an ordinary PocketBase migration instead |
+| Reactor (tier 4) | `reactors.Reactor` | Structural peer — port `reactTo()` to `React()`; both dispatch through the same `reactors.Dispatch` |
+| Effect (tier 1), `//@trigger event` | no named type | Implement `consumers.Consumer` directly and register it with the engine — there's nothing to port *to*, just a Go type doing the same job |
+| Effect (tier 1), `//@trigger http` | no named type | Add a route directly via `core.ServeEvent.Router`, same as this project's own routes (`gateway/gateway.go`, `ops.go`) |
+| Effect (tier 1), `//@trigger cron` | no named type | Call `app.Cron().Add(...)` directly in your bootstrap code |
 
 Decider/projection/reactor are true peers because both languages end up on
 the same registry/engine underneath — a JS decider and a Go decider are
-indistinguishable to the rest of the system. Effect/HTTP/cron only exist as
-named JS concepts because a `.js` file has no other way to reach `Consumer`
-registration, the router, or the cron scheduler; Go code already has direct
-access to all three, so there's nothing to convert — just write the Go call
-directly.
+indistinguishable to the rest of the system. The effect tier's three
+triggers have no Go counterpart to port *to*: they are named JS concepts
+only because a `.js` file has no other way to reach `Consumer` registration,
+the router, or the cron scheduler. Go code already has direct access to all
+three, so there's nothing to convert — just write the Go call directly.
+
+**Register your own domain at bootstrap, not in the example wiring.** The
+platform ships no aggregates or projections of its own:
+`aggregates.RegisterAll` and `allProjections` are the *examples'*
+registration and both are gated behind `--tutorial` (`main.go`,
+`projection_cmd.go`). Adding your decider or projection inside either means
+it only loads when the tutorial flag is set. Register alongside them
+instead.
 
 **A word of caution on scope**: converting a decider is a rewrite, not a
 migration. There is, deliberately, no automatic JS→Go transpiler — the
@@ -101,7 +109,10 @@ func Task() *decider.Decider[taskState] {
 }
 ```
 
-Register in `aggregates.RegisterAll` (called at bootstrap). The registry
+Register with `decider.Register(registry, "task", Task())` on the registry
+`main.go` builds at bootstrap. (`aggregates.RegisterAll` does exactly this
+for the two example aggregates, but is only called under `--tutorial` — so
+register your own next to that call, not inside it.) The registry
 handles concurrency: it loads the stream, folds `Evolve`, calls `Decide`,
 and appends at the expected sequence — a stale fold is retried by the
 caller on `events.ErrConcurrency` (gateway → 409).
@@ -123,8 +134,12 @@ func (p tasksProjection) Apply(ctx context.Context, ev events.Event) error {
 }
 ```
 
-Register in `allProjections` (main.go) — the same list drives the engine
-registration, the write-guard set, and `projection rebuild`. The target
+Register it in the list that drives engine registration, the write-guard set
+and `projection rebuild` — one list for all three, so a projection cannot be
+consuming events while its collections sit unguarded. `allProjections`
+(`projection_cmd.go`) is that list, but it returns nothing unless
+`--tutorial` is set, because every Go projection in this repo is example
+content; add yours unconditionally rather than inside that branch. The target
 collection is created by a **PocketBase Go migration** in `migrations/`
 (collections-as-DDL), not by the projection.
 
