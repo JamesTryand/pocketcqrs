@@ -3,11 +3,20 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased
+## v0.5.0 — a door to the outside, with bounds
+
+Calling a third party is common enough that "install a second component" was
+the wrong default for it — but an unbounded call from inside the process is a
+blast radius nobody chose. This release adds the narrowest primitive that
+makes the common case work: off unless asked for, one deployment-wide list of
+permitted destinations, and every failure mode already bounded.
+
+Nothing changes unless you pass a flag. Deciders and projections cannot reach
+the network, and now cannot be given the ability by accident either.
 
 ### Added
 
-- **Bounded outbound HTTP for the effect and reactor tiers**, behind
+- **Bounded outbound HTTP for event, cron and reactor functions**, behind
   `--cqrsAllowOutboundHTTP` (off by default). Calling a third party is common
   enough that "install a second component" was the wrong default for it, but
   an unbounded call from inside the process is a blast radius nobody chose.
@@ -31,23 +40,27 @@ All notable changes to PocketCQRS. Format loosely follows
     then fail) and a response body cap that **errors rather than truncating**.
 
   **Deciders and projections never get it**, whatever the flags say. The
-  binding is installed additively on effect/reactor VMs only, so the purity
+  binding is installed additively, on the permitted VMs only, so the purity
   invariant holds by construction rather than by remembering to subtract it;
   a regression test runs with the client installed and fails if any future
   edit moves the grant into the shared VM constructor.
 
+  **`//@trigger http` functions do not get it either**, though they are
+  effect-tier like `event` and `cron`. They are the only path driven by an
+  inbound request: the consumer engine applies consumers serially, so
+  consumer-driven outbound concurrency is bounded by the consumer count,
+  while N simultaneous callers of `/api/fn/x` make N VMs each able to block
+  on a third party. A route that needs a third party should record an event
+  and let an effect or reactor make the call — durable and retryable, rather
+  than tied to a request that may already have timed out.
+
   A dry run does not call out — it reports what would have been sent. The
   bounded client is also exported as the `outbound` Go package.
 
-### Changed
-
-- `docs/js-guide.md` said reactor `Math.random` seeding existed "because an
-  at-least-once **replay** must decide the same thing twice". Reactors are
-  not re-run on replay — `projection rebuild` replays into one named
-  projection and there is no global replay. What the seeding actually guards
-  is **crash-recovery redelivery**: the consumer engine runs `Apply` and then
-  advances the checkpoint, so a crash between the two re-runs the reactor.
-  Corrected, and the distinction now spelled out where it matters.
+  *One limit worth knowing*: the 3s call deadline sits under the 5s function
+  budget, so a single slow call fails as a catchable error rather than a VM
+  interrupt. The budget is armed once per execution, though, so **two
+  sequential slow calls still exhaust it**. Chain calls sparingly.
 
 - `docs/go-guide.md`: **"Converting a domain from JS to Go"** — the JS→Go
   graduation path is a deliberate, supported progression (prototype in
@@ -63,6 +76,21 @@ All notable changes to PocketCQRS. Format loosely follows
   migration, and there is deliberately no JS→Go transpiler. A partial
   migration is caught rather than silent, because the registry already
   refuses a name collision between a JS and a Go decider.
+
+- `docs/reference/cli.md`, `docs/reference/directives.md` and
+  `docs/contributing.md` document the flags, the per-trigger binding surface
+  and the rule this establishes: **an outward-facing boundary belongs to the
+  operator at boot, not to the function.**
+
+### Changed
+
+- `docs/js-guide.md` said reactor `Math.random` seeding existed "because an
+  at-least-once **replay** must decide the same thing twice". Reactors are
+  not re-run on replay — `projection rebuild` replays into one named
+  projection and there is no global replay. What the seeding actually guards
+  is **crash-recovery redelivery**: the consumer engine runs `Apply` and then
+  advances the checkpoint, so a crash between the two re-runs the reactor.
+  Corrected, and the distinction now spelled out where it matters.
 
 ### Fixed
 
