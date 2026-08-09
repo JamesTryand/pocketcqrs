@@ -13,6 +13,22 @@ PocketCQRS flags (persistent, on every command):
 | `--tutorial` | `false` | register this repo's example domains (`task`, `order`), their projections, the fulfillment saga and their collections |
 | `--cqrsAllowAnonymous` | `false` | dev: commands and `/api/fn` need no auth token (no actor metadata stamped) |
 | `--cqrsStrictBoot` | `false` | abort startup when a JS decider fails validation (default: skip it and keep serving) |
+| `--cqrsAllowOutboundHTTP` | `false` | expose `$http` to **effect and reactor** functions; deciders and projections never get it |
+| `--cqrsOutboundHost` | *(none)* | a hostname `$http` may call. Repeatable; deployment-wide, not per-function. **No entries permits nothing** |
+| `--cqrsAllowPrivateOutbound` | `false` | dev/internal: let `$http` reach loopback and private ranges. Link-local (`169.254.0.0/16`, the metadata endpoint) stays blocked regardless |
+
+Outbound HTTP is off unless asked for, and asking for it takes two flags —
+enabling it with no `--cqrsOutboundHost` refuses every call and warns at boot.
+
+```
+pocketcqrs serve \
+  --cqrsAllowOutboundHTTP \
+  --cqrsOutboundHost api.stripe.com \
+  --cqrsOutboundHost hooks.slack.com
+```
+
+See [the JS guide](../js-guide.md#calling-out-http-tiers-1-and-4) for the
+binding and the bounds it enforces.
 
 ## serve
 

@@ -22,6 +22,7 @@ illustrations of what your own Go domain would look like.
 | `reactors` | durable event→command mapping (sagas): the generic tier, plus the example fulfillment saga (`--tutorial`) |
 | `gateway` | the command HTTP route |
 | `writeguard` | rejects out-of-band writes on projection-owned collections |
+| `outbound` | the hard-bounded HTTP client behind `$http`; usable from Go too |
 | `functions` | the JS runtime (goja): effects, projections, deciders, schema reconcile, dry-run |
 | `migrations` | PocketBase Go migrations — collections-as-DDL for Go read models (this repo's are the examples', registered under `--tutorial`) |
 
@@ -175,6 +176,40 @@ everything else, with `causationId`/`correlationId` metadata and
 `actor=reactor:<name>`. Domain rejections are logged and skipped (use
 deterministic target ids so retries are no-ops); concurrency conflicts are
 retried.
+
+## Calling out from Go
+
+The `outbound` package is the same bounded client that backs the JS `$http`
+binding, exported so Go reactors, consumers and out-of-process components
+share one implementation of the guardrails rather than each growing their own.
+
+```go
+client, err := outbound.New(outbound.Config{
+    AllowedHosts: []string{"api.example.com"}, // exact hosts, no wildcards
+    Timeout:      3 * time.Second,
+    MaxInFlight:  16,
+    MaxBodyBytes: 1 << 20,
+})
+resp, err := client.Do(ctx, outbound.Request{Method: "POST", URL: "...", Body: "..."})
+```
+
+It enforces the allow-list before any I/O, re-checks the **resolved IP** at
+dial time (link-local always refused, private ranges only with
+`AllowPrivate`), never follows redirects, makes exactly one attempt, and caps
+both concurrency and response size. Refusals are distinguishable:
+`errors.Is(err, outbound.ErrHostNotAllowed)` and friends.
+
+**Be honest about what this is.** For Go callers it is a *convention*, not an
+enforcement — Go code can always reach `net/http` directly, and nothing stops
+it. The enforcement is real only for the JS tiers, where the binding is the
+only door. Use it anyway: a Go consumer that calls out without a timeout or a
+cap is the blast radius the primitive exists to bound, and the fact that the
+compiler won't stop you is not a reason to reimplement the same six rules
+slightly differently.
+
+Same rule as JS about **where** it may run: downstream of committed events
+only. A `Decide` or `Evolve` that reaches the network destroys replay
+reproducibility, which is the guarantee everything else rests on.
 
 ## Bootstrap order (main.go)
 

@@ -20,7 +20,9 @@ is refused by name rather than one of them being silently dropped.
 
 Registers an **effect function** (tier 1) delivered once per committed event
 of the given types (durable, at-least-once, dead-lettered on failure).
-The script body runs per event with `event`, `console`, `pb` bindings.
+The script body runs per event with `event`, `console`, `pb` bindings —
+plus `$http` when the server was started with `--cqrsAllowOutboundHTTP`
+([JS guide](../js-guide.md#calling-out-http-tiers-1-and-4)).
 
 ```
 //@trigger event TaskCreated TaskCompleted
@@ -141,6 +143,11 @@ Registers a **JS reactor** (tier 4): a durable consumer that maps committed
 events to **commands**. The file must define `reactTo(event)`, which returns
 dispatch descriptors.
 
+Bindings are `event`, `console`, `pb`, and `$http` when outbound HTTP is
+enabled — the reactor tier is where "call a third party, then dispatch a
+command with the answer" belongs, because it is the only tier that can
+dispatch at all.
+
 ```js
 //@trigger reactor OrderConfirmed
 //@dispatches task/CreateTask
@@ -249,7 +256,7 @@ Declares an upcaster for event `<Type>` from version `<from>` to `<to>`
 (positive integers). The file must define
 `transform_<Type>_<from>_to_<to>(data)`. Chains compose (`1→2`, `2→3`).
 Applied at the store read path — see the
-[versioning contract](js-guide.md#deciders-tier-3).
+[versioning contract](../js-guide.md#deciders-tier-3).
 
 ---
 

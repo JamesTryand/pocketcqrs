@@ -7,6 +7,48 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ### Added
 
+- **Bounded outbound HTTP for the effect and reactor tiers**, behind
+  `--cqrsAllowOutboundHTTP` (off by default). Calling a third party is common
+  enough that "install a second component" was the wrong default for it, but
+  an unbounded call from inside the process is a blast radius nobody chose.
+  So the primitive is deliberately narrow, and every bound is enforced rather
+  than documented:
+
+  - a **deployment-wide** host allow-list from `--cqrsOutboundHost`
+    (repeatable), checked before any I/O and before DNS. Global rather than
+    per-function on purpose: function code is hot-reloadable with no
+    code-review gate, so a per-function list would be written by whoever
+    wrote the call. **An empty list permits nothing.**
+  - the **resolved IP** is re-checked at dial time, so a hostile resolver
+    cannot aim an allow-listed name at loopback or at `169.254.169.254`.
+    Link-local is refused with no override; loopback and private ranges need
+    `--cqrsAllowPrivateOutbound` (dev and internal services).
+  - redirects are **never followed** — a 3xx would otherwise walk a call
+    straight off the allow-list.
+  - one attempt, no retry; failures dead-letter through the path effects and
+    reactors already use, and the checkpoint still advances.
+  - a process-wide in-flight cap (saturated ⇒ wait out your own deadline,
+    then fail) and a response body cap that **errors rather than truncating**.
+
+  **Deciders and projections never get it**, whatever the flags say. The
+  binding is installed additively on effect/reactor VMs only, so the purity
+  invariant holds by construction rather than by remembering to subtract it;
+  a regression test runs with the client installed and fails if any future
+  edit moves the grant into the shared VM constructor.
+
+  A dry run does not call out — it reports what would have been sent. The
+  bounded client is also exported as the `outbound` Go package.
+
+### Changed
+
+- `docs/js-guide.md` said reactor `Math.random` seeding existed "because an
+  at-least-once **replay** must decide the same thing twice". Reactors are
+  not re-run on replay — `projection rebuild` replays into one named
+  projection and there is no global replay. What the seeding actually guards
+  is **crash-recovery redelivery**: the consumer engine runs `Apply` and then
+  advances the checkpoint, so a crash between the two re-runs the reactor.
+  Corrected, and the distinction now spelled out where it matters.
+
 - `docs/go-guide.md`: **"Converting a domain from JS to Go"** — the JS→Go
   graduation path is a deliberate, supported progression (prototype in
   hot-reloadable JS, compile the proven domain once its rules settle) and no

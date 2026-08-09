@@ -17,10 +17,14 @@ for what maps directly and what doesn't.
 
 | tier | role | triggers | determinism rules | bindings |
 | --- | --- | --- | --- | --- |
-| 1 — effect | integrate, serve HTTP, run on a schedule | `event`, `http`, `cron` | none required (best-effort) | `console`, read-only `pb` |
+| 1 — effect | integrate, serve HTTP, run on a schedule | `event`, `http`, `cron` | none required (best-effort) | `console`, read-only `pb`, `$http`† |
 | 2 — projection | fold events into collections | `projection` | replay-deterministic: `Math.random` is seeded per event; use `event.created` for time | `console`, read-only `pb` |
 | 3 — decider | the write side of an aggregate | `decider` | strict: no `Math.random` (throws), no `Date`, **no `pb`** | `console` only |
-| 4 — reactor | map events to **commands** (sagas, bridges) | `reactor` | `Math.random` seeded per event, because an at-least-once replay must decide the same thing twice | `console`, read-only `pb` |
+| 4 — reactor | map events to **commands** (sagas, bridges) | `reactor` | `Math.random` seeded per event, so a **redelivery** decides the same thing twice | `console`, read-only `pb`, `$http`† |
+
+† only when the server was started with `--cqrsAllowOutboundHTTP`; absent
+otherwise. **Never available in tiers 2 and 3**, whatever the flags say — see
+[Calling out](#calling-out-http-tiers-1-and-4).
 
 There is deliberately **no write binding** anywhere: state changes must go
 through the command API so they become events (the write-guard enforces it).
@@ -36,6 +40,65 @@ var rows = pb.query("tasks", "completed = false", 100); // PocketBase filter; li
 ```
 
 Records come back in PocketBase's public-API shape.
+
+## Calling out: `$http` (tiers 1 and 4)
+
+**Off by default.** The server must be started with `--cqrsAllowOutboundHTTP`,
+and every destination must be named with `--cqrsOutboundHost`. Without the
+flag, `$http` does not exist in any tier and nothing about the runtime
+changes.
+
+```js
+//@trigger event OrderPlaced
+
+const res = $http.fetch({
+  method: 'POST',                                   // default GET
+  url: 'https://api.example.com/notify',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ order: event.aggregateId }) // a string; stringify yourself
+});
+
+if (res.status >= 400) { throw new Error('notify failed: ' + res.status); }
+```
+
+`$http.get(url)` and `$http.post(url, body)` are shorthands for the same
+thing. A response is `{ status, headers, body }` — `body` is always a string,
+and a non-2xx is a **response, not an error**: only a call that did not
+complete throws.
+
+### Why it is deliberately small
+
+| bound | behaviour |
+| --- | --- |
+| allow-list | Deployment-wide, from `--cqrsOutboundHost`. Exact hostnames, no wildcards. An **empty list permits nothing** — "no entries" is not "no restriction". |
+| address check | The **resolved IP** is checked again at dial time, so a hostile resolver cannot aim an allow-listed name at loopback or at `169.254.169.254`. Link-local is refused with no override; loopback and private ranges need `--cqrsAllowPrivateOutbound`. |
+| redirects | **Never followed.** A 3xx comes back to you; follow it yourself and the new URL is checked like any other call. |
+| timeout | Under the 5s function budget, so a slow call is a catchable error rather than a VM interrupt. |
+| retry | **None.** One attempt. An uncaught throw dead-letters, and the checkpoint still advances — the same failure model effects already had. |
+| concurrency | A process-wide cap on in-flight calls. Over it, a call waits out its own deadline and then fails, so one chatty domain cannot starve the process. |
+| body size | Capped, and exceeding the cap is an **error, never a silent truncation**. |
+
+The allow-list is global rather than per-function on purpose. Function code
+is hot-reloadable and has no code-review gate, so a per-function list would
+be written by whoever wrote the call it authorises.
+
+### Two things to know before using it in a reactor
+
+- **A dry run does not call out.** `mode=reactor` and the Functions editor
+  install a stub that refuses and tells you what would have been sent. A
+  preview must not have side effects, for the same reason `mode=projection`
+  reads through an isolated fixture.
+- **A crash-window redelivery may dispatch something different.** Normally a
+  redelivered reactor dispatches an *identical* command, which the target
+  decider rejects as a duplicate ("already exists") — that is what makes
+  at-least-once safe. A reactor whose decision depends on a third party's
+  answer can dispatch a *different* command the second time, and a duplicate
+  check will not recognise it. Prefer commands your decider treats
+  idempotently, and keep the reaction's target id derived from the event.
+
+Anything heavier — retry policy, circuit breakers, per-service configuration,
+response→command mapping — is deliberately not here. Core provides the door;
+see the `pocketcqrs-extensions` project for the traffic system.
 
 ## The `event` binding (tiers 1–2)
 
@@ -210,11 +273,20 @@ still refuse.
   count); a descriptor missing `aggregate`, `id` or `command` fails loudly.
 - **Delivery is at-least-once, so reactions must be idempotent.** The
   standard pattern, shown above: derive the target id from the source event.
-  A replay dispatches the same command to the same id, hits a domain
+  A redelivery dispatches the same command to the same id, hits a domain
   rejection ("note already exists"), and that rejection is logged and
   skipped rather than the reaction firing twice. `Math.random` is seeded
   from the event position for the same reason — a retry has to make the
   same decision the attempt it's retrying made.
+
+  **"Redelivery", not "replay"** — the distinction matters and this guide
+  used to blur it. Reactors are *not* re-run over history: `projection
+  rebuild` replays into one named projection and there is no global replay,
+  so nothing re-fires a saga against the past. What does happen is
+  crash recovery. The consumer engine runs `Apply` and *then* advances the
+  checkpoint, so a process that dies between the two re-runs the reactor on
+  the same event at startup. That is the window the seeding protects, and
+  the only one.
 - **Failure**: a reactor that throws is dead-lettered (like an effect
   function), not blocking. A concurrency conflict on the target stream
   propagates so the whole event retries; a domain rejection is logged and
