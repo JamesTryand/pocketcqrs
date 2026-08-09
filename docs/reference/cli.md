@@ -181,6 +181,27 @@ unless `--force`) and applies `collections.json` via PocketBase's native
 collection import. Activate with a restart or a maintenance-mode reload.
 See [domain packs](../packs.md).
 
+## skill
+
+Agent skills for [Claude Code](https://claude.com/claude-code), carried inside the binary.
+
+```sh
+pocketcqrs skill list                       # what this binary carries
+pocketcqrs skill install                    # into ~/.claude/skills (every project)
+pocketcqrs skill install --dir .claude/skills   # into this project only
+pocketcqrs skill install --force            # overwrite files you have edited
+```
+
+The skills are also in the repo at `.claude/skills/`, which Claude Code finds on its own
+if you cloned it. Install them when you did **not** clone — when you ran `go install` and
+write your functions in a directory of your own, which is the ordinary way to use
+PocketCQRS and the case the in-repo copy cannot reach.
+
+Existing files are left alone unless `--force`, so an edited skill is never overwritten
+silently. This is the one command that does **not** bootstrap the app: it copies files and
+touches nothing else, so it will not create a `pb_data/` in the directory you happen to be
+standing in.
+
 ## superuser (PocketBase)
 
 ```sh

@@ -3,6 +3,32 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased
+
+### Added
+
+- **An agent skill for building domains, and `pocketcqrs skill install` to get it.**
+  `.claude/skills/pocketcqrs-domain/` covers the tiers, the reload loop and the mistakes
+  that have each cost real time — a projection returning rows instead of row ops writing
+  nothing forever, a reactor id that is not derived from its event, a schema change made
+  outside the maintenance barrier.
+
+  Claude Code finds `.claude/skills/` on its own if you cloned the repo. That misses the
+  ordinary case: `go install` gives you a binary and no clone. So the skill is embedded in
+  the binary too —
+
+  ```sh
+  pocketcqrs skill install                      # into ~/.claude/skills, every project
+  pocketcqrs skill install --dir .claude/skills # into one project
+  ```
+
+  Files you have edited are left alone unless `--force`. Unlike every other subcommand this
+  one does not bootstrap the app, so it will not leave a `pb_data/` behind in whatever
+  directory you ran it from.
+
+  The skill points at `docs/` rather than restating it: a second copy of reference material
+  drifts from the first, which this project has now paid for twice.
+
 ## v0.5.0 — a door to the outside, with bounds
 
 Calling a third party is common enough that "install a second component" was

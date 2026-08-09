@@ -1,8 +1,19 @@
 # Agent skills
 
 Skills shipped with PocketCQRS for use with [Claude Code](https://claude.com/claude-code).
-Claude Code discovers `.claude/skills/` automatically when you open this repo — or a project
-that vendors it — so there is nothing to install.
+
+Claude Code discovers `.claude/skills/` automatically when you open **this repo**, so
+contributors need do nothing. That does not reach the more common case — someone who ran
+`go install` and writes functions in a directory of their own, with no clone anywhere. They
+have the binary, so the binary carries the skills too:
+
+```sh
+pocketcqrs skill install                      # into ~/.claude/skills, every project
+pocketcqrs skill install --dir .claude/skills # into one project
+```
+
+The copy in the binary is embedded from this directory at build time, so there is one source
+of truth and it cannot drift from what you are reading.
 
 | skill | for |
 | --- | --- |

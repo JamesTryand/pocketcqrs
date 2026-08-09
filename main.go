@@ -62,6 +62,25 @@ type components struct {
 }
 
 func main() {
+	// `skill` copies files out of the binary and touches nothing else, so run
+	// it before PocketBase exists.
+	//
+	// Going through app.Start() would BOOTSTRAP THE WHOLE APPLICATION first —
+	// creating pb_data/ and applying migrations in whatever directory the user
+	// happens to be standing in — as a side effect of asking for a file to be
+	// copied. PocketBase only skips bootstrap for --help and --version
+	// (pocketbase.go, skipBootstrap) and offers no per-command opt-out, so the
+	// short-circuit has to live here. The command is still registered on
+	// RootCmd below so that `pocketcqrs --help` lists it.
+	if len(os.Args) > 1 && os.Args[1] == "skill" {
+		sc := newSkillCommand()
+		sc.SetArgs(os.Args[2:])
+		if err := sc.Execute(); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+
 	app := pocketbase.New()
 	c := &components{}
 
@@ -127,6 +146,7 @@ func main() {
 	app.RootCmd.AddCommand(newCatalogCommand(c))
 	app.RootCmd.AddCommand(newPackCommand(c, &functionsDir))
 	app.RootCmd.AddCommand(newSchemaCommand(c, &functionsDir))
+	app.RootCmd.AddCommand(newSkillCommand())
 	app.RootCmd.ParseFlags(os.Args[1:])
 	c.tutorial = tutorial
 
