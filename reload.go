@@ -155,6 +155,26 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 		return nil, fmt.Errorf("reload: schema reconcile: %w", err)
 	}
 
+	// Make the collection cache explicitly consistent after reconcile.
+	//
+	// PocketBase serves record routes from a cached collection set, and
+	// reconcile's own app.Save() calls refresh it as a side effect — so this
+	// is normally redundant. It is here because depending on a dependency's
+	// internal side effect for a correctness property is a silent coupling:
+	// were Save to stop refreshing, a collection created by a reload would
+	// exist, project into correctly, and still answer "404 Missing
+	// collection context" until a restart. Cheap, idempotent, once per
+	// schema-tier reload, and it makes the requirement explicit.
+	//
+	// HONEST PROVENANCE: written to fix exactly that 404, seen once by hand.
+	// It did NOT reproduce — four controlled runs, including one faithfully
+	// replicating the original conditions, all served the new collection
+	// immediately without this call. Defensive hardening, not a fix for a
+	// characterised bug. Do not infer a defect that was never demonstrated.
+	if err := c.app.ReloadCachedCollections(); err != nil {
+		return nil, fmt.Errorf("reload: refresh collection cache: %w", err)
+	}
+
 	// JS deciders: re-validate before swap; refusals keep the old code
 	// serving. Built-in (Go) aggregates can never be displaced.
 	newManaged := map[string]*functions.DeciderSpec{}
