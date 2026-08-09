@@ -60,7 +60,10 @@ the network, and now cannot be given the ability by accident either.
   *One limit worth knowing*: the 3s call deadline sits under the 5s function
   budget, so a single slow call fails as a catchable error rather than a VM
   interrupt. The budget is armed once per execution, though, so **two
-  sequential slow calls still exhaust it**. Chain calls sparingly.
+  sequential slow calls still exhaust it**. And the budget cannot cut short a
+  call already in flight — `vm.Interrupt` is delivered only when the VM
+  regains control — so a function's worst-case wall clock is **5s + 3s**, not
+  5s. Chain calls sparingly.
 
 - `docs/go-guide.md`: **"Converting a domain from JS to Go"** — the JS→Go
   graduation path is a deliberate, supported progression (prototype in
