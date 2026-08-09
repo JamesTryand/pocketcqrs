@@ -68,6 +68,17 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	fresh := functions.NewGojaRuntime(func(msg string, args ...any) { c.app.Logger().Info(msg, args...) })
 	fresh.SetReader(functions.NewAppReader(c.app))
 	fresh.SetStore(c.store)
+	// Carry $http across the swap: a fresh runtime with no client would leave
+	// every outbound-using function throwing "undefined" after the first
+	// reload, with nothing in the report to say why.
+	//
+	// Guarded, not passed straight through: a nil *outbound.Client stored in
+	// an interface is NOT a nil interface, so an unconditional call would
+	// install the binding on an instance that never enabled outbound and
+	// panic on the first use.
+	if c.outbound != nil {
+		fresh.SetOutbound(c.outbound)
+	}
 	loaded, err := functions.LoadDir(fresh, c.app, functionsDir)
 	if err != nil {
 		return nil, err

@@ -163,7 +163,8 @@ func (r *GojaRuntime) runHTTP(name string, prog *goja.Program, req map[string]an
 		}
 	}()
 
-	vm, timer := r.newVM(name)
+	// effect tier (//@trigger http)
+	vm, timer := r.newEffectVM(name)
 	defer timer.Stop()
 
 	vm.Set("request", req)

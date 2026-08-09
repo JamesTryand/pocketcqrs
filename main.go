@@ -20,6 +20,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/gateway"
 	"github.com/jamestryand/pocketcqrs/migrations"
+	"github.com/jamestryand/pocketcqrs/outbound"
 	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/reactors"
 	"github.com/jamestryand/pocketcqrs/writeguard"
@@ -34,6 +35,12 @@ type components struct {
 	httpFns   *functions.HTTPRegistry
 	jsProjs   []*functions.JSProjection
 	fnRuntime *functions.GojaRuntime
+
+	// outbound backs the $http binding, or is nil when
+	// --cqrsAllowOutboundHTTP is absent (the default). Held here because a
+	// hot reload builds a fresh runtime and must carry it across — otherwise
+	// $http would work until the first reload and then vanish.
+	outbound *outbound.Client
 
 	// jsDeciders tracks JS-managed aggregates (vs built-in Go deciders)
 	// with their active specs, for hot-reload swaps and upcaster rebuilds.
@@ -64,6 +71,30 @@ func main() {
 		"cqrsAllowAnonymous",
 		false,
 		"allow anonymous CQRS command execution (dev only; no actor metadata is stamped)",
+	)
+
+	// Outbound HTTP for the effect/reactor tiers. Off by default: with these
+	// unset, core's posture is exactly what it was before the feature existed.
+	var allowOutboundHTTP bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&allowOutboundHTTP,
+		"cqrsAllowOutboundHTTP",
+		false,
+		"allow effect and reactor functions to call out over HTTP via $http; deciders and projections never can",
+	)
+	var outboundHosts []string
+	app.RootCmd.PersistentFlags().StringArrayVar(
+		&outboundHosts,
+		"cqrsOutboundHost",
+		nil,
+		"a hostname $http may call, repeatable; the list is deployment-wide, not per-function (no entries = nothing permitted)",
+	)
+	var allowPrivateOutbound bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&allowPrivateOutbound,
+		"cqrsAllowPrivateOutbound",
+		false,
+		"let $http reach loopback and private ranges (dev and internal services; link-local stays blocked)",
 	)
 
 	var strictBoot bool
@@ -166,6 +197,34 @@ func main() {
 			func(msg string, args ...any) { logger.Info(msg, args...) })
 		rt.SetReader(functions.NewAppReader(e.App))
 		rt.SetStore(store)
+
+		// outbound HTTP, only if asked for. An empty allow-list with the
+		// flag on permits NOTHING and says so — "no entries" is not "no
+		// restriction", which is the reading that made an empty writeguard
+		// list guard everything in v0.4.0.
+		if allowOutboundHTTP {
+			client, err := outbound.New(outbound.Config{
+				AllowedHosts: outboundHosts,
+				AllowPrivate: allowPrivateOutbound,
+				Timeout:      functions.OutboundTimeout,
+				MaxInFlight:  functions.OutboundMaxInFlight,
+				MaxBodyBytes: functions.OutboundMaxBodyBytes,
+			})
+			if err != nil {
+				return fmt.Errorf("outbound HTTP config: %w", err)
+			}
+			c.outbound = client
+			rt.SetOutbound(client)
+			if len(outboundHosts) == 0 {
+				logger.Warn("outbound HTTP is enabled but no --cqrsOutboundHost was given, " +
+					"so every $http call will be refused")
+			} else {
+				logger.Info("outbound HTTP enabled for effect and reactor functions",
+					"hosts", strings.Join(outboundHosts, ","),
+					"allowPrivate", allowPrivateOutbound)
+			}
+		}
+
 		c.fnRuntime = rt
 		loaded, err := functions.LoadDir(rt, e.App, functionsDir)
 		if err != nil {

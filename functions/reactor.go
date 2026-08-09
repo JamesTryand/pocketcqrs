@@ -137,7 +137,7 @@ func (r *GojaRuntime) runReactor(spec *ReactorSpec, ev events.Event) (result any
 		}
 	}()
 
-	vm, timer := r.newVM(spec.Reactor)
+	vm, timer := r.newEffectVM(spec.Reactor)
 	defer timer.Stop()
 	seedRandom(vm, ev.Position)
 

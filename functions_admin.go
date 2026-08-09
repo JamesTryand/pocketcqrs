@@ -389,6 +389,15 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 	rt := functions.NewGojaRuntime(func(string, ...any) {})
 	rt.SetReader(functions.NewAppReader(c.app))
 	rt.SetStore(c.store)
+	// A dry run answers "what would this do?" and must not make it happen —
+	// the same reason mode=projection reads through an isolated reader. The
+	// stub refuses and names the call it would have sent, which beats leaving
+	// $http undefined and failing with an error about the binding rather than
+	// an answer about the function. Only installed when the instance actually
+	// has outbound enabled, so a dry run reports what production would do.
+	if c.outbound != nil {
+		rt.SetOutbound(functions.DryRunOutbound())
+	}
 
 	switch req.Mode {
 	case "compile":
