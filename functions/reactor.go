@@ -137,7 +137,7 @@ func (r *GojaRuntime) runReactor(spec *ReactorSpec, ev events.Event) (result any
 		}
 	}()
 
-	vm, timer := r.newEffectVM(spec.Reactor)
+	vm, timer := r.newOutboundVM(spec.Reactor)
 	defer timer.Stop()
 	seedRandom(vm, ev.Position)
 
@@ -163,7 +163,7 @@ func (r *GojaRuntime) runReactor(spec *ReactorSpec, ev events.Event) (result any
 	}
 	reactTo, ok := goja.AssertFunction(vm.Get("reactTo"))
 	if !ok {
-		return nil, fmt.Errorf("reactor %s does not define reactToToTo(event)", spec.Reactor)
+		return nil, fmt.Errorf("reactor %s does not define reactTo(event)", spec.Reactor)
 	}
 	v, err := reactTo(goja.Undefined(), vm.ToValue(event))
 	if err != nil {

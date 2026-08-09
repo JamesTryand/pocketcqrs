@@ -13,7 +13,7 @@ PocketCQRS flags (persistent, on every command):
 | `--tutorial` | `false` | register this repo's example domains (`task`, `order`), their projections, the fulfillment saga and their collections |
 | `--cqrsAllowAnonymous` | `false` | dev: commands and `/api/fn` need no auth token (no actor metadata stamped) |
 | `--cqrsStrictBoot` | `false` | abort startup when a JS decider fails validation (default: skip it and keep serving) |
-| `--cqrsAllowOutboundHTTP` | `false` | expose `$http` to **effect and reactor** functions; deciders and projections never get it |
+| `--cqrsAllowOutboundHTTP` | `false` | expose `$http` to **event, cron and reactor** functions. Not to `//@trigger http` functions (request-driven, so unbounded concurrency), and never to deciders or projections |
 | `--cqrsOutboundHost` | *(none)* | a hostname `$http` may call. Repeatable; deployment-wide, not per-function. **No entries permits nothing** |
 | `--cqrsAllowPrivateOutbound` | `false` | dev/internal: let `$http` reach loopback and private ranges. Link-local (`169.254.0.0/16`, the metadata endpoint) stays blocked regardless |
 
@@ -27,7 +27,7 @@ pocketcqrs serve \
   --cqrsOutboundHost hooks.slack.com
 ```
 
-See [the JS guide](../js-guide.md#calling-out-http-tiers-1-and-4) for the
+See [the JS guide](../js-guide.md#calling-out-http-event-cron-and-reactor-functions) for the
 binding and the bounds it enforces.
 
 ## serve

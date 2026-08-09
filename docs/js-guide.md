@@ -17,14 +17,16 @@ for what maps directly and what doesn't.
 
 | tier | role | triggers | determinism rules | bindings |
 | --- | --- | --- | --- | --- |
-| 1 — effect | integrate, serve HTTP, run on a schedule | `event`, `http`, `cron` | none required (best-effort) | `console`, read-only `pb`, `$http`† |
+| 1 — effect | integrate, serve HTTP, run on a schedule | `event`, `http`, `cron` | none required (best-effort) | `console`, read-only `pb`, `$http`† (**not** on `http`) |
 | 2 — projection | fold events into collections | `projection` | replay-deterministic: `Math.random` is seeded per event; use `event.created` for time | `console`, read-only `pb` |
 | 3 — decider | the write side of an aggregate | `decider` | strict: no `Math.random` (throws), no `Date`, **no `pb`** | `console` only |
 | 4 — reactor | map events to **commands** (sagas, bridges) | `reactor` | `Math.random` seeded per event, so a **redelivery** decides the same thing twice | `console`, read-only `pb`, `$http`† |
 
 † only when the server was started with `--cqrsAllowOutboundHTTP`; absent
-otherwise. **Never available in tiers 2 and 3**, whatever the flags say — see
-[Calling out](#calling-out-http-tiers-1-and-4).
+otherwise. Goes to **`event` and `cron` functions and to reactors** — not to
+`//@trigger http` functions, which are request-driven, and **never** to tiers
+2 and 3 whatever the flags say. See
+[Calling out](#calling-out-http-event-cron-and-reactor-functions).
 
 There is deliberately **no write binding** anywhere: state changes must go
 through the command API so they become events (the write-guard enforces it).
@@ -41,12 +43,22 @@ var rows = pb.query("tasks", "completed = false", 100); // PocketBase filter; li
 
 Records come back in PocketBase's public-API shape.
 
-## Calling out: `$http` (tiers 1 and 4)
+## Calling out: `$http` (event, cron and reactor functions)
 
 **Off by default.** The server must be started with `--cqrsAllowOutboundHTTP`,
 and every destination must be named with `--cqrsOutboundHost`. Without the
-flag, `$http` does not exist in any tier and nothing about the runtime
-changes.
+flag, `$http` does not exist anywhere and nothing about the runtime changes.
+
+**`//@trigger http` functions do not get it**, even though they are effect-tier
+like `event` and `cron`. They are the only path driven by an inbound *request*.
+The consumer engine applies its consumers one at a time, so outbound
+concurrency from the event and cron paths is bounded by how many consumers
+exist; N simultaneous callers of `/api/fn/x` make N VMs, each able to block on
+a third party — which is the starvation the in-flight cap exists to prevent,
+reachable unauthenticated under `--cqrsAllowAnonymous`. **A route that needs a
+third party should record an event and let an effect or reactor make the
+call**, which also makes the outcome durable and retryable instead of tied to
+one request that may already have timed out.
 
 ```js
 //@trigger event OrderPlaced

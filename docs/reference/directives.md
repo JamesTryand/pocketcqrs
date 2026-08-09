@@ -22,7 +22,7 @@ Registers an **effect function** (tier 1) delivered once per committed event
 of the given types (durable, at-least-once, dead-lettered on failure).
 The script body runs per event with `event`, `console`, `pb` bindings —
 plus `$http` when the server was started with `--cqrsAllowOutboundHTTP`
-([JS guide](../js-guide.md#calling-out-http-tiers-1-and-4)).
+([JS guide](../js-guide.md#calling-out-http-event-cron-and-reactor-functions)).
 
 ```
 //@trigger event TaskCreated TaskCompleted
@@ -33,11 +33,16 @@ plus `$http` when the server was started with `--cqrsAllowOutboundHTTP`
 Registers an **HTTP function** at `GET|POST /api/fn/<basename>`. The file
 must define `handle(request)`.
 
+**No `$http` here**, unlike the other two effect triggers. This is the only
+function path driven by an inbound request, and request-driven concurrency is
+unbounded where consumer-driven concurrency is not. A route that needs a third
+party should record an event and let an effect or reactor make the call.
+
 ## `//@trigger cron <5-field schedule>`
 
 Registers a **cron function**; the script body runs per tick with a `job`
-binding (`{name, firedAt}`). One cron trigger per file; the schedule keeps
-its spaces:
+binding (`{name, firedAt}`), plus `$http` when outbound HTTP is enabled. One
+cron trigger per file; the schedule keeps its spaces:
 
 ```
 //@trigger cron */15 * * * *

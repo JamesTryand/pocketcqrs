@@ -80,7 +80,7 @@ func main() {
 		&allowOutboundHTTP,
 		"cqrsAllowOutboundHTTP",
 		false,
-		"allow effect and reactor functions to call out over HTTP via $http; deciders and projections never can",
+		"allow event, cron and reactor functions to call out over HTTP via $http; not //@trigger http functions, and never deciders or projections",
 	)
 	var outboundHosts []string
 	app.RootCmd.PersistentFlags().StringArrayVar(

@@ -60,7 +60,7 @@ v1 assumes **trusted, owner-authored** JS (goja in-process). The
 an isolated runtime (wasm/process) can slot in when untrusted tenant code
 arrives — that is a post-slice decision gate, not current scope.
 
-`$http` (see the [JS guide](js-guide.md#calling-out-http-tiers-1-and-4)) is
+`$http` (see the [JS guide](js-guide.md#calling-out-http-event-cron-and-reactor-functions)) is
 the one capability that reaches outside the process, and it narrows that
 assumption rather than resting on it. Its allow-list is **deployment-wide,
 not per-function**, precisely because function code is hot-reloadable and has
@@ -72,11 +72,17 @@ function.
 Two rules follow for anyone touching `functions/`:
 
 - **Capability grants to the JS tiers are additive.** `newVMWithReader`
-  grants what every tier may have; `newEffectVM` layers on what only the
-  effect and reactor tiers may have. Never put an outward-facing binding in
-  the shared constructor and subtract it again — that leaves decider and
-  projection purity depending on someone remembering the subtraction.
+  grants what every path may have; `newOutboundVM` layers on what only the
+  permitted ones may have. Never put an outward-facing binding in the shared
+  constructor and subtract it again — that leaves decider and projection
+  purity depending on someone remembering the subtraction.
   `TestOutboundIsUnreachableFromDecidersAndProjections` fails if you do.
+- **The unit of an outward grant is a path, not a tier.** `$http` goes to
+  event and cron functions and to reactors, but *not* to http-triggered
+  functions, even though those are effect-tier too. The consumer engine
+  applies consumers serially, so consumer-driven outbound concurrency is
+  bounded by the consumer count; request-driven concurrency is bounded by
+  nothing. Ask which *drives* a path before granting it anything outward.
 - **A hot reload builds a fresh runtime.** `reload.go` copies the reader,
   store, registry and outbound client onto it. A new capability that is not
   copied there works until the first reload and then silently vanishes.

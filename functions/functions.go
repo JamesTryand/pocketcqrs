@@ -234,12 +234,12 @@ func (r *GojaRuntime) RetryEventFunction(name string, ev events.Event) error {
 // newVM creates a VM with the standard bindings (console, pb read access)
 // and the execution timeout armed.
 //
-// Its only callers are the projection path and newDeciderVM — the two tiers
-// that must never reach the network. Tiers that may use newEffectVM
-// (outbound.go), which layers `$http` on top. Do not move that binding down
-// into here: it would grant outbound access to deciders and projections by
-// default and leave the purity invariant depending on somebody remembering
-// to subtract it again.
+// It is what every path WITHOUT outbound access uses: deciders, projections
+// and http-triggered functions. The paths that may call out use
+// newOutboundVM (outbound.go), which layers `$http` on top. Do not move that
+// binding down into here — it would grant outbound access to deciders and
+// projections by default and leave the purity invariant depending on
+// somebody remembering to subtract it again.
 func (r *GojaRuntime) newVM(name string) (*goja.Runtime, *time.Timer) {
 	return r.newVMWithReader(name, r.reader)
 }
@@ -323,7 +323,7 @@ func (r *GojaRuntime) runScript(name string, prog *goja.Program, globals map[str
 	}()
 
 	// effect tier: event- and cron-triggered functions both land here
-	vm, timer := r.newEffectVM(name)
+	vm, timer := r.newOutboundVM(name)
 	defer timer.Stop()
 
 	for k, v := range globals {

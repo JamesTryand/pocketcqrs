@@ -38,7 +38,7 @@ func typeOf(t *testing.T, ctor vmCtor) string {
 // tested, a 4xx assertion against an empty log, a probe that only passed on a
 // hand-built instance).
 //
-// The paired assertion on newEffectVM is what keeps it honest: delete the
+// The paired assertion on newOutboundVM is what keeps it honest: delete the
 // binding entirely and the absence checks still pass, but that one fails.
 func TestOutboundIsUnreachableFromDecidersAndProjections(t *testing.T) {
 	rt := NewGojaRuntime(nil)
@@ -55,7 +55,7 @@ func TestOutboundIsUnreachableFromDecidersAndProjections(t *testing.T) {
 
 		// Not decoration: without this the test above passes on a build where
 		// $http was never installed anywhere.
-		{"effect/reactor", rt.newEffectVM, "object"},
+		{"effect/reactor", rt.newOutboundVM, "object"},
 	}
 
 	for _, tc := range cases {
@@ -75,11 +75,39 @@ func TestOutboundAbsentWithoutAClient(t *testing.T) {
 	}{
 		{"decider", rt.newDeciderVM},
 		{"projection", rt.newVM},
-		{"effect/reactor", rt.newEffectVM},
+		{"effect/reactor", rt.newOutboundVM},
 	} {
 		if got := typeOf(t, tc.ctor); got != "undefined" {
 			t.Errorf("%s: typeof $http = %q with no client installed, want undefined", tc.tier, got)
 		}
+	}
+}
+
+// An http-triggered function is effect-tier, but it does NOT get $http.
+//
+// It is the only function path driven by an inbound request. The consumer
+// engine applies its consumers serially, so outbound concurrency from the
+// event and cron paths is bounded by how many consumers exist; N simultaneous
+// callers of /api/fn/x make N VMs, each able to block on a third party, which
+// is the starvation the in-flight cap exists to prevent — and it is reachable
+// unauthenticated under --cqrsAllowAnonymous.
+func TestHTTPFunctionsDoNotGetOutbound(t *testing.T) {
+	rt := NewGojaRuntime(nil)
+	rt.SetOutbound(DryRunOutbound())
+
+	src := `
+function handle(request) { return { saw: typeof $http }; }
+`
+	result, err := rt.runHTTP("probe", compile(t, src), map[string]any{"method": "GET"})
+	if err != nil {
+		t.Fatalf("runHTTP: %v", err)
+	}
+	got, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("handle returned %T", result)
+	}
+	if got["saw"] != "undefined" {
+		t.Fatalf("an http function saw $http as %v; request-driven outbound concurrency is unbounded", got["saw"])
 	}
 }
 

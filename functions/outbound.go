@@ -57,7 +57,7 @@ type OutboundDoer interface {
 // SetOutbound installs the bounded HTTP client backing `$http`.
 //
 // With no client installed, `$http` is simply absent — which is the default
-// posture, and what every tier sees unless --cqrsAllowOutboundHTTP is set.
+// posture, and what every path sees unless --cqrsAllowOutboundHTTP is set.
 //
 // NOTE FOR HOT RELOAD: reload builds a FRESH GojaRuntime and copies the
 // reader, store and registry onto it. This must be copied too, or `$http`
@@ -75,8 +75,14 @@ func (r *GojaRuntime) Outbound() OutboundDoer {
 	return r.outbound
 }
 
-// newEffectVM builds a VM for the tiers permitted to reach the network: the
-// effect tier (event, http and cron triggers) and the reactor tier.
+// newOutboundVM builds a VM for the paths permitted to reach the network:
+// event- and cron-triggered effect functions, and reactors.
+//
+// NOT http-triggered functions, though those are effect-tier too. They are
+// the only path driven by an inbound REQUEST, and request-driven concurrency
+// is unbounded in a way consumer-driven concurrency is not — see the note in
+// http.go. The effect tier is therefore not quite the unit of this grant,
+// which is why this is named for the capability rather than for a tier.
 //
 // THE INSTALLATION IS ADDITIVE, AND THAT IS THE WHOLE POINT. Every other
 // binding in this package is subtractive — newVMWithReader grants console and
@@ -88,9 +94,9 @@ func (r *GojaRuntime) Outbound() OutboundDoer {
 // shared constructor, makes "deciders and projections cannot call out" true
 // by construction rather than by vigilance.
 //
-// Concretely: after this, newVM's only remaining callers are the projection
-// path and newDeciderVM. Keep it that way.
-func (r *GojaRuntime) newEffectVM(name string) (*goja.Runtime, *time.Timer) {
+// Concretely: newVM is now what every path WITHOUT outbound access uses —
+// deciders, projections and http functions. Keep the grant here.
+func (r *GojaRuntime) newOutboundVM(name string) (*goja.Runtime, *time.Timer) {
 	vm, timer := r.newVM(name)
 	if d := r.Outbound(); d != nil {
 		vm.Set("$http", httpBinding(d))

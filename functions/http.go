@@ -163,8 +163,18 @@ func (r *GojaRuntime) runHTTP(name string, prog *goja.Program, req map[string]an
 		}
 	}()
 
-	// effect tier (//@trigger http)
-	vm, timer := r.newEffectVM(name)
+	// NO $http HERE, deliberately — newVM, not newOutboundVM.
+	//
+	// An HTTP function is effect-tier like an event or cron function, but it
+	// is the only one driven by an inbound REQUEST. The consumer engine runs
+	// its consumers serially, so outbound concurrency from the event and cron
+	// paths is bounded by how many consumers exist. Request-driven
+	// concurrency is bounded by nothing: N simultaneous callers make N VMs,
+	// each able to block on a third party, which is the starvation the
+	// outbound cap exists to prevent — reachable unauthenticated under
+	// --cqrsAllowAnonymous. A route that needs a third party should record an
+	// event and let an effect or reactor make the call.
+	vm, timer := r.newVM(name)
 	defer timer.Stop()
 
 	vm.Set("request", req)
