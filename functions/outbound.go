@@ -15,10 +15,17 @@ import (
 // 30-second third-party call inside a 5-second VM has a design problem the
 // core primitive should not accommodate.
 const (
-	// OutboundTimeout bounds one $http call end to end. It sits strictly
-	// under FunctionTimeout so a slow call surfaces as a catchable JS error
-	// the author can handle, rather than as a VM interrupt, which kills the
-	// function mid-statement and reports nothing useful about why.
+	// OutboundTimeout bounds ONE $http call end to end. It sits strictly
+	// under FunctionTimeout so a single slow call surfaces as a catchable JS
+	// error the author can handle, rather than as a VM interrupt, which kills
+	// the function mid-statement and reports nothing useful about why.
+	//
+	// IT IS NOT A PER-FUNCTION BOUND. FunctionTimeout is armed once per VM,
+	// at creation; this deadline is per call. A function making two
+	// sequential slow calls spends 6s against a 5s VM budget and IS
+	// interrupted. That is a real limit on how many calls one function may
+	// chain, not a bug — but do not read the assertion below as promising
+	// more than it proves.
 	OutboundTimeout = 3 * time.Second
 
 	// OutboundMaxInFlight caps concurrent outbound calls process-wide, so one
@@ -30,11 +37,15 @@ const (
 	OutboundMaxBodyBytes = 1 << 20 // 1 MiB
 )
 
-// Compile-time assertion that the call deadline really is under the VM
-// budget. If OutboundTimeout ever reaches FunctionTimeout this expression
-// goes negative and converting it to uint fails to compile. The relationship
-// is load-bearing, so it is checked by the compiler rather than by a comment
-// somebody has to notice.
+// Compile-time assertion that ONE call's deadline is under the VM budget. If
+// OutboundTimeout ever reaches FunctionTimeout this expression goes negative
+// and converting it to uint fails to compile. The relationship is
+// load-bearing, so the compiler checks it rather than a comment somebody has
+// to notice.
+//
+// It proves arithmetic between two constants and nothing else. In particular
+// it does NOT establish that a function cannot be interrupted mid-call: see
+// OutboundTimeout's note about sequential calls.
 const _ = uint(FunctionTimeout - OutboundTimeout - 1)
 
 // OutboundDoer is the one call the `$http` binding needs. It is an interface

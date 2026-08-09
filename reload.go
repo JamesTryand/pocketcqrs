@@ -53,6 +53,28 @@ func registerReloadRoute(e *core.ServeEvent, c *components, functionsDir string)
 // touched: a broken file aborts the reload, leaving the previous code
 // serving. Checkpoints carry over by consumer name, so swapped consumers
 // resume where the old code left off.
+// carryCapabilities copies every capability the live runtime holds onto a
+// freshly built one.
+//
+// A hot reload swaps the runtime wholesale, so ANY capability that is not
+// copied here works until the first reload and then silently vanishes — the
+// worst kind of bug, because nothing fails at the point of the mistake.
+// $http did exactly this during development. It is a named method rather
+// than inline setup so the property can be tested without standing up an
+// app, and so a new capability has one obvious place to be added.
+//
+// The outbound client is guarded rather than passed straight through: a nil
+// *outbound.Client stored in an interface is NOT a nil interface, so an
+// unconditional call would install the binding on an instance that never
+// enabled outbound, and it would panic on first use.
+func (c *components) carryCapabilities(fresh *functions.GojaRuntime) {
+	fresh.SetReader(functions.NewAppReader(c.app))
+	fresh.SetStore(c.store)
+	if c.outbound != nil {
+		fresh.SetOutbound(c.outbound)
+	}
+}
+
 func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (*reloadReport, error) {
 	c.reloadMu.Lock()
 	defer c.reloadMu.Unlock()
@@ -66,19 +88,7 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	// load into a fresh runtime with the same dependencies; on any error
 	// the old runtime and every live registration stay untouched
 	fresh := functions.NewGojaRuntime(func(msg string, args ...any) { c.app.Logger().Info(msg, args...) })
-	fresh.SetReader(functions.NewAppReader(c.app))
-	fresh.SetStore(c.store)
-	// Carry $http across the swap: a fresh runtime with no client would leave
-	// every outbound-using function throwing "undefined" after the first
-	// reload, with nothing in the report to say why.
-	//
-	// Guarded, not passed straight through: a nil *outbound.Client stored in
-	// an interface is NOT a nil interface, so an unconditional call would
-	// install the binding on an instance that never enabled outbound and
-	// panic on the first use.
-	if c.outbound != nil {
-		fresh.SetOutbound(c.outbound)
-	}
+	c.carryCapabilities(fresh)
 	loaded, err := functions.LoadDir(fresh, c.app, functionsDir)
 	if err != nil {
 		return nil, err
