@@ -3,7 +3,13 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased
+## v0.6.0 — the knowledge ships with the thing
+
+Documentation tells you what exists. It does not stop you writing a projection that returns
+rows instead of row ops and silently writes nothing forever, because you have to already
+suspect the trap to go looking for the page about it. This release ships that knowledge as an
+agent skill, and — because the ordinary way to use PocketCQRS is `go install`, with no clone
+anywhere — puts it inside the binary so it reaches people who never see the repo.
 
 ### Added
 
@@ -28,6 +34,14 @@ All notable changes to PocketCQRS. Format loosely follows
 
   The skill points at `docs/` rather than restating it: a second copy of reference material
   drifts from the first, which this project has now paid for twice.
+
+### Changed
+
+- Hot reload now calls `ReloadCachedCollections()` after reconciling `//@schema` collections.
+  Reconcile's own saves already refresh PocketBase's cache, so this changes no behaviour
+  today — it is here so that a collection created by a reload cannot come to depend on a
+  dependency's internal side effect for being servable. No bug was demonstrated; the comment
+  in `reload.go` says so plainly rather than implying one.
 
 ## v0.5.0 — a door to the outside, with bounds
 

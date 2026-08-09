@@ -8,10 +8,23 @@ A CQRS + functions-as-a-service backend built on [PocketBase](https://pocketbase
 - **Write-guard**: direct record writes to guarded collections are rejected for everyone (superusers included); the only writer is the projection engine.
 - **Sagas**: reactors are durable consumers that map committed events to follow-up commands, dispatched back through the registry with causation/correlation metadata — reactions become events like everything else.
 - **Functions (FaaS)**: user-defined JS functions from `pb_functions/` — effects (`//@trigger event`), HTTP (`//@trigger http`), cron (`//@trigger cron`), projections (`//@trigger projection` + `//@schema`), full deciders (`//@trigger decider`), and reactors (`//@trigger reactor` + `//@dispatches`) mapping events to follow-up commands — with durability, determinism tiers and read-only query-side bindings per role. Commands and HTTP functions require PocketBase auth by default (`--cqrsAllowAnonymous` for dev).
+- **Calling out**: a hard-bounded `$http` for event/cron functions and reactors, off unless `--cqrsAllowOutboundHTTP`, restricted to a deployment-wide host allow-list, with the resolved IP re-checked at dial time, no redirects, no retry, a concurrency cap and a body cap. Deciders and projections can never reach the network.
 
 ## Status
 
-Early development — see milestones in the issue worktree (`task_plan.md`). Not affiliated with PocketBase; upstream (`pocketbase/pocketbase`) is an unmodified dependency pinned in `go.mod`.
+**`v0.5.0`.** Usable and dogfooded; the API is not frozen. Not affiliated with PocketBase; upstream (`pocketbase/pocketbase`) is an unmodified dependency pinned in `go.mod`.
+
+**It ships empty on purpose.** No aggregates, no collections, nothing you did not write — `--tutorial` opts into the example domains this repo uses to teach and to test itself.
+
+## Using this with Claude Code
+
+An agent skill ships with the project — the tiers, the reload loop, and the mistakes that
+have each cost real time here. Cloned the repo? Claude Code finds `.claude/skills/`
+by itself. Installed the binary instead?
+
+```sh
+pocketcqrs skill install
+```
 
 ## Docs
 
