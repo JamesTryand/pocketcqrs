@@ -26,6 +26,14 @@ const (
 	// interrupted. That is a real limit on how many calls one function may
 	// chain, not a bug — but do not read the assertion below as promising
 	// more than it proves.
+	//
+	// And note WHEN the interrupt lands, which is not when it is armed:
+	// vm.Interrupt cannot preempt a blocking Go binding, so it is delivered
+	// only once the VM regains control after the in-flight call returns.
+	// Demonstrated, not assumed — a deliberately misconfigured 8s deadline
+	// under a 5s budget was interrupted at 8s, not 5s. So a function's real
+	// wall-clock ceiling is FunctionTimeout + OutboundTimeout. Still bounded,
+	// which is the point, but bounded by the sum rather than by the budget.
 	OutboundTimeout = 3 * time.Second
 
 	// OutboundMaxInFlight caps concurrent outbound calls process-wide, so one

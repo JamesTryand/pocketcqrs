@@ -1,13 +1,18 @@
 package functions
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/dop251/goja"
 
+	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/outbound"
 )
@@ -244,6 +249,142 @@ if (msg.indexOf("POST https://api.example.com/pay") === -1) { throw new Error("c
 `
 	if err := rt.runScript("probe", compile(t, src), nil); err != nil {
 		t.Fatalf("%v", err)
+	}
+}
+
+// A timed-out call must reach the function as a CATCHABLE JS exception, not
+// as a VM interrupt.
+//
+// The difference is the whole reason OutboundTimeout sits under
+// FunctionTimeout. An interrupt unwinds the VM: the author's try/catch never
+// runs, cleanup never runs, and the failure is reported as "function
+// execution timeout" — which says nothing about the third party that caused
+// it. This test proves the distinction rather than assuming it: the script
+// only completes (runScript returning nil) if the exception was catchable and
+// execution continued past the catch.
+func TestOutboundTimeoutIsCatchableNotAVMInterrupt(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-release // hang until the test lets go
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	client, err := outbound.New(outbound.Config{
+		AllowedHosts: []string{"127.0.0.1"},
+		AllowPrivate: true,
+		Timeout:      OutboundTimeout, // the real production deadline
+		MaxInFlight:  4,
+		MaxBodyBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := NewGojaRuntime(nil)
+	rt.SetOutbound(client)
+
+	src := `
+let caught = "";
+try { $http.get(url); }
+catch (e) { caught = String(e); }
+// Reaching this line at all is the point: a VM interrupt would never get here.
+if (caught === "") { throw new Error("the hanging call did not raise anything"); }
+if (caught.indexOf("timeout") === -1 && caught.indexOf("deadline") === -1) {
+  throw new Error("not reported as a timeout: " + caught);
+}
+`
+	start := time.Now()
+	err = rt.runScript("probe", compile(t, src), map[string]any{"url": srv.URL})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("the function did not complete, so the timeout was not catchable: %v", err)
+	}
+	if elapsed >= FunctionTimeout {
+		t.Fatalf("took %v: the %v VM budget fired, not the %v call deadline", elapsed, FunctionTimeout, OutboundTimeout)
+	}
+}
+
+// An uncaught $http failure must dead-letter AND let the checkpoint advance,
+// in BOTH tiers that can call out.
+//
+// The engine treats a returned error as "stop and retry this event next
+// pass", so an effect or reactor that returned one would re-run — and
+// re-issue the outbound call — forever against a third party that is down.
+// That is the retry storm the primitive exists to prevent, and nothing about
+// the binding's own no-retry rule would save it. Both tiers must swallow,
+// record, and move on.
+func TestOutboundFailureDeadLettersAndAdvancesTheCheckpoint(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	// allow-lists a host the functions do not call, so every call is refused
+	// without any network access at all
+	client, err := outbound.New(outbound.Config{
+		AllowedHosts: []string{"allowed.example.com"},
+		Timeout:      time.Second,
+		MaxInFlight:  2,
+		MaxBodyBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rt := NewGojaRuntime(nil)
+	rt.SetStore(store)
+	rt.SetOutbound(client)
+	rt.SetRegistry(decider.NewRegistry(store))
+
+	ev := events.Event{
+		Position: 7, ID: "e1", Aggregate: "order", AggregateID: "o1",
+		Sequence: 1, Type: "OrderPlaced", Data: json.RawMessage(`{}`),
+	}
+
+	// tier 1: an effect function whose call is refused and does not catch
+	if err := rt.RegisterEventFunction([]string{"OrderPlaced"}, "notify.js",
+		`$http.post("https://blocked.example.com/hook", "{}");`); err != nil {
+		t.Fatal(err)
+	}
+	cs := rt.Consumers()
+	if len(cs) != 1 {
+		t.Fatalf("expected one effect consumer, got %d", len(cs))
+	}
+	if err := cs[0].Apply(ctx, ev); err != nil {
+		t.Fatalf("the effect returned an error, so the engine would retry the event forever: %v", err)
+	}
+
+	// tier 4: same, through a reactor
+	reactor := &ReactorSpec{
+		Reactor:    "enrich",
+		EventTypes: []string{"OrderPlaced"},
+		Prog:       compile(t, `function reactTo(event) { $http.get("https://blocked.example.com/lookup"); return []; }`),
+		runtime:    rt,
+	}
+	if err := reactor.Apply(ctx, ev); err != nil {
+		t.Fatalf("the reactor returned an error, so the engine would retry the event forever: %v", err)
+	}
+
+	letters, err := store.DeadLetters(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, dl := range letters {
+		got[dl.Consumer] = dl.Error
+	}
+	for _, consumer := range []string{"fn:notify.js", "fn-reactor:enrich"} {
+		msg, ok := got[consumer]
+		if !ok {
+			t.Errorf("%s: no dead letter recorded; the failure vanished", consumer)
+			continue
+		}
+		if !strings.Contains(msg, "allow-list") {
+			t.Errorf("%s: dead letter does not say why: %q", consumer, msg)
+		}
 	}
 }
 

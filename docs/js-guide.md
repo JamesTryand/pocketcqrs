@@ -85,7 +85,7 @@ complete throws.
 | allow-list | Deployment-wide, from `--cqrsOutboundHost`. Exact hostnames, no wildcards. An **empty list permits nothing** — "no entries" is not "no restriction". |
 | address check | The **resolved IP** is checked again at dial time, so a hostile resolver cannot aim an allow-listed name at loopback or at `169.254.169.254`. Link-local is refused with no override; loopback and private ranges need `--cqrsAllowPrivateOutbound`. |
 | redirects | **Never followed.** A 3xx comes back to you; follow it yourself and the new URL is checked like any other call. |
-| timeout | 3s per call, under the 5s function budget, so **one** slow call fails as a catchable error rather than a VM interrupt. **This is a per-call bound, not a per-function one**: the 5s budget is armed once per execution, so two sequential slow calls exhaust it and the function *is* interrupted. Chain calls sparingly. |
+| timeout | 3s per call, under the 5s function budget, so **one** slow call fails as a catchable error rather than a VM interrupt. **This is a per-call bound, not a per-function one**: the 5s budget is armed once per execution, so two sequential slow calls exhaust it and the function *is* interrupted. A function's worst-case wall clock is therefore 5s + 3s — the budget cannot cut short a call already in flight, only the call after it. Chain calls sparingly. |
 | retry | **None.** One attempt. An uncaught throw dead-letters, and the checkpoint still advances — the same failure model effects already had. |
 | concurrency | A process-wide cap on in-flight calls. Over it, a call waits out its own deadline and then fails, so one chatty domain cannot starve the process. |
 | body size | Capped, and exceeding the cap is an **error, never a silent truncation**. |
