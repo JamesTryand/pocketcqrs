@@ -11,6 +11,26 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 )
 
+// AuthOrigins is PocketBase's own "_authOrigins" collection, safe to add to
+// Register's collections alongside the projection-owned ones (F-6).
+// PocketBase writes it directly during login (`authAlert`, tracking device
+// fingerprints for the "new device" alert) — outside the event log, on any
+// node that serves the login request. That write's own error is already
+// caught and only logged as a warning by PocketBase itself
+// (apis.recordAuthResponse: "Failed to send login alert"), never surfaced to
+// the caller, so guarding it costs nothing: login keeps working exactly as
+// before, and what was a silent, unguarded write becomes a loud, denied one
+// like every other out-of-band write this package stops.
+//
+// This does NOT extend to PocketBase's other auth-adjacent collections
+// (_users, _superusers, _otps, _mfas): guarding those would block PocketBase's
+// own stock signup/password-change/OTP/MFA endpoints outright, since those
+// writes ARE the point of the request, not a best-effort side effect. Whether
+// user identity should be a PocketBase auth record or a modelled aggregate is
+// an open, project-specific decision (see NEEDS.md) — not something core can
+// decide generically by extending this list.
+const AuthOrigins = "_authOrigins"
+
 type markerKey struct{}
 
 // MarkInternal returns a context flagged as an internal (projection) write.

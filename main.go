@@ -373,7 +373,9 @@ func main() {
 			}
 		}
 
-		writeguard.Register(e.App, cols...)
+		// _authOrigins is PocketBase's own collection, not projection-owned,
+		// but safe to guard alongside them — see writeguard.AuthOrigins (F-6).
+		writeguard.Register(e.App, append(cols, writeguard.AuthOrigins)...)
 
 		// effect functions: durable delivery through the consumers engine
 		for _, fc := range rt.Consumers() {
