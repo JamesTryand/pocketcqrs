@@ -34,6 +34,14 @@ import (
 // margin without letting the table grow unboundedly.
 const idempotencyRetention = 24 * time.Hour
 
+// Node roles for --cqrsRole (see SCALING.md's single-writer/multi-reader
+// design). roleMaster is this project's entire behavior before this flag
+// existed; roleSecondary is new and additive.
+const (
+	roleMaster    = "master"
+	roleSecondary = "secondary"
+)
+
 // components is filled during bootstrap, before the server starts.
 type components struct {
 	app         core.App
@@ -44,6 +52,10 @@ type components struct {
 	httpFns     *functions.HTTPRegistry
 	jsProjs     []*functions.JSProjection
 	fnRuntime   *functions.GojaRuntime
+
+	// role mirrors --cqrsRole (roleMaster or roleSecondary), set once
+	// immediately after ParseFlags, same lifecycle as tutorial below.
+	role string
 
 	// outbound backs the $http binding, or is nil when
 	// --cqrsAllowOutboundHTTP is absent (the default). Held here because a
@@ -148,6 +160,39 @@ func main() {
 		"register this repo's example domains (task, order) and their collections; off by default — pocketcqrs ships empty",
 	)
 
+	// Node role for the single-writer/multi-reader deployment (story 2,
+	// SCALING.md): a secondary polls a replicated events.db read-only
+	// instead of appending to it, and checkpoints its own consumers
+	// separately since the read-only store can't hold them (see
+	// consumers.NewEngineWithCheckpoints, and events.ErrReadOnly below).
+	// What this flag does NOT do: forward commands or auth traffic to a
+	// master (item 3, unbuilt) — a secondary refuses commands outright
+	// (503) rather than silently accepting ones it can't durably apply.
+	var role string
+	app.RootCmd.PersistentFlags().StringVar(
+		&role,
+		"cqrsRole",
+		roleMaster,
+		"this node's role: "+roleMaster+" (default, appends to events.db) or "+roleSecondary+
+			" (polls a replicated events.db read-only; commands are refused, not forwarded)",
+	)
+	var vfs string
+	app.RootCmd.PersistentFlags().StringVar(
+		&vfs,
+		"cqrsVFS",
+		"",
+		"the SQLite VFS name events.db is opened through when --cqrsRole="+roleSecondary+
+			" (e.g. a Litestream-provided VFS already registered with the driver); empty opens the plain file read-only",
+	)
+	var eventsPathOverride string
+	app.RootCmd.PersistentFlags().StringVar(
+		&eventsPathOverride,
+		"cqrsEventsPath",
+		"",
+		"path to events.db, overriding the default of <dir>/events.db; a "+roleSecondary+
+			" needs this to point at the master's replicated file rather than its own local one",
+	)
+
 	app.RootCmd.AddCommand(newProjectionCommand(c))
 	app.RootCmd.AddCommand(newDeadletterCommand(c))
 	app.RootCmd.AddCommand(newDryrunCommand(c))
@@ -158,6 +203,10 @@ func main() {
 	app.RootCmd.AddCommand(newSkillCommand())
 	app.RootCmd.ParseFlags(os.Args[1:])
 	c.tutorial = tutorial
+	if role != roleMaster && role != roleSecondary {
+		log.Fatalf("invalid --cqrsRole %q (want %q or %q)", role, roleMaster, roleSecondary)
+	}
+	c.role = role
 
 	// Registering the example migrations is a decision, taken here: an
 	// unregistered migration is never applied AND never recorded, so the
@@ -185,12 +234,37 @@ func main() {
 		// would run them later (apis.Serve), which is too late for
 		// ReconcileSchemas — relation targets may be migration-created
 		// collections. Idempotent; system migrations already ran in e.Next().
+		//
+		// Runs identically on every role: it only ever touches data.db (via
+		// PocketBase's own migration runner), never events.db. Each node's
+		// data.db is local and always writable regardless of role — that is
+		// not a new risk this flag introduces, it's what a single instance
+		// already does today (SCALING.md).
 		if err := e.App.RunAppMigrations(); err != nil {
 			return err
 		}
 
-		// event store (source of truth) next to PocketBase's data.db
-		store, err := events.Open(filepath.Join(dataDir, "events.db"))
+		// event store (source of truth), next to PocketBase's data.db by
+		// default. roleSecondary polls a replica read-only instead of
+		// appending to it — see events.OpenReadOnly's doc comment for what
+		// that means for every write method on the returned Store — and
+		// needs --cqrsEventsPath to point at the master's file, since a
+		// secondary's own data.db must stay local and independent.
+		eventsPath := eventsPathOverride
+		if eventsPath == "" {
+			eventsPath = filepath.Join(dataDir, "events.db")
+		}
+		var store *events.Store
+		var err error
+		if c.role == roleSecondary {
+			var opts []events.OpenOption
+			if vfs != "" {
+				opts = append(opts, events.WithVFS(vfs))
+			}
+			store, err = events.OpenReadOnly(eventsPath, opts...)
+		} else {
+			store, err = events.Open(eventsPath)
+		}
 		if err != nil {
 			return err
 		}
@@ -220,9 +294,21 @@ func main() {
 
 		logger := e.App.Logger()
 
-		// durable consumption of the log (projections + functions)
-		c.engine = consumers.NewEngine(store,
-			func(msg string, args ...any) { logger.Warn(msg, args...) })
+		// durable consumption of the log (projections + functions). A
+		// secondary's store can't hold its own checkpoints (it's read-only —
+		// events.SaveCheckpoint would fail every tick with events.ErrReadOnly),
+		// so it checkpoints to a separate, ordinary, locally writable store
+		// instead — the shape consumers.NewEngineWithCheckpoints exists for.
+		engineLogger := func(msg string, args ...any) { logger.Warn(msg, args...) }
+		if c.role == roleSecondary {
+			checkpoints, err := events.Open(filepath.Join(dataDir, "checkpoints.db"))
+			if err != nil {
+				return err
+			}
+			c.engine = consumers.NewEngineWithCheckpoints(store, checkpoints, engineLogger)
+		} else {
+			c.engine = consumers.NewEngine(store, engineLogger)
+		}
 
 		// read side: projections into PocketBase collections
 		projs := c.allProjections(e.App)

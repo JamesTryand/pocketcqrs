@@ -53,6 +53,8 @@ type harness struct {
 	BackendURL   string
 	DashboardURL string
 	FunctionsDir string
+	DataDir      string
+	Bin          string
 	Token        string
 
 	client *http.Client
@@ -97,7 +99,7 @@ func startBackendFlags(t *testing.T, functions map[string]string, extra ...strin
 	}
 
 	addr := freeAddr(t)
-	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, client: newClient(t)}
+	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: bin, client: newClient(t)}
 	args := append([]string{
 		"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir,
 	}, extra...)

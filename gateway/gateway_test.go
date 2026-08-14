@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/apis"
@@ -27,18 +28,22 @@ type taskState struct{ Exists bool }
 
 func newTestGateway(t *testing.T, idem *idempotency.Store) *httptest.Server {
 	t.Helper()
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return newTestGatewayWithStore(t, store, idem)
+}
+
+func newTestGatewayWithStore(t *testing.T, store *events.Store, idem *idempotency.Store) *httptest.Server {
+	t.Helper()
 
 	app, err := tests.NewTestApp()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(app.Cleanup)
-
-	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
 
 	registry := decider.NewRegistry(store)
 	decider.Register(registry, "task", &decider.Decider[taskState]{
@@ -183,5 +188,30 @@ func TestGatewayDifferentKeysBothApply(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for an independent key, got %d", resp.StatusCode)
+	}
+}
+
+func TestGatewayOnReadOnlyStoreRefusesWithServiceUnavailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.db")
+	writer, err := events.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+
+	ro, err := events.OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ro.Close() })
+
+	srv := newTestGatewayWithStore(t, ro, nil)
+
+	status, body := postCreate(t, srv, "")
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", status, body)
+	}
+	if !strings.Contains(body, "read-only replica") {
+		t.Fatalf("expected the read-only-replica message, got: %s", body)
 	}
 }

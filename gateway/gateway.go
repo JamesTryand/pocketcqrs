@@ -136,6 +136,15 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 				return apis.NewNotFoundError(err.Error(), err)
 			case errors.Is(err, events.ErrConcurrency):
 				return respondJSON(http.StatusConflict, map[string]string{"error": err.Error()})
+			case errors.Is(err, events.ErrReadOnly):
+				// this node is a --cqrsRole=secondary; nothing forwards
+				// commands to the master yet (item 3, unbuilt), so refuse
+				// outright rather than accept one that can never durably
+				// apply. Not cached for idempotency replay: no side effect
+				// happened, and which node answers is not a stable outcome.
+				return re.JSON(http.StatusServiceUnavailable, map[string]string{
+					"error": "this node is a read-only replica; commands must go to the master",
+				})
 			default:
 				return apis.NewBadRequestError(err.Error(), err)
 			}
