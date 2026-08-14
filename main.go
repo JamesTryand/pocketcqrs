@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -19,6 +20,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/gateway"
+	"github.com/jamestryand/pocketcqrs/idempotency"
 	"github.com/jamestryand/pocketcqrs/migrations"
 	"github.com/jamestryand/pocketcqrs/outbound"
 	"github.com/jamestryand/pocketcqrs/projections"
@@ -26,15 +28,22 @@ import (
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
+// idempotencyRetention bounds how long a gateway idempotency record is kept
+// before StartPruner deletes it. A client retrying after an ambiguous
+// timeout does so within seconds to minutes, not days; 24h leaves ample
+// margin without letting the table grow unboundedly.
+const idempotencyRetention = 24 * time.Hour
+
 // components is filled during bootstrap, before the server starts.
 type components struct {
-	app       core.App
-	store     *events.Store
-	registry  *decider.Registry
-	engine    *consumers.Engine
-	httpFns   *functions.HTTPRegistry
-	jsProjs   []*functions.JSProjection
-	fnRuntime *functions.GojaRuntime
+	app         core.App
+	store       *events.Store
+	idempotency *idempotency.Store
+	registry    *decider.Registry
+	engine      *consumers.Engine
+	httpFns     *functions.HTTPRegistry
+	jsProjs     []*functions.JSProjection
+	fnRuntime   *functions.GojaRuntime
 
 	// outbound backs the $http binding, or is nil when
 	// --cqrsAllowOutboundHTTP is absent (the default). Held here because a
@@ -186,6 +195,15 @@ func main() {
 			return err
 		}
 		c.store = store
+
+		// idempotency records for the command gateway: a separate small
+		// SQLite file, deliberately off events.db's hot append path.
+		idem, err := idempotency.Open(filepath.Join(dataDir, "idempotency.db"))
+		if err != nil {
+			return err
+		}
+		c.idempotency = idem
+		gatewayCfg.Idempotency = idem
 
 		// write side: deciders + command handling. The platform registers no
 		// aggregates of its own — task and order are example content, and
@@ -382,6 +400,8 @@ func main() {
 		registerCatalogRoute(e, c)
 		registerOpsRoutes(e, c)
 		c.engine.Start(context.Background())
+		c.idempotency.StartPruner(context.Background(), time.Hour, idempotencyRetention,
+			func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
 		return e.Next()
 	})
 
