@@ -2,6 +2,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,24 @@ type Config struct {
 	// twice. Requests without the header are unaffected either way. Nil
 	// disables the feature entirely (today's behavior).
 	Idempotency *idempotency.Store
+	// Forward, when set, proxies every command request to it instead of
+	// deciding locally — the shape a --cqrsRole=secondary node uses to
+	// reach the master (item 3). A plain net/http.Handler, deliberately:
+	// any transport that can turn an *http.Request into a response written
+	// to an http.ResponseWriter satisfies it — httputil.NewSingleHostReverseProxy
+	// for the built-in HTTP default, or (in pocketcqrs-extensions) a NATS
+	// request-reply adapter doing its own protocol translation behind the
+	// same interface. Nil (the default) means this node decides commands
+	// itself, exactly as before this field existed.
+	//
+	// When set, RegisterRoutes does not bind apis.RequireAuth regardless of
+	// AllowAnonymous: this node's own auth records are not authoritative
+	// (see F-12 — a secondary's _users/_superusers tables are independent,
+	// divergent tables, not a replica of the master's), so checking a token
+	// against them here could wrongly reject a valid one. The forwarded
+	// request carries the caller's original Authorization header; the
+	// destination's own gateway is what actually authenticates it.
+	Forward http.Handler
 }
 
 // RegisterRoutes binds the command endpoint:
@@ -56,8 +75,32 @@ type Config struct {
 // header, a retry with the same key and request replays the original 200
 // or 409 response verbatim rather than re-deciding the command; the same
 // key with a different aggregate/id/command/body returns 422.
+//
+// If Config.Forward is set, every command request is proxied to it
+// immediately — no local Mode check, no local auth check, no local decide —
+// and everything above this paragraph describes the destination's behavior,
+// not this node's.
 func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) {
 	route := e.Router.POST("/api/cqrs/{aggregate}/{id}/{command}", func(re *core.RequestEvent) error {
+		if cfg.Forward != nil {
+			// PocketBase wraps the request body in a RereadableReadCloser
+			// that silently rewinds on EOF instead of staying exhausted
+			// (tools/router/rereadable_read_closer.go) — handed straight to
+			// httputil.ReverseProxy, that rewind reads back through the
+			// already-sent bytes a second time, and the outbound request
+			// ends up with more body than its own Content-Length promised
+			// ("ContentLength=2 with Body length 4" for a 2-byte "{}").
+			// Replacing it with a plain, single-pass reader avoids the
+			// interaction entirely.
+			body, err := io.ReadAll(re.Request.Body)
+			if err != nil {
+				return apis.NewBadRequestError("failed reading request body", err)
+			}
+			re.Request.Body = io.NopCloser(bytes.NewReader(body))
+			re.Request.ContentLength = int64(len(body))
+			cfg.Forward.ServeHTTP(re.Response, re.Request)
+			return nil
+		}
 		if cfg.Mode != nil {
 			mode, err := cfg.Mode(re.Request.Context())
 			if err != nil {
@@ -137,11 +180,12 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 			case errors.Is(err, events.ErrConcurrency):
 				return respondJSON(http.StatusConflict, map[string]string{"error": err.Error()})
 			case errors.Is(err, events.ErrReadOnly):
-				// this node is a --cqrsRole=secondary; nothing forwards
-				// commands to the master yet (item 3, unbuilt), so refuse
-				// outright rather than accept one that can never durably
-				// apply. Not cached for idempotency replay: no side effect
-				// happened, and which node answers is not a stable outcome.
+				// this node is a --cqrsRole=secondary with no Forward
+				// configured (Forward, when set, is checked before any of
+				// this runs — see the top of the handler), so refuse
+				// outright rather than accept a command that can never
+				// durably apply. Not cached for idempotency replay: no side
+				// effect happened, and which node answers is not stable.
 				return re.JSON(http.StatusServiceUnavailable, map[string]string{
 					"error": "this node is a read-only replica; commands must go to the master",
 				})
@@ -153,7 +197,7 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		return respondJSON(http.StatusOK, map[string]any{"events": appended})
 	})
 
-	if !cfg.AllowAnonymous {
+	if !cfg.AllowAnonymous && cfg.Forward == nil {
 		route.Bind(apis.RequireAuth())
 	}
 }

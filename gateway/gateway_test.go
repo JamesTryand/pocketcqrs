@@ -2,11 +2,14 @@ package gateway_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,6 +41,11 @@ func newTestGateway(t *testing.T, idem *idempotency.Store) *httptest.Server {
 
 func newTestGatewayWithStore(t *testing.T, store *events.Store, idem *idempotency.Store) *httptest.Server {
 	t.Helper()
+	return newTestGatewayWithConfig(t, store, gateway.Config{AllowAnonymous: true, Idempotency: idem})
+}
+
+func newTestGatewayWithConfig(t *testing.T, store *events.Store, cfg gateway.Config) *httptest.Server {
+	t.Helper()
 
 	app, err := tests.NewTestApp()
 	if err != nil {
@@ -66,8 +74,7 @@ func newTestGatewayWithStore(t *testing.T, store *events.Store, idem *idempotenc
 	if err != nil {
 		t.Fatal(err)
 	}
-	gateway.RegisterRoutes(&core.ServeEvent{App: app, Router: pbRouter}, registry,
-		gateway.Config{AllowAnonymous: true, Idempotency: idem})
+	gateway.RegisterRoutes(&core.ServeEvent{App: app, Router: pbRouter}, registry, cfg)
 
 	mux, err := pbRouter.BuildMux()
 	if err != nil {
@@ -213,5 +220,101 @@ func TestGatewayOnReadOnlyStoreRefusesWithServiceUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(body, "read-only replica") {
 		t.Fatalf("expected the read-only-replica message, got: %s", body)
+	}
+}
+
+func TestGatewayForwardsToConfiguredTarget(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"events":[{"type":"FromMaster"}]}`))
+	}))
+	defer master.Close()
+
+	masterURL, err := url.Parse(master.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv := newTestGatewayWithConfig(t, store, gateway.Config{
+		AllowAnonymous: true,
+		Forward:        httputil.NewSingleHostReverseProxy(masterURL),
+	})
+
+	status, body := postCreate(t, srv, "")
+	if status != http.StatusOK {
+		t.Fatalf("expected the proxied 200, got %d: %s", status, body)
+	}
+	if !strings.Contains(body, "FromMaster") {
+		t.Fatalf("expected the master's response verbatim, got: %s", body)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Fatalf("expected the master to see POST, got %s", gotMethod)
+	}
+	if gotPath != "/api/cqrs/task/t1/Create" {
+		t.Fatalf("expected the original path forwarded verbatim, got %s", gotPath)
+	}
+	if gotBody != "{}" {
+		t.Fatalf("expected the original body forwarded verbatim, got %q", gotBody)
+	}
+
+	// the local decider must never have run: no event exists in this
+	// node's own store, since Forward short-circuits before any local
+	// decide/append is attempted
+	stream, err := store.LoadStream(context.Background(), "task", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stream) != 0 {
+		t.Fatalf("expected no local events (forwarding must bypass local decide), got %d", len(stream))
+	}
+}
+
+func TestGatewayForwardSkipsLocalAuthCheck(t *testing.T) {
+	reached := false
+	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"events":[]}`))
+	}))
+	defer master.Close()
+
+	masterURL, err := url.Parse(master.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// AllowAnonymous is deliberately false: without Forward this would
+	// require a valid token. With Forward set, no local auth check should
+	// ever run -- the destination is the one that authenticates.
+	srv := newTestGatewayWithConfig(t, store, gateway.Config{
+		AllowAnonymous: false,
+		Forward:        httputil.NewSingleHostReverseProxy(masterURL),
+	})
+
+	status, body := postCreate(t, srv, "") // no Authorization header
+	if status != http.StatusOK {
+		t.Fatalf("expected the request to reach the forward target despite no local auth, got %d: %s", status, body)
+	}
+	if !reached {
+		t.Fatal("the forward target was never reached")
 	}
 }

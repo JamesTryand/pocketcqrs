@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -192,6 +194,19 @@ func main() {
 		"path to events.db, overriding the default of <dir>/events.db; a "+roleSecondary+
 			" needs this to point at the master's replicated file rather than its own local one",
 	)
+	// Command forwarding (item 3): only meaningful on a secondary. Empty
+	// (the default) leaves a secondary refusing commands outright (see
+	// events.ErrReadOnly in gateway.go) -- a deliberate choice, e.g. a
+	// pure reporting replica that should never accept write traffic even
+	// via forwarding.
+	var masterAddr string
+	app.RootCmd.PersistentFlags().StringVar(
+		&masterAddr,
+		"cqrsMasterAddr",
+		"",
+		"the master's base URL (e.g. http://master:8090); when set on --cqrsRole="+roleSecondary+
+			", commands are proxied there instead of refused. No effect on "+roleMaster,
+	)
 
 	app.RootCmd.AddCommand(newProjectionCommand(c))
 	app.RootCmd.AddCommand(newDeadletterCommand(c))
@@ -207,6 +222,18 @@ func main() {
 		log.Fatalf("invalid --cqrsRole %q (want %q or %q)", role, roleMaster, roleSecondary)
 	}
 	c.role = role
+
+	if masterAddr != "" {
+		if role != roleSecondary {
+			log.Printf("warning: --cqrsMasterAddr is set but --cqrsRole=%s ignores it (only %s forwards)", role, roleSecondary)
+		} else {
+			masterURL, err := url.Parse(masterAddr)
+			if err != nil || masterURL.Scheme == "" || masterURL.Host == "" {
+				log.Fatalf("invalid --cqrsMasterAddr %q: want a full base URL, e.g. http://master:8090", masterAddr)
+			}
+			gatewayCfg.Forward = httputil.NewSingleHostReverseProxy(masterURL)
+		}
+	}
 
 	// Registering the example migrations is a decision, taken here: an
 	// unregistered migration is never applied AND never recorded, so the

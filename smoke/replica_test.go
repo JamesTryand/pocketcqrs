@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,8 +14,10 @@ import (
 // startSecondary boots a second, independent pocketcqrs process against its
 // own data dir, pointed at master's events.db via --cqrsEventsPath — the
 // single-writer/multi-reader shape (item 2). It reuses master's already-built
-// binary rather than building a second copy.
-func startSecondary(t *testing.T, master *harness) *harness {
+// binary rather than building a second copy. extra is appended to the serve
+// args, e.g. "--cqrsMasterAddr", master.BackendURL to also wire forwarding
+// (item 3).
+func startSecondary(t *testing.T, master *harness, extra ...string) *harness {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -35,9 +38,11 @@ func startSecondary(t *testing.T, master *harness) *harness {
 	addr := freeAddr(t)
 	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: master.Bin, client: newClient(t)}
 	masterEventsPath := filepath.Join(master.DataDir, "events.db")
-	serve(t, master.Bin, dir, "secondary",
+	args := append([]string{
 		"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir, "--tutorial",
-		"--cqrsRole", "secondary", "--cqrsEventsPath", masterEventsPath)
+		"--cqrsRole", "secondary", "--cqrsEventsPath", masterEventsPath,
+	}, extra...)
+	serve(t, master.Bin, dir, "secondary", args...)
 	waitFor(t, h.BackendURL+"/api/health")
 
 	h.Token = h.authenticate()
@@ -92,8 +97,10 @@ func TestSecondaryPollsMasterEventsReadOnly(t *testing.T) {
 		return status == http.StatusOK && len(records.Items) == 1 && records.Items[0].Title == "replicated"
 	})
 
-	// commands are refused outright -- nothing forwards them to the master
-	// yet (item 3, unbuilt)
+	// commands are refused outright -- this secondary has no --cqrsMasterAddr
+	// configured, a deliberate choice (a pure reporting replica should never
+	// accept write traffic even via forwarding -- see TestSecondaryForwardsCommandsToMaster
+	// for the case where forwarding IS configured, item 3)
 	status, body := secondary.api(http.MethodPost, "/api/cqrs/task/t2/CreateTask",
 		jsonBody(map[string]string{"title": "should not apply"}), nil)
 	if status != http.StatusServiceUnavailable {
@@ -113,4 +120,58 @@ func TestSecondaryPollsMasterEventsReadOnly(t *testing.T) {
 			t.Fatal("t2 must not exist on the master: the secondary's refused command must not have leaked through")
 		}
 	}
+}
+
+// TestSecondaryForwardsCommandsToMaster is the end-to-end proof for item 3:
+// a command sent to the SECONDARY actually gets applied, via forwarding, on
+// the master -- a real two-process HTTP reverse proxy hop, not a mock.
+func TestSecondaryForwardsCommandsToMaster(t *testing.T) {
+	master := startBackend(t, nil) // --tutorial
+	secondary := startSecondary(t, master, "--cqrsMasterAddr", master.BackendURL)
+
+	// the request carries the MASTER's token, not the secondary's: the two
+	// nodes' auth records are unrelated (F-12), and Forward skips local auth
+	// entirely on the secondary -- the destination is the one that
+	// authenticates, exactly as gateway.Config.Forward's doc comment says.
+	resp := secondary.do(http.MethodPost, secondary.BackendURL+"/api/cqrs/task/t3/CreateTask",
+		jsonBody(map[string]string{"title": "via secondary"}), map[string]string{"Authorization": master.Token})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 from the forwarded command, got %d: %s", resp.StatusCode, b)
+	}
+
+	// it landed on the MASTER, not applied locally on the secondary
+	var masterStreams struct {
+		Streams []struct{ AggregateID string } `json:"streams"`
+	}
+	master.apiOK(http.MethodGet, "/api/cqrs/streams?aggregate=task", nil, &masterStreams)
+	found := false
+	for _, s := range masterStreams.Streams {
+		if s.AggregateID == "t3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected t3 to exist on the master after a command forwarded through the secondary")
+	}
+
+	// and it replicates back to the secondary via the ordinary read path,
+	// exactly like any other master-originated event -- forwarding a write
+	// does not create a second, special channel
+	eventually(t, "the secondary to see t3 via replication", func() bool {
+		var feed struct {
+			Events []struct{ AggregateID string } `json:"events"`
+		}
+		status, _ := secondary.api(http.MethodGet, "/api/cqrs/events?aggregate=task", nil, &feed)
+		if status != http.StatusOK {
+			return false
+		}
+		for _, e := range feed.Events {
+			if e.AggregateID == "t3" {
+				return true
+			}
+		}
+		return false
+	})
 }
