@@ -3,6 +3,7 @@ package consumers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -117,6 +118,57 @@ func TestUnregisterStopsDeliveryAndCheckpointResumes(t *testing.T) {
 	}
 	if rec.count() != 2 || rec.seen[1].AggregateID != "t2" {
 		t.Fatalf("expected checkpoint resume with t2, got %+v", rec.seen)
+	}
+}
+
+func TestEngineWithSeparateCheckpointStore(t *testing.T) {
+	dir := t.TempDir()
+	writer := openStore(t, &dir)
+	defer writer.Close()
+	ctx := context.Background()
+
+	appendOne(t, writer, "t1")
+
+	ro, err := events.OpenReadOnly(filepath.Join(dir, "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+
+	// a replica's own checkpoints must not live in the read-only store
+	if err := ro.SaveCheckpoint(ctx, "rec", 1); !errors.Is(err, events.ErrReadOnly) {
+		t.Fatalf("expected ErrReadOnly from the read-only store, got %v", err)
+	}
+
+	checkpoints := openStore(t, new(string)) // separate file, locally writable
+	defer checkpoints.Close()
+
+	rec := &recorder{}
+	engine := NewEngineWithCheckpoints(ro, checkpoints, nil)
+	engine.Register(rec)
+
+	if err := engine.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.count() != 1 {
+		t.Fatalf("expected 1 delivered, got %d", rec.count())
+	}
+
+	pos, err := checkpoints.Checkpoint(ctx, rec.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pos != rec.seen[0].Position {
+		t.Fatalf("checkpoint %d does not match delivered event position %d", pos, rec.seen[0].Position)
+	}
+
+	// a second pass delivers nothing new: the checkpoint durably advanced
+	// in the separate store, not the read-only one
+	if err := engine.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.count() != 1 {
+		t.Fatalf("expected still 1 after second pass, got %d", rec.count())
 	}
 }
 

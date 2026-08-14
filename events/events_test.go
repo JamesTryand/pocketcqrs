@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -17,6 +18,68 @@ func openTest(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+func TestOpenReadOnlyRejectsWrites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.db")
+
+	writer, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := writer.Append(ctx, "task", "t1", 0, []NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+
+	ro, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ro.Close() })
+
+	// reads work fine
+	stream, err := ro.LoadStream(ctx, "task", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stream) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(stream))
+	}
+
+	// every write method fails fast with ErrReadOnly, not an opaque
+	// SQLite error
+	if _, err := ro.Append(ctx, "task", "t1", 1, []NewEvent{
+		{Type: "TaskCompleted", Data: json.RawMessage(`{}`)},
+	}); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("Append: expected ErrReadOnly, got %v", err)
+	}
+	if err := ro.SaveCheckpoint(ctx, "consumer", 1); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("SaveCheckpoint: expected ErrReadOnly, got %v", err)
+	}
+	if err := ro.SetMeta(ctx, "k", "v"); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("SetMeta: expected ErrReadOnly, got %v", err)
+	}
+	if err := ro.SetMode(ctx, ModeMaintenance); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("SetMode: expected ErrReadOnly, got %v", err)
+	}
+}
+
+func TestOpenReadOnlyDoesNotCreateMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "does-not-exist.db")
+
+	_, err := OpenReadOnly(path)
+	if err == nil {
+		t.Fatal("expected an error opening a nonexistent database read-only")
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Fatal("OpenReadOnly must not create the file it failed to open")
+	}
 }
 
 func TestAppendAndLoadStream(t *testing.T) {

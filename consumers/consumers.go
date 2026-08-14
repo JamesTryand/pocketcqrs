@@ -1,6 +1,9 @@
 // Package consumers provides the shared checkpointed-consumption engine:
 // named consumers follow the event log in position order with durable
-// checkpoints (stored in the event store), so delivery survives restarts.
+// checkpoints, so delivery survives restarts. Checkpoints normally live in
+// the same event store being polled (NewEngine); a read-only replica polls
+// one store but checkpoints to a different, locally writable one
+// (NewEngineWithCheckpoints).
 //
 // Projections and event-triggered functions are both consumers. Delivery is
 // at-least-once: a consumer's Apply must be idempotent, or accept that a
@@ -24,10 +27,29 @@ type Consumer interface {
 	Apply(ctx context.Context, ev events.Event) error
 }
 
-// Engine polls the event store and feeds every registered consumer
+// PollSource is the event feed an Engine follows: Poll for catch-up batches,
+// Subscribe for the in-process nudge that shortens the usual tick latency.
+// *events.Store satisfies this whether opened with Open or OpenReadOnly.
+type PollSource interface {
+	Poll(ctx context.Context, after int64, limit int) ([]events.Event, error)
+	Subscribe(fn func(events.Event))
+}
+
+// CheckpointStore durably persists consumer progress. *events.Store
+// satisfies this, but only when opened with Open — a Store opened with
+// OpenReadOnly returns events.ErrReadOnly from SaveCheckpoint, which is why
+// a secondary polling a read-only replica needs a *different*,
+// locally-writable CheckpointStore (see NewEngineWithCheckpoints).
+type CheckpointStore interface {
+	Checkpoint(ctx context.Context, name string) (int64, error)
+	SaveCheckpoint(ctx context.Context, name string, position int64) error
+}
+
+// Engine polls an event source and feeds every registered consumer
 // independently, each with its own durable checkpoint.
 type Engine struct {
-	store *events.Store
+	source      PollSource
+	checkpoints CheckpointStore
 
 	// mu guards consumers so the set can be swapped (hot reload) while
 	// the poll loop runs.
@@ -39,16 +61,30 @@ type Engine struct {
 	logger func(msg string, args ...any)
 }
 
-// NewEngine creates an Engine. logger may be nil (defaults to no-op).
+// NewEngine creates an Engine that both polls store and checkpoints
+// against it — the ordinary single-node/master shape. logger may be nil
+// (defaults to no-op).
 func NewEngine(store *events.Store, logger func(string, ...any)) *Engine {
+	return NewEngineWithCheckpoints(store, store, logger)
+}
+
+// NewEngineWithCheckpoints creates an Engine that polls source but saves
+// checkpoints to a separate checkpoints store. Use this on a
+// single-writer/multi-reader secondary: source is a Store opened with
+// events.OpenReadOnly against the replicated events.db, and checkpoints is
+// a normal, locally writable *events.Store (or anything else satisfying
+// CheckpointStore) the secondary owns outright. logger may be nil (defaults
+// to no-op).
+func NewEngineWithCheckpoints(source PollSource, checkpoints CheckpointStore, logger func(string, ...any)) *Engine {
 	if logger == nil {
 		logger = func(string, ...any) {}
 	}
 	return &Engine{
-		store:  store,
-		nudge:  make(chan struct{}, 1),
-		tick:   time.Second,
-		logger: logger,
+		source:      source,
+		checkpoints: checkpoints,
+		nudge:       make(chan struct{}, 1),
+		tick:        time.Second,
+		logger:      logger,
 	}
 }
 
@@ -88,7 +124,7 @@ func (e *Engine) Names() []string {
 // committed event (in-process nudge) and on a slow ticker fallback
 // (covers restarts and missed nudges).
 func (e *Engine) Start(ctx context.Context) {
-	e.store.Subscribe(func(events.Event) {
+	e.source.Subscribe(func(events.Event) {
 		select {
 		case e.nudge <- struct{}{}:
 		default:
@@ -121,12 +157,12 @@ func (e *Engine) RunOnce(ctx context.Context) error {
 	consumers := append([]Consumer(nil), e.consumers...)
 	e.mu.RUnlock()
 	for _, c := range consumers {
-		pos, err := e.store.Checkpoint(ctx, c.Name())
+		pos, err := e.checkpoints.Checkpoint(ctx, c.Name())
 		if err != nil {
 			return err
 		}
 		for {
-			batch, err := e.store.Poll(ctx, pos, 100)
+			batch, err := e.source.Poll(ctx, pos, 100)
 			if err != nil {
 				return err
 			}
@@ -139,7 +175,7 @@ func (e *Engine) RunOnce(ctx context.Context) error {
 						"consumer", c.Name(), "position", ev.Position, "error", err)
 					return err
 				}
-				if err := e.store.SaveCheckpoint(ctx, c.Name(), ev.Position); err != nil {
+				if err := e.checkpoints.SaveCheckpoint(ctx, c.Name(), ev.Position); err != nil {
 					return err
 				}
 				pos = ev.Position

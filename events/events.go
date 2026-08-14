@@ -23,6 +23,10 @@ import (
 // does not match the caller's expected sequence.
 var ErrConcurrency = errors.New("events: concurrency conflict")
 
+// ErrReadOnly is returned by every write method (Append, SaveCheckpoint,
+// SetMeta, SetMode) on a Store opened with OpenReadOnly.
+var ErrReadOnly = errors.New("events: store is read-only")
+
 // NewEvent is an event about to be appended.
 type NewEvent struct {
 	Type     string          `json:"type"`
@@ -90,6 +94,12 @@ const (
 type Store struct {
 	db *sql.DB
 
+	// readOnly marks a Store opened with OpenReadOnly: every write method
+	// fails fast with ErrReadOnly instead of surfacing an opaque SQLite
+	// error from a read-only connection (or, worse, a VFS that silently
+	// discards the write).
+	readOnly bool
+
 	// mu serializes appends so the expected-sequence check and the insert
 	// stay atomic from the store's point of view.
 	mu sync.Mutex
@@ -124,6 +134,58 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("events: migrate: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+// OpenOption configures OpenReadOnly.
+type OpenOption func(*openConfig)
+
+type openConfig struct {
+	vfs string
+}
+
+// WithVFS opens through a SQLite VFS already registered with the driver
+// under name (e.g. a Litestream-provided VFS mounting a replicated
+// events.db), instead of the ordinary OS filesystem.
+func WithVFS(name string) OpenOption {
+	return func(c *openConfig) { c.vfs = name }
+}
+
+// OpenReadOnly opens the event store at path for reading only: unlike Open,
+// it creates no schema, runs no migration, and returns a Store whose write
+// methods (Append, SaveCheckpoint, SetMeta, SetMode) all fail with
+// ErrReadOnly. path must already exist and be schema-current — the writer
+// that owns it (Open) is responsible for creating and migrating it.
+//
+// This is the entry point a single-writer/multi-reader secondary uses: it
+// VFS-mounts the master's replicated events.db (see WithVFS) and polls it,
+// but must never append to it directly. A secondary's own consumer
+// checkpoints cannot live in this Store either, for the same reason —
+// consumers.NewEngineWithCheckpoints takes a separate, locally writable
+// CheckpointStore for exactly this case.
+func OpenReadOnly(path string, opts ...OpenOption) (*Store, error) {
+	var cfg openConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=query_only(1)&mode=ro",
+		path)
+	if cfg.vfs != "" {
+		dsn += "&vfs=" + cfg.vfs
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("events: open read-only %s: %w", path, err)
+	}
+	// sql.Open never dials; without an eager check a missing file or
+	// not-yet-migrated schema would surface only on the caller's first
+	// Poll, not here.
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("events: open read-only %s: %w", path, err)
+	}
+	// no SetMaxOpenConns(1): there is no writer to keep happy, and readers
+	// benefit from concurrent connections in WAL mode.
+	return &Store{db: db, readOnly: true}, nil
 }
 
 // migrate applies store schema migrations idempotently.
@@ -164,6 +226,9 @@ func (s *Store) Close() error { return s.db.Close() }
 // length and appends evts. Sequences are 1-based and contiguous, so the
 // expected sequence equals the number of events already in the stream.
 func (s *Store) Append(ctx context.Context, aggregate, aggregateID string, expectedSequence int64, evts []NewEvent) ([]Event, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
 	if len(evts) == 0 {
 		return nil, nil
 	}
@@ -469,6 +534,9 @@ func (s *Store) Checkpoint(ctx context.Context, name string) (int64, error) {
 
 // SaveCheckpoint durably stores the position of a named consumer.
 func (s *Store) SaveCheckpoint(ctx context.Context, name string, position int64) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO projection_checkpoints (name, position) VALUES (?, ?)
 		 ON CONFLICT (name) DO UPDATE SET position = excluded.position`,
@@ -488,6 +556,9 @@ func (s *Store) GetMeta(ctx context.Context, key string) (string, error) {
 
 // SetMeta upserts a meta value.
 func (s *Store) SetMeta(ctx context.Context, key, value string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO meta (key, value) VALUES (?, ?)
 		 ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
