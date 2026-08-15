@@ -163,11 +163,44 @@ func (r *Registry) Handle(ctx context.Context, aggregate, id string, cmd Command
 // context, and it is recorded in the produced events — the time the
 // decider saw is part of history.
 func (r *Registry) HandleWithMeta(ctx context.Context, aggregate, id string, cmd Command, meta map[string]any) ([]events.Event, error) {
+	newEvents, expectedSequence, err := r.DecideWithMeta(ctx, r.store, aggregate, id, cmd, meta)
+	if err != nil {
+		return nil, err
+	}
+	if len(newEvents) == 0 {
+		return nil, nil
+	}
+	return r.store.Append(ctx, aggregate, id, expectedSequence, newEvents)
+}
+
+// StreamLoader loads a stream. *events.Store satisfies it (the ordinary
+// case, via HandleWithMeta); a caller controlling its own append — the
+// batching writer, deciding several commands before committing any of them
+// — can supply one that also sees not-yet-durable events from earlier in
+// the same batch, transparently to the decider itself.
+type StreamLoader interface {
+	LoadStream(ctx context.Context, aggregate, id string) ([]events.Event, error)
+}
+
+// DecideWithMeta is HandleWithMeta's fold-and-decide half, without the
+// append: it loads the stream via loader (not necessarily the registry's
+// own store), folds state, decides, merges meta onto every produced event's
+// metadata exactly as HandleWithMeta does, and returns the events plus the
+// expected sequence they were decided against — leaving the caller in
+// control of when and how the append transaction happens.
+//
+// "now" is stamped into meta under the same rule HandleWithMeta documents:
+// once at the top, if absent, before deciding — a caller that needs a
+// decide replayed later to reproduce byte-identical events (see the
+// batching writer's crash-recovery requirements) must capture and reuse
+// meta itself; DecideWithMeta only ever fills in what's missing, never
+// re-derives what's already there.
+func (r *Registry) DecideWithMeta(ctx context.Context, loader StreamLoader, aggregate, id string, cmd Command, meta map[string]any) ([]events.NewEvent, int64, error) {
 	r.mu.RLock()
 	d, ok := r.deciders[aggregate]
 	r.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownAggregate, aggregate)
+		return nil, 0, fmt.Errorf("%w: %q", ErrUnknownAggregate, aggregate)
 	}
 
 	if meta == nil {
@@ -177,31 +210,28 @@ func (r *Registry) HandleWithMeta(ctx context.Context, aggregate, id string, cmd
 		meta["now"] = time.Now().UTC().Format("2006-01-02 15:04:05.000Z")
 	}
 
-	stream, err := r.store.LoadStream(ctx, aggregate, id)
+	stream, err := loader.LoadStream(ctx, aggregate, id)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	state := d.initial()
 	for _, ev := range stream {
 		if state, err = d.evolve(state, ev); err != nil {
-			return nil, fmt.Errorf("decider: evolve %s/%s: %w", aggregate, id, err)
+			return nil, 0, fmt.Errorf("decider: evolve %s/%s: %w", aggregate, id, err)
 		}
 	}
 
 	newEvents, err := d.decide(cmd, state, meta)
 	if err != nil {
-		return nil, err
-	}
-	if len(newEvents) == 0 {
-		return nil, nil
+		return nil, 0, err
 	}
 
 	for i := range newEvents {
 		newEvents[i].Metadata = mergeMeta(newEvents[i].Metadata, meta)
 	}
 
-	return r.store.Append(ctx, aggregate, id, int64(len(stream)), newEvents)
+	return newEvents, int64(len(stream)), nil
 }
 
 // mergeMeta overlays extra onto the event's existing metadata (existing keys

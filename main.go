@@ -17,6 +17,8 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/jamestryand/pocketcqrs/aggregates"
+	"github.com/jamestryand/pocketcqrs/batching"
+	"github.com/jamestryand/pocketcqrs/commandqueue"
 	"github.com/jamestryand/pocketcqrs/consumers"
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
@@ -54,6 +56,11 @@ type components struct {
 	httpFns     *functions.HTTPRegistry
 	jsProjs     []*functions.JSProjection
 	fnRuntime   *functions.GojaRuntime
+
+	// batchWriter backs command batching (item 4), or is nil when
+	// --cqrsCommandBatching is absent (the default) or this node is a
+	// roleSecondary, which never runs its own writer.
+	batchWriter *batching.Writer
 
 	// role mirrors --cqrsRole (roleMaster or roleSecondary), set once
 	// immediately after ParseFlags, same lifecycle as tutorial below.
@@ -208,6 +215,30 @@ func main() {
 			", commands are proxied there instead of refused. No effect on "+roleMaster,
 	)
 
+	// Command batching (item 4): off by default -- deliberately, since it
+	// is the one item in the scaling proposal flagged as needing to be
+	// argued rather than adopted reflexively (FAULTS-AND-WORK.md). With it
+	// off, the gateway's behavior is exactly what it was before this flag
+	// existed. No effect on roleSecondary, which never runs its own writer
+	// (it forwards or refuses; see --cqrsMasterAddr).
+	var commandBatching bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&commandBatching,
+		"cqrsCommandBatching",
+		false,
+		"accumulate decided commands into batches committed in one transaction, instead of one "+
+			"transaction per command; raises write throughput under load at the cost of variable "+
+			"added latency, bounded by --cqrsBatchTimeout. Off by default.",
+	)
+	var batchTimeout time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&batchTimeout,
+		"cqrsBatchTimeout",
+		10*time.Second,
+		"how long a command waits for its batch to commit when --cqrsCommandBatching is set "+
+			"before returning 504; matches events.db's own busy_timeout by default",
+	)
+
 	app.RootCmd.AddCommand(newProjectionCommand(c))
 	app.RootCmd.AddCommand(newDeadletterCommand(c))
 	app.RootCmd.AddCommand(newDryrunCommand(c))
@@ -335,6 +366,19 @@ func main() {
 			c.engine = consumers.NewEngineWithCheckpoints(store, checkpoints, engineLogger)
 		} else {
 			c.engine = consumers.NewEngine(store, engineLogger)
+		}
+
+		// command batching (item 4): off by default, and never on a
+		// secondary -- it has no writable store to enqueue into or commit
+		// against (a secondary forwards or refuses; see --cqrsMasterAddr).
+		if commandBatching && c.role != roleSecondary {
+			queue, err := commandqueue.Open(filepath.Join(dataDir, "commandqueue.db"))
+			if err != nil {
+				return err
+			}
+			c.batchWriter = batching.NewWriter(store, queue, c.registry, engineLogger)
+			gatewayCfg.Batching = c.batchWriter
+			gatewayCfg.BatchTimeout = batchTimeout
 		}
 
 		// read side: projections into PocketBase collections
@@ -515,6 +559,9 @@ func main() {
 		registerCatalogRoute(e, c)
 		registerOpsRoutes(e, c)
 		c.engine.Start(context.Background())
+		if c.batchWriter != nil {
+			c.batchWriter.Start(context.Background())
+		}
 		c.idempotency.StartPruner(context.Background(), time.Hour, idempotencyRetention,
 			func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
 		return e.Next()

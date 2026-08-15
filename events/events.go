@@ -111,6 +111,15 @@ type Store struct {
 	// so it can be swapped (e.g. on function reload) while readers poll.
 	upcastMu sync.RWMutex
 	upcaster func(Event) (Event, error)
+
+	// CommitBatchFault, if set, is called by CommitBatch immediately
+	// before it would commit -- the exact point a real process crash
+	// between validating a batch and durably writing it would land. A
+	// non-nil return aborts the transaction (rolled back, nothing
+	// written) and is returned as CommitBatch's error, standing in for
+	// that crash without an actual process kill. For fault-injection
+	// testing only -- never set in production code.
+	CommitBatchFault func() error
 }
 
 // Open opens (creating if necessary) the event store at path.
@@ -215,7 +224,17 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 
-	_, err := db.Exec(`PRAGMA user_version = 3`)
+	// v4: partial index on the commandId a batching commit stamps into
+	// event metadata (see CommitBatch, CommandApplied) -- only indexes
+	// rows that actually carry one, so cost is proportional to actual
+	// batching use, not the whole table.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_events_command_id
+		ON events (json_extract(metadata, '$.commandId'))
+		WHERE json_extract(metadata, '$.commandId') IS NOT NULL`); err != nil {
+		return err
+	}
+
+	_, err := db.Exec(`PRAGMA user_version = 4`)
 	return err
 }
 

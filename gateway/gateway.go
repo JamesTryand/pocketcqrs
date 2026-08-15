@@ -8,10 +8,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/jamestryand/pocketcqrs/batching"
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/idempotency"
@@ -52,6 +54,19 @@ type Config struct {
 	// request carries the caller's original Authorization header; the
 	// destination's own gateway is what actually authenticates it.
 	Forward http.Handler
+	// Batching, when set, routes commands through the durable intake queue
+	// + batching event writer (item 4) instead of deciding inline: the
+	// handler enqueues the command then blocks until its own command's
+	// batch commits, returning the same synchronous (events, error) result
+	// HandleWithMeta always has. No correlation id, no polling, no
+	// client-visible contract change — just variable added latency under
+	// load, bounded by BatchTimeout. Nil (the default) is today's direct
+	// registry.HandleWithMeta call, unchanged.
+	Batching *batching.Writer
+	// BatchTimeout bounds how long a request waits for its batch to
+	// commit when Batching is set. Required (non-zero) whenever Batching
+	// is set; has no effect otherwise.
+	BatchTimeout time.Duration
 }
 
 // RegisterRoutes binds the command endpoint:
@@ -69,7 +84,13 @@ type Config struct {
 //
 // Returns 200 with the appended events, 400 for domain/validation errors,
 // 401 without a token, 404 for unknown aggregates, 409 for concurrency
-// conflicts, 503 in maintenance mode.
+// conflicts, 503 in maintenance mode, 504 if Config.Batching is set and the
+// command's batch does not commit within BatchTimeout.
+//
+// If Config.Batching is set, a command is enqueued and the handler blocks
+// until its own batch commits (item 4) instead of deciding inline — every
+// status above still applies identically, since the batching path produces
+// the same (events, error) shape the direct path always has.
 //
 // If Config.Idempotency is set and a request carries an Idempotency-Key
 // header, a retry with the same key and request replays the original 200
@@ -170,10 +191,20 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 			return re.Blob(status, "application/json", raw)
 		}
 
-		appended, err := registry.HandleWithMeta(re.Request.Context(), aggregate, id,
-			decider.Command{Name: cmdName, Payload: json.RawMessage(payload)},
-			actorMeta(re))
+		var appended []events.Event
+		if cfg.Batching != nil {
+			appended, err = handleViaBatching(re, cfg, aggregate, id, cmdName, payload)
+		} else {
+			appended, err = registry.HandleWithMeta(re.Request.Context(), aggregate, id,
+				decider.Command{Name: cmdName, Payload: json.RawMessage(payload)},
+				actorMeta(re))
+		}
 		if err != nil {
+			if errors.Is(err, errBatchTimeout) {
+				return re.JSON(http.StatusGatewayTimeout, map[string]string{
+					"error": "batch commit did not complete in time",
+				})
+			}
 			switch {
 			case errors.Is(err, decider.ErrUnknownAggregate):
 				return apis.NewNotFoundError(err.Error(), err)
@@ -199,6 +230,44 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 
 	if !cfg.AllowAnonymous && cfg.Forward == nil {
 		route.Bind(apis.RequireAuth())
+	}
+}
+
+// errBatchTimeout is handleViaBatching's sentinel for "the batch never
+// committed within Config.BatchTimeout" — mapped to 504 by RegisterRoutes,
+// not the generic 400 every other decide error gets.
+var errBatchTimeout = errors.New("gateway: batch commit did not complete in time")
+
+// handleViaBatching enqueues a command through cfg.Batching and blocks
+// until its own batch commits, returning the same (events, error) shape
+// registry.HandleWithMeta always has.
+//
+// "now" is captured here, once, before enqueueing — never left for a later
+// decide attempt (including a post-crash replay) to derive fresh. That is
+// what makes the batching writer's determinism guarantee hold in the first
+// place (see batching.Writer.Enqueue's doc comment); getting this wrong
+// here would silently defeat it regardless of how correct the writer
+// itself is.
+func handleViaBatching(re *core.RequestEvent, cfg Config, aggregate, id, cmdName string, payload []byte) ([]events.Event, error) {
+	meta := actorMeta(re)
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta["now"] = time.Now().UTC().Format("2006-01-02 15:04:05.000Z")
+
+	_, wait, err := cfg.Batching.Enqueue(re.Request.Context(), aggregate, id, cmdName, json.RawMessage(payload), meta)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(re.Request.Context(), cfg.BatchTimeout)
+	defer cancel()
+
+	select {
+	case outcome := <-wait:
+		return outcome.Events, outcome.Err
+	case <-ctx.Done():
+		return nil, errBatchTimeout
 	}
 }
 

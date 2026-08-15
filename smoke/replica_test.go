@@ -175,3 +175,36 @@ func TestSecondaryForwardsCommandsToMaster(t *testing.T) {
 		return false
 	})
 }
+
+// TestSecondaryForwardingUnaffectedByMasterBatching confirms item 3's
+// forwarding path is completely unaware of whether the master it forwards
+// to has command batching (item 4) turned on -- the secondary just proxies
+// the raw HTTP request either way, and gets back whatever the master's
+// gateway produces, synchronous batching path included.
+func TestSecondaryForwardingUnaffectedByMasterBatching(t *testing.T) {
+	master := startBackendFlags(t, nil, "--tutorial", "--cqrsCommandBatching")
+	secondary := startSecondary(t, master, "--cqrsMasterAddr", master.BackendURL)
+
+	resp := secondary.do(http.MethodPost, secondary.BackendURL+"/api/cqrs/task/t4/CreateTask",
+		jsonBody(map[string]string{"title": "via secondary, batched master"}),
+		map[string]string{"Authorization": master.Token})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 from the forwarded command against a batching master, got %d: %s", resp.StatusCode, b)
+	}
+
+	var masterStreams struct {
+		Streams []struct{ AggregateID string } `json:"streams"`
+	}
+	master.apiOK(http.MethodGet, "/api/cqrs/streams?aggregate=task", nil, &masterStreams)
+	found := false
+	for _, s := range masterStreams.Streams {
+		if s.AggregateID == "t4" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected t4 to exist on the batching master after a command forwarded through the secondary")
+	}
+}
