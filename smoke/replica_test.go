@@ -3,12 +3,16 @@
 package smoke
 
 import (
+	"database/sql"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 // startSecondary boots a second, independent pocketcqrs process against its
@@ -207,4 +211,75 @@ func TestSecondaryForwardingUnaffectedByMasterBatching(t *testing.T) {
 	if !found {
 		t.Fatal("expected t4 to exist on the batching master after a command forwarded through the secondary")
 	}
+}
+
+// TestSecondaryForwardsAuthCollectionWritesToMaster is the end-to-end proof
+// for item 5's remainder (F-12): PocketBase's own native auth traffic --
+// not just CQRS commands -- gets routed to the master, since a secondary's
+// _superusers table is a genuinely different table, not a stale replica of
+// the master's.
+func TestSecondaryForwardsAuthCollectionWritesToMaster(t *testing.T) {
+	master := startBackend(t, nil) // --tutorial
+	// --cqrsForwardAuth is required and deliberately separate from
+	// --cqrsMasterAddr (see main.go's flag help): enabling it means every
+	// token this secondary's own login flow hands out is master-signed and
+	// unverifiable by the secondary's own local routes (the JWT signing
+	// secret lives in data.db, never synced between nodes) -- so this test
+	// verifies "not applied locally" via the secondary's data.db directly,
+	// not an authenticated local HTTP read, which is exactly the
+	// limitation this flag's help text warns about.
+	secondary := startSecondary(t, master, "--cqrsMasterAddr", master.BackendURL, "--cqrsForwardAuth")
+
+	const newEmail = "forwarded-su@example.com"
+	const newPassword = "forwarded-pass-1234"
+
+	resp := secondary.do(http.MethodPost, secondary.BackendURL+"/api/collections/_superusers/records",
+		jsonBody(map[string]string{
+			"email": newEmail, "password": newPassword, "passwordConfirm": newPassword,
+		}), map[string]string{"Authorization": master.Token})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 creating a superuser via the secondary (forwarded to master), got %d: %s",
+			resp.StatusCode, b)
+	}
+
+	filterQuery := "?filter=" + url.QueryEscape("email='"+newEmail+"'")
+
+	// exists on the master
+	var masterList struct {
+		Items []struct {
+			Email string `json:"email"`
+		} `json:"items"`
+	}
+	master.apiOK(http.MethodGet, "/api/collections/_superusers/records"+filterQuery, nil, &masterList)
+	if len(masterList.Items) != 1 {
+		t.Fatalf("expected the forwarded superuser to exist on the master, got %d matches", len(masterList.Items))
+	}
+
+	// and NOT locally on the secondary -- checked directly against its
+	// data.db, since an authenticated HTTP read isn't available here (see
+	// the comment above)
+	if localSuperuserCount(t, secondary.DataDir, newEmail) != 0 {
+		t.Fatal("expected the forwarded write to NOT also have applied locally on the secondary")
+	}
+}
+
+// localSuperuserCount queries a node's own data.db directly for _superusers
+// rows matching email -- used where an authenticated HTTP read against that
+// node isn't available (see TestSecondaryForwardsAuthCollectionWritesToMaster).
+func localSuperuserCount(t *testing.T, dataDir, email string) int {
+	t.Helper()
+	dsn := "file:" + filepath.Join(dataDir, "data.db") + "?mode=ro&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM _superusers WHERE email = ?`, email).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }

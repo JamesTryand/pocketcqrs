@@ -17,6 +17,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/jamestryand/pocketcqrs/aggregates"
+	"github.com/jamestryand/pocketcqrs/authforward"
 	"github.com/jamestryand/pocketcqrs/batching"
 	"github.com/jamestryand/pocketcqrs/commandqueue"
 	"github.com/jamestryand/pocketcqrs/consumers"
@@ -215,6 +216,28 @@ func main() {
 			", commands are proxied there instead of refused. No effect on "+roleMaster,
 	)
 
+	// Auth-collection forwarding (item 5's remainder, F-12): deliberately a
+	// SEPARATE opt-in from --cqrsMasterAddr, not bundled with it, found
+	// necessary while wiring this up -- once PocketBase's own login flow
+	// forwards to the master, every token a client gets is signed with the
+	// MASTER's JWT secret, which a secondary's own LOCAL routes cannot
+	// verify (data.db, where the signing secret lives, is never synced
+	// between nodes). That silently breaks every authenticated LOCAL read
+	// on a secondary, which command-forwarding alone does not. An operator
+	// enabling --cqrsMasterAddr for CQRS commands should not unknowingly
+	// also break that just by doing so.
+	var forwardAuth bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&forwardAuth,
+		"cqrsForwardAuth",
+		false,
+		"route PocketBase's own native auth-collection traffic (_users/_superusers/etc, not just "+
+			"CQRS commands) to the master too, since a secondary's copy of those collections is a "+
+			"different table, not a stale replica. Requires --cqrsMasterAddr. WARNING: until the JWT "+
+			"signing secret is synced across nodes (not yet built), enabling this breaks authenticated "+
+			"LOCAL reads on this secondary -- every token becomes master-signed and unverifiable here.",
+	)
+
 	// Command batching (item 4): off by default -- deliberately, since it
 	// is the one item in the scaling proposal flagged as needing to be
 	// argued rather than adopted reflexively (FAULTS-AND-WORK.md). With it
@@ -253,6 +276,10 @@ func main() {
 		log.Fatalf("invalid --cqrsRole %q (want %q or %q)", role, roleMaster, roleSecondary)
 	}
 	c.role = role
+
+	if forwardAuth && masterAddr == "" {
+		log.Fatal("invalid flags: --cqrsForwardAuth requires --cqrsMasterAddr")
+	}
 
 	if masterAddr != "" {
 		if role != roleSecondary {
@@ -553,6 +580,20 @@ func main() {
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		gateway.RegisterRoutes(e, c.registry, gatewayCfg)
+		if forwardAuth && gatewayCfg.Forward != nil {
+			// item 5's remainder (F-12): PocketBase's own native auth
+			// traffic (_users/_superusers/etc.) needs the same
+			// forward-to-master treatment as CQRS commands, for a
+			// different reason -- a secondary's copy of those collections
+			// isn't a stale replica, it's a different table, so serving
+			// auth locally would read the wrong data before any write
+			// even happens. Reuses the exact same reverse proxy gatewayCfg
+			// .Forward already is. Deliberately gated on its OWN flag, not
+			// just gatewayCfg.Forward != nil -- see --cqrsForwardAuth's
+			// own help text for why it can't be bundled with
+			// --cqrsMasterAddr automatically.
+			authforward.Register(e, gatewayCfg.Forward)
+		}
 		functions.RegisterHTTPRoutes(e, c.httpFns, !gatewayCfg.AllowAnonymous)
 		registerReloadRoute(e, c, functionsDir)
 		registerFunctionAdminRoutes(e, c, functionsDir)
