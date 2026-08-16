@@ -121,6 +121,31 @@ caller on `events.ErrConcurrency` (gateway → 409).
 Deciders are pure: they return events, never touch the app or the store.
 Side effects belong to downstream consumers.
 
+### The calling actor: `Command.Actor` / `Command.Now`
+
+`cmd.Actor` is the authenticated caller's PocketBase auth-record id (empty
+for an anonymous or meta-less call); `cmd.Now` is the same stamped timestamp
+the registry records into the produced events' metadata — both populated by
+`Register[S]` from the `meta` map `HandleWithMeta`/the gateway supply,
+mirroring exactly what a JS decider's `command.actor`/`command.now` binding
+already receives ([js-guide.md](js-guide.md#deciders-tier-3)):
+
+```go
+case "GrantRotaPermission":
+	if cmd.Actor == "" || !s.PermissionHolders[cmd.Actor] {
+		return nil, errors.New("actor lacks permission")
+	}
+	// ...
+```
+
+Use `cmd.Actor` for authorization the same way a JS decider does — checking
+who's calling against folded state — and `cmd.Now` instead of `time.Now()`
+for anything time-stamped, for the same determinism reason JS deciders are
+barred from `Date` entirely: a Go decider *can* call `time.Now()` (nothing
+stops it), but doing so breaks the same replay-reproducibility guarantee, so
+treat the ban as a convention worth keeping even though the compiler won't
+enforce it.
+
 ## A Go projection
 
 ```go

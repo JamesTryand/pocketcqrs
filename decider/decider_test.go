@@ -139,6 +139,92 @@ func TestHandleWithoutMetaKeepsDeciderMetadata(t *testing.T) {
 	}
 }
 
+// gatedState mirrors the shape of an authorization check a real decider
+// needs -- e.g. rotaboard's requirePermission -- to prove cmd.Actor is
+// actually usable for one, not just present on the struct. See F-14: before
+// this fix, a typed Decider[S] had no way to express this at all.
+type gatedState struct {
+	Granted map[string]bool
+}
+
+func gated() *Decider[gatedState] {
+	return &Decider[gatedState]{
+		InitialState: func() gatedState { return gatedState{Granted: map[string]bool{}} },
+		Decide: func(cmd Command, state gatedState) ([]events.NewEvent, error) {
+			switch cmd.Name {
+			case "Grant":
+				return []events.NewEvent{{Type: "Granted", Data: json.RawMessage(`{"who":"` + cmd.Actor + `"}`)}}, nil
+			case "DoGatedThing":
+				if cmd.Actor == "" || !state.Granted[cmd.Actor] {
+					return nil, errors.New("actor lacks permission")
+				}
+				return []events.NewEvent{{Type: "DidGatedThing", Data: json.RawMessage(`{"now":"` + cmd.Now + `"}`)}}, nil
+			}
+			return nil, errors.New("unknown command: " + cmd.Name)
+		},
+		Evolve: func(state gatedState, ev events.Event) (gatedState, error) {
+			if ev.Type == "Granted" {
+				var d struct {
+					Who string `json:"who"`
+				}
+				if err := json.Unmarshal(ev.Data, &d); err != nil {
+					return state, err
+				}
+				state.Granted[d.Who] = true
+			}
+			return state, nil
+		},
+	}
+}
+
+func TestTypedDeciderSeesActorAndNow(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	r := NewRegistry(store)
+	Register(r, "gated", gated())
+	ctx := context.Background()
+
+	// no actor: an unauthorized attempt is refused, exactly the case that
+	// was impossible to express before this fix.
+	if _, err := r.HandleWithMeta(ctx, "gated", "g1",
+		Command{Name: "DoGatedThing"}, map[string]any{"actor": "alice"}); err == nil {
+		t.Fatal("expected DoGatedThing to be refused before any grant")
+	}
+
+	// alice grants herself, stamping who via cmd.Actor -- bob never does
+	if _, err := r.HandleWithMeta(ctx, "gated", "g1",
+		Command{Name: "Grant"}, map[string]any{"actor": "alice"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// alice, and only alice, can now act
+	appended, err := r.HandleWithMeta(ctx, "gated", "g1",
+		Command{Name: "DoGatedThing"}, map[string]any{"actor": "alice"})
+	if err != nil {
+		t.Fatalf("expected alice to be authorized: %v", err)
+	}
+	if len(appended) != 1 || appended[0].Type != "DidGatedThing" {
+		t.Fatalf("unexpected events: %+v", appended)
+	}
+	var payload struct {
+		Now string `json:"now"`
+	}
+	if err := json.Unmarshal(appended[0].Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Now == "" {
+		t.Fatal("expected cmd.Now to be populated, got empty string")
+	}
+
+	if _, err := r.HandleWithMeta(ctx, "gated", "g1",
+		Command{Name: "DoGatedThing"}, map[string]any{"actor": "bob"}); err == nil {
+		t.Fatal("expected bob (never granted) to still be refused")
+	}
+}
+
 // fakeLoader lets a test control exactly what LoadStream returns,
 // independent of what's actually durable in the store -- standing in for
 // the batching writer's per-window overlay of not-yet-committed events.

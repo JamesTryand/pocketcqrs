@@ -20,9 +20,28 @@ import (
 var ErrUnknownAggregate = errors.New("decider: unknown aggregate")
 
 // Command is an incoming intent: a name plus its JSON payload.
+//
+// Actor and Now mirror exactly what the JS decider binding already receives
+// (command.actor, command.now) — populated by Register[S]'s closure from the
+// meta map HandleWithMeta/DecideWithMeta thread through (meta["actor"],
+// meta["now"]), before Decide is called. Both are the empty string when the
+// caller supplied no meta (e.g. an anonymous command, or a bare Handle call
+// with no HandleWithMeta wrapper) — a decider checking Actor for
+// authorization should treat "" as "no actor", the same way an untyped/JS
+// decider already must.
+//
+// Historically these reached a typed Decider[S]'s own Decide only via the
+// lower-level RegisterUntyped path (used in this codebase exclusively for
+// the JS adapter) — Register[S]'s generated closure discarded the meta
+// parameter entirely. That made any authorization logic ("does this actor
+// hold permission for this command") impossible to express in the
+// documented, idiomatic Go decider pattern. See platform/pocketbase-cqrs-faas
+// FAULTS-AND-WORK.md F-14 for the finding that surfaced this.
 type Command struct {
 	Name    string          `json:"name"`
 	Payload json.RawMessage `json:"payload"`
+	Actor   string          `json:"actor,omitempty"`
+	Now     string          `json:"now,omitempty"`
 }
 
 // Decider is the write-side model of one aggregate type.
@@ -83,7 +102,18 @@ func Register[S any](r *Registry, aggregate string, d *Decider[S]) {
 	defer r.mu.Unlock()
 	r.deciders[aggregate] = erased{
 		initial: func() any { return d.InitialState() },
-		decide: func(cmd Command, state any, _ map[string]any) ([]events.NewEvent, error) {
+		decide: func(cmd Command, state any, meta map[string]any) ([]events.NewEvent, error) {
+			// Fill Command.Actor/Now from meta before Decide sees it — see
+			// Command's own doc comment for why this exists (F-14). meta may
+			// be nil (a bare Handle call with no HandleWithMeta wrapper);
+			// the type assertions below leave Actor/Now as "" in that case,
+			// same as an anonymous command.
+			if actor, ok := meta["actor"].(string); ok {
+				cmd.Actor = actor
+			}
+			if now, ok := meta["now"].(string); ok {
+				cmd.Now = now
+			}
 			return d.Decide(cmd, state.(S))
 		},
 		evolve: func(state any, ev events.Event) (any, error) {
