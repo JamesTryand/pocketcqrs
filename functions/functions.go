@@ -38,7 +38,10 @@ const FunctionTimeout = 5 * time.Second
 
 // GojaRuntime executes JavaScript functions in goja VMs (trusted code only).
 type GojaRuntime struct {
-	logger   func(msg string, args ...any)
+	logger func(msg string, args ...any)
+	// warn is the level for faults that can never clear on redelivery, as
+	// opposed to logger's ordinary reporting. Nil falls back to logger.
+	warn     func(msg string, args ...any)
 	reader   Reader
 	store    *events.Store
 	registry *decider.Registry
@@ -79,6 +82,18 @@ func NewGojaRuntime(logger func(string, ...any)) *GojaRuntime {
 	}
 	return &GojaRuntime{logger: logger}
 }
+
+// SetWarn installs the warning-level logger used for permanent faults (a
+// reaction dropped because its target aggregate is gone). It is a capability
+// like SetReader/SetStore/SetOutbound, which means a hot reload MUST carry it
+// across — see carryCapabilities. Without it the runtime falls back to
+// logger, so a missed copy degrades the level silently rather than crashing,
+// which is exactly the failure mode this whole change exists to remove.
+func (r *GojaRuntime) SetWarn(warn func(string, ...any)) { r.warn = warn }
+
+// Warn exposes the warning logger so the reload's capability-carrying can be
+// asserted rather than reviewed. See SetWarn.
+func (r *GojaRuntime) Warn() func(string, ...any) { return r.warn }
 
 // SetReader installs the read-only query-side binding exposed as `pb`.
 func (r *GojaRuntime) SetReader(reader Reader) { r.reader = reader }

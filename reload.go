@@ -21,6 +21,7 @@ type reloadReport struct {
 	HTTPReloaded       []string `json:"httpReloaded"`
 	CronReloaded       []string `json:"cronReloaded"`
 	ReactorsReloaded   []string `json:"reactorsReloaded,omitempty"`
+	ReactorsRefused    []string `json:"reactorsRefused,omitempty"`
 	SchemaTier         string   `json:"schemaTier"` // "reloaded" or "skipped: not in maintenance"
 	Projections        []string `json:"projectionsReloaded,omitempty"`
 	ProjectionsRemoved []string `json:"projectionsRemoved,omitempty"`
@@ -70,9 +71,76 @@ func registerReloadRoute(e *core.ServeEvent, c *components, functionsDir string)
 func (c *components) carryCapabilities(fresh *functions.GojaRuntime) {
 	fresh.SetReader(functions.NewAppReader(c.app))
 	fresh.SetStore(c.store)
+	fresh.SetWarn(func(msg string, args ...any) { c.app.Logger().Warn(msg, args...) })
 	if c.outbound != nil {
 		fresh.SetOutbound(c.outbound)
 	}
+}
+
+// prospectiveCommands answers "which aggregates will accept which commands
+// once this reload finishes", which is what the //@dispatches gate has to
+// check against — not the live registry.
+//
+// The answer depends on the mode, because the two tiers reload on different
+// schedules:
+//
+//   - running mode: deciders do NOT reload (the schema tier is skipped), so
+//     the live registry already is the post-reload truth.
+//   - maintenance mode: deciders swap later in this same pass, so the truth
+//     is the live registry with this load's JS deciders overlaid — added or
+//     changed ones present, removed ones gone.
+//
+// Getting this wrong is not a subtle bug: check against the live registry in
+// maintenance mode and a decider shipped together with the reactor that
+// dispatches to it is refused, which would make the gate worse than the fault
+// it fixes.
+func (c *components) prospectiveCommands(mode string, loaded *functions.LoadResult) functions.CommandTarget {
+	if mode != events.ModeMaintenance {
+		return c.registry
+	}
+	p := &prospectiveSet{live: c.registry, adds: map[string][]string{}, removes: map[string]bool{}}
+	// every JS decider currently live is a candidate for removal; anything
+	// this load still carries is put back below
+	for aggregate := range c.jsDeciders {
+		p.removes[aggregate] = true
+	}
+	for _, spec := range loaded.Deciders {
+		delete(p.removes, spec.Aggregate)
+		p.adds[spec.Aggregate] = spec.Commands
+	}
+	return p
+}
+
+// prospectiveSet overlays a pending reload's decider changes onto the live
+// registry. Built-in Go aggregates are never in adds/removes — they cannot
+// change without a rebuild — so they fall through to the live registry.
+type prospectiveSet struct {
+	live    functions.CommandTarget
+	adds    map[string][]string
+	removes map[string]bool
+}
+
+func (p *prospectiveSet) Has(aggregate string) bool {
+	if _, ok := p.adds[aggregate]; ok {
+		return true
+	}
+	if p.removes[aggregate] {
+		return false
+	}
+	return p.live.Has(aggregate)
+}
+
+func (p *prospectiveSet) Commands(aggregate string) []string {
+	if cmds, ok := p.adds[aggregate]; ok {
+		// nil here means the incoming decider declares no //@commands, which
+		// ValidateReactorSpec reads as "unverifiable" — the same answer the
+		// registry gives for an undeclaring aggregate, deliberately
+		return cmds
+	}
+	if p.removes[aggregate] {
+		return nil
+	}
+	return p.live.Commands(aggregate)
 }
 
 func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (*reloadReport, error) {
@@ -114,12 +182,34 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	for _, spec := range c.jsReactors {
 		c.engine.Unregister(spec.Name())
 	}
-	c.jsReactors = loaded.Reactors
+	// //@dispatches gate (F-2). Validated against a PROSPECTIVE command set,
+	// not the live registry: deciders swap further down this function, so at
+	// this point the registry still holds the old ones, and checking against
+	// it would refuse a decider and a reactor added in the SAME maintenance
+	// reload. Moving reactors after deciders is not the fix — it would break
+	// the behavioural claim above, since in running mode deciders do not
+	// reload at all and reactors must still be able to.
+	prospective := c.prospectiveCommands(mode, loaded)
+	var keptReactors []*functions.ReactorSpec
 	for _, spec := range loaded.Reactors {
+		if err := functions.ValidateReactorSpec(prospective, spec); err != nil {
+			// refusal keeps the old reactor serving, exactly as a refused
+			// decider does — and it is REPORTED, which is the whole point:
+			// the silent version of this is the fault being fixed
+			// the error already names the reactor, so it is not prefixed
+			// again the way a refused decider's short reason is
+			report.ReactorsRefused = append(report.ReactorsRefused, err.Error())
+			continue
+		}
+		keptReactors = append(keptReactors, spec)
+	}
+	c.jsReactors = keptReactors
+	for _, spec := range keptReactors {
 		c.engine.Register(spec)
 		report.ReactorsReloaded = append(report.ReactorsReloaded, spec.Reactor)
 	}
 	sort.Strings(report.ReactorsReloaded)
+	sort.Strings(report.ReactorsRefused)
 
 	c.httpFns.ReplaceFrom(loaded.HTTP)
 	report.HTTPReloaded = loaded.HTTP.Names()

@@ -39,15 +39,17 @@ type consumer struct {
 	reactor  Reactor
 	registry *decider.Registry
 	logger   func(msg string, args ...any)
+	warn     func(msg string, args ...any)
 }
 
 // AsConsumer wraps r as a checkpointed consumer that dispatches its
-// reactions through registry.
-func AsConsumer(r Reactor, registry *decider.Registry, logger func(string, ...any)) consumers.Consumer {
+// reactions through registry. warn may be nil (falls back to logger); it
+// carries the permanent-fault level — see Dispatch.
+func AsConsumer(r Reactor, registry *decider.Registry, logger, warn func(string, ...any)) consumers.Consumer {
 	if logger == nil {
 		logger = func(string, ...any) {}
 	}
-	return &consumer{reactor: r, registry: registry, logger: logger}
+	return &consumer{reactor: r, registry: registry, logger: logger, warn: warn}
 }
 
 // Name implements consumers.Consumer (checkpointed as "reactor:<name>").
@@ -55,7 +57,7 @@ func (c *consumer) Name() string { return "reactor:" + c.reactor.Name() }
 
 // Apply implements consumers.Consumer.
 func (c *consumer) Apply(ctx context.Context, ev events.Event) error {
-	return Dispatch(ctx, c.registry, c.reactor.Name(), ev, c.reactor.React(ev), c.logger)
+	return Dispatch(ctx, c.registry, c.reactor.Name(), ev, c.reactor.React(ev), c.logger, c.warn)
 }
 
 // Dispatcher is the slice of *decider.Registry that Dispatch needs. It is an
@@ -80,9 +82,16 @@ type Dispatcher interface {
 // though they use different durable checkpoint keys — events/stats.go's
 // ReactorFlows filters on that prefix, so matching it is what earns a JS
 // reactor its edges in the catalog, the explorer and the mermaid diagram.
-func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.Event, reactions []Reaction, logger func(string, ...any)) error {
+// warn is used for the one rejection kind that is knowably PERMANENT rather
+// than a domain refusal (see the switch below); it may be nil, in which case
+// it falls back to logger. Both tiers pass their own, because the level rule
+// is part of the shared contract this function exists to keep in one place.
+func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.Event, reactions []Reaction, logger, warn func(string, ...any)) error {
 	if logger == nil {
 		logger = func(string, ...any) {}
+	}
+	if warn == nil {
+		warn = logger
 	}
 	for _, reaction := range reactions {
 		meta := map[string]any{
@@ -100,9 +109,34 @@ func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.E
 			// the target stream moved between load and append; stop and
 			// retry the whole event next pass
 			return err
+		case errors.Is(err, decider.ErrUnknownAggregate):
+			// PERMANENT wiring fault, not a domain refusal: no redelivery
+			// can ever succeed, so logging this at the same level as the
+			// idempotency path below is how a lost reaction stays invisible
+			// (F-2). The reactor gate refuses this at load, so reaching here
+			// means the target went away UNDER a live reactor — the case a
+			// load-time check cannot catch.
+			//
+			// Still log-and-continue rather than return: blocking the log on
+			// a fault that will never clear would stop every other reaction
+			// too. The checkpoint advancing is the known cost, and it is why
+			// this is loud.
+			warn("reaction dropped: target aggregate is not registered",
+				"reactor", name, "cause", ev.ID,
+				"target", reaction.Aggregate+"/"+reaction.ID, "command", reaction.Command.Name,
+				"error", err)
 		default:
 			// domain rejection (incl. the idempotency path, e.g. "already
-			// exists"): log and continue — never block the log
+			// exists"): log and continue — never block the log.
+			//
+			// This stays INFO deliberately. At-least-once delivery means a
+			// redelivered reaction hitting the target's own "already exists"
+			// rule IS the idempotency mechanism working, and promoting the
+			// whole arm to a warning would make correct operation noisy.
+			// "unknown command" also lands here and should not — it is
+			// permanent — but it arrives as an untyped errors.New from the
+			// aggregate's own Decide, so there is nothing to match on. That
+			// is why the gate is at load time. See f2-dispatch-gate-scope.md.
 			logger("reaction rejected",
 				"reactor", name, "cause", ev.ID,
 				"target", reaction.Aggregate+"/"+reaction.ID, "command", reaction.Command.Name,
