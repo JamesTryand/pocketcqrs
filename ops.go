@@ -13,8 +13,23 @@ import (
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/jamestryand/pocketcqrs/authverify"
 	"github.com/jamestryand/pocketcqrs/events"
 )
+
+// opsStoreErr maps a store-write failure on an ops route. On a
+// --cqrsRole=secondary the store is read-only and every write fails with
+// events.ErrReadOnly — answered as a clean 503 naming the actual problem,
+// the same mapping gateway.go gives commands, instead of the generic 400
+// that used to leak the raw "events: store is read-only" string.
+func opsStoreErr(re *core.RequestEvent, err error) error {
+	if errors.Is(err, events.ErrReadOnly) {
+		return re.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "this node is a read-only replica; admin writes must go to the master",
+		})
+	}
+	return apis.NewBadRequestError(err.Error(), err)
+}
 
 // registerOpsRoutes binds the superuser-only operational API:
 //
@@ -56,7 +71,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"events": evs})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	// one row per stream, optionally restricted to one aggregate
 	e.Router.GET("/api/cqrs/streams", func(re *core.RequestEvent) error {
@@ -66,7 +81,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"streams": streams})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	// failed function deliveries; pending only unless ?all=1
 	e.Router.GET("/api/cqrs/deadletters", func(re *core.RequestEvent) error {
@@ -76,7 +91,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"deadLetters": letters})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	// re-deliver one dead letter through the CURRENT function code.
 	//
@@ -94,10 +109,10 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 		}
 		results, err := c.retryDeadLetters(re.Request.Context(), letters)
 		if err != nil {
-			return apis.NewBadRequestError(err.Error(), err)
+			return opsStoreErr(re, err)
 		}
 		return re.JSON(http.StatusOK, results[0])
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	// re-deliver every pending dead letter, oldest first
 	e.Router.POST("/api/cqrs/deadletters/retry", func(re *core.RequestEvent) error {
@@ -107,10 +122,10 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 		}
 		results, err := c.retryDeadLetters(re.Request.Context(), letters)
 		if err != nil {
-			return apis.NewBadRequestError(err.Error(), err)
+			return opsStoreErr(re, err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"results": results})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	// resolve a dead letter without re-delivering it
 	e.Router.POST("/api/cqrs/deadletters/{id}/dismiss", func(re *core.RequestEvent) error {
@@ -119,10 +134,13 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError("invalid dead letter id", err)
 		}
 		if err := c.store.ResolveDeadLetter(re.Request.Context(), id); err != nil {
+			if errors.Is(err, events.ErrReadOnly) {
+				return opsStoreErr(re, err)
+			}
 			return apis.NewNotFoundError(fmt.Sprintf("no dead letter with id %d", id), err)
 		}
 		return re.JSON(http.StatusOK, deadLetterResult{ID: id, Resolved: true})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	// the system mode barrier (running|maintenance); POST wraps SetMode,
 	// so an invalid value is a 400 and the current mode never changes
@@ -132,7 +150,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]string{"mode": mode})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	e.Router.POST("/api/cqrs/admin/mode", func(re *core.RequestEvent) error {
 		payload, err := io.ReadAll(re.Request.Body)
@@ -146,10 +164,10 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError("invalid JSON body: "+err.Error(), err)
 		}
 		if err := c.store.SetMode(re.Request.Context(), body.Mode); err != nil {
-			return apis.NewBadRequestError(err.Error(), err)
+			return opsStoreErr(re, err)
 		}
 		return re.JSON(http.StatusOK, map[string]string{"mode": body.Mode})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 }
 
 // deadLetterResult reports the outcome of one retry or dismissal.
