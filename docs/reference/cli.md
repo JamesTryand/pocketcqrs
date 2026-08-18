@@ -59,16 +59,29 @@ Two consequences worth knowing:
 ## Multi-node (single writer, multiple readers)
 
 One master appends to `events.db`; any number of secondaries poll a
-replicated copy of that file read-only (e.g. via a Litestream-provided VFS)
-and run their own local projections. There is no leader election — the
-master is fixed by configuration. `data.db` (auth records, settings, signing
-secrets) is per-node and **never replicated**; only `events.db` is.
+replicated copy of that file read-only and run their own local projections.
+There is no leader election — the master is fixed by configuration.
+`data.db` (auth records, settings, signing secrets) is per-node and **never
+replicated**; only `events.db` is.
+
+**Verified today**: a secondary pointed at the master's `events.db` by a
+plain shared local path (`--cqrsEventsPath`, same machine or a filesystem
+both processes see directly) — this is what every test and this project's
+own smoke suite uses. **Not yet built**: genuine cross-host replication.
+`--cqrsVFS` exists as a hook for that (see the flag table below) but no
+driver integration exists in this codebase to make it work — that's tracked
+as open work, not a flag you can reach for today. Do not point
+`--cqrsEventsPath` at a network-mounted (NFS/SMB) copy of the file as a
+substitute: `events.db` runs in WAL mode, and SQLite's own documentation
+states WAL is not safe over network filesystems (the `-shm` coordination
+file needs shared-memory semantics those don't reliably provide) — a stated
+incompatibility, not a scale-dependent risk.
 
 | flag | default | meaning |
 | --- | --- | --- |
 | `--cqrsRole` | `master` | `master` appends to `events.db`; `secondary` polls a replica read-only and refuses local writes |
 | `--cqrsEventsPath` | `<dir>/events.db` | where `events.db` lives — a secondary points this at the master's replicated file |
-| `--cqrsVFS` | *(none)* | SQLite VFS name to open `events.db` through on a secondary; empty opens the plain file read-only |
+| `--cqrsVFS` | *(none)* | **a pass-through hook, not a built integration** — a SQLite VFS name to open `events.db` through on a secondary, if one is already registered with the driver. Nothing in this codebase registers a VFS (no Litestream, LiteFS, or other dependency in `go.mod`); the flag only works if an operator wires that up themselves. Empty (the default) opens the plain file read-only |
 | `--cqrsMasterAddr` | *(none)* | the master's base URL; when set on a secondary, commands are proxied there instead of refused |
 | `--cqrsForwardAuth` | `false` | also route PocketBase's own auth-collection traffic (login, token refresh, `_users`/`_superusers` records — reads included) to the master, since a secondary's copies of those tables are unrelated local tables, not replicas |
 | `--cqrsVerifyAuth` | `false` | verify bearer tokens against the master with a bounded local verdict cache, so a secondary's own authenticated **local** reads work; implies `--cqrsForwardAuth` |
