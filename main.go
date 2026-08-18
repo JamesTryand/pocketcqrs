@@ -18,6 +18,7 @@ import (
 
 	"github.com/jamestryand/pocketcqrs/aggregates"
 	"github.com/jamestryand/pocketcqrs/authforward"
+	"github.com/jamestryand/pocketcqrs/authverify"
 	"github.com/jamestryand/pocketcqrs/batching"
 	"github.com/jamestryand/pocketcqrs/commandqueue"
 	"github.com/jamestryand/pocketcqrs/consumers"
@@ -66,6 +67,12 @@ type components struct {
 	// role mirrors --cqrsRole (roleMaster or roleSecondary), set once
 	// immediately after ParseFlags, same lifecycle as tutorial below.
 	role string
+
+	// verifier backs --cqrsVerifyAuth (F-13): remote token verification
+	// against the master, with verifyCache holding the bounded-TTL verdicts.
+	// Both nil except on a secondary running verify mode.
+	verifier    *authverify.Verifier
+	verifyCache *authverify.Cache
 
 	// outbound backs the $http binding, or is nil when
 	// --cqrsAllowOutboundHTTP is absent (the default). Held here because a
@@ -233,9 +240,47 @@ func main() {
 		false,
 		"route PocketBase's own native auth-collection traffic (_users/_superusers/etc, not just "+
 			"CQRS commands) to the master too, since a secondary's copy of those collections is a "+
-			"different table, not a stale replica. Requires --cqrsMasterAddr. WARNING: until the JWT "+
-			"signing secret is synced across nodes (not yet built), enabling this breaks authenticated "+
-			"LOCAL reads on this secondary -- every token becomes master-signed and unverifiable here.",
+			"different table, not a stale replica. Requires --cqrsMasterAddr. WARNING: without "+
+			"--cqrsVerifyAuth, enabling this breaks authenticated LOCAL reads on this secondary -- "+
+			"every token becomes master-signed and unverifiable here (F-13); add --cqrsVerifyAuth "+
+			"so this node verifies those tokens against the master instead.",
+	)
+
+	// Remote token verification (F-13's fix): a secondary cannot verify any
+	// token itself -- the key material (record TokenKey + collection secret)
+	// lives only in each node's own, never-replicated data.db. Shape C':
+	// ask the master, cache the verdict for a bounded TTL. Implies
+	// --cqrsForwardAuth, because only master-minted tokens can pass remote
+	// verification -- a coherent multi-node auth mode, not two flags to
+	// mis-combine.
+	var verifyAuth bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&verifyAuth,
+		"cqrsVerifyAuth",
+		false,
+		"verify bearer tokens against the master (with a bounded local verdict cache) so this "+
+			"secondary's own authenticated LOCAL reads work. Requires --cqrsMasterAddr; implies "+
+			"--cqrsForwardAuth (only master-minted tokens can verify remotely). The ops routes "+
+			"re-verify uncached on every request so an admin revocation bites immediately.",
+	)
+	var verifyCacheTTL time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&verifyCacheTTL,
+		"cqrsVerifyCacheTTL",
+		5*time.Minute,
+		"how long a --cqrsVerifyAuth verdict is trusted before re-checking with the master, always "+
+			"additionally capped by the token's own exp claim. Also the revocation-lag bound: a "+
+			"token the master has revoked can keep reading here for up to this long.",
+	)
+	var verifyGrace time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&verifyGrace,
+		"cqrsVerifyGrace",
+		0,
+		"how far past a verdict's expiry it may still be served when the master is UNREACHABLE "+
+			"(never past the token's own exp). 0 (the default) fails closed: expired verdict + "+
+			"unreachable master = 503. Opting in trades a bounded revocation lag for reads that "+
+			"keep working through a master outage.",
 	)
 
 	// Command batching (item 4): ON by default -- F-5's fix (queue-depth
@@ -297,15 +342,39 @@ func main() {
 	if forwardAuth && masterAddr == "" {
 		log.Fatal("invalid flags: --cqrsForwardAuth requires --cqrsMasterAddr")
 	}
+	if verifyAuth && masterAddr == "" {
+		log.Fatal("invalid flags: --cqrsVerifyAuth requires --cqrsMasterAddr")
+	}
+	if verifyAuth && role != roleSecondary {
+		log.Printf("warning: --cqrsVerifyAuth is set but --cqrsRole=%s ignores it (only %s verifies remotely)", role, roleSecondary)
+		verifyAuth = false
+	}
+	if verifyAuth && !forwardAuth {
+		// implied, not required: remote verification only works for
+		// master-minted tokens, so login has to forward too -- and with
+		// verification in place, forwarding no longer breaks local reads,
+		// which was the only reason the flags were ever separate
+		forwardAuth = true
+		log.Print("--cqrsVerifyAuth implies --cqrsForwardAuth: auth flows forward to the master so every token is master-minted and remotely verifiable")
+	}
+	if !verifyAuth {
+		for _, name := range []string{"cqrsVerifyCacheTTL", "cqrsVerifyGrace"} {
+			if app.RootCmd.PersistentFlags().Changed(name) {
+				log.Printf("warning: --%s has no effect without --cqrsVerifyAuth", name)
+			}
+		}
+	}
 
+	var masterURL *url.URL
 	if masterAddr != "" {
 		if role != roleSecondary {
 			log.Printf("warning: --cqrsMasterAddr is set but --cqrsRole=%s ignores it (only %s forwards)", role, roleSecondary)
 		} else {
-			masterURL, err := url.Parse(masterAddr)
-			if err != nil || masterURL.Scheme == "" || masterURL.Host == "" {
+			parsed, err := url.Parse(masterAddr)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 				log.Fatalf("invalid --cqrsMasterAddr %q: want a full base URL, e.g. http://master:8090", masterAddr)
 			}
+			masterURL = parsed
 			gatewayCfg.Forward = httputil.NewSingleHostReverseProxy(masterURL)
 		}
 	}
@@ -380,6 +449,20 @@ func main() {
 		}
 		c.idempotency = idem
 		gatewayCfg.Idempotency = idem
+
+		// remote token verification (F-13): the verdict cache is another
+		// small dedicated SQLite file -- and SQLite rather than a map so a
+		// verdict cached before a master outage survives this node
+		// restarting during it (the exact scenario --cqrsVerifyGrace exists
+		// for).
+		if verifyAuth && masterURL != nil {
+			cache, err := authverify.OpenCache(filepath.Join(dataDir, "authverify.db"))
+			if err != nil {
+				return err
+			}
+			c.verifyCache = cache
+			c.verifier = authverify.New(masterURL, cache, verifyCacheTTL, verifyGrace)
+		}
 
 		// write side: deciders + command handling. The platform registers no
 		// aggregates of its own — task and order are example content, and
@@ -616,6 +699,13 @@ func main() {
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		gateway.RegisterRoutes(e, c.registry, gatewayCfg)
+		// the verify oracle answers on every node (a secondary delegates to
+		// the master), so it is registered unconditionally; the verifying
+		// middleware only exists where there is a verifier
+		authverify.RegisterEndpoint(e, c.verifier)
+		if c.verifier != nil {
+			authverify.Register(e, c.verifier)
+		}
 		if forwardAuth && gatewayCfg.Forward != nil {
 			// item 5's remainder (F-12): PocketBase's own native auth
 			// traffic (_users/_superusers/etc.) needs the same
@@ -641,6 +731,10 @@ func main() {
 		}
 		c.idempotency.StartPruner(context.Background(), time.Hour, idempotencyRetention,
 			func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
+		if c.verifyCache != nil {
+			c.verifyCache.StartPruner(context.Background(), time.Hour, verifyGrace,
+				func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
+		}
 		return e.Next()
 	})
 

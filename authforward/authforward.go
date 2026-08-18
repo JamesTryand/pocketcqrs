@@ -56,7 +56,7 @@ var authFlowSuffixes = map[string]bool{
 }
 
 // Register binds the forwarding middleware: any request matching
-// shouldForward is proxied whole-cloth to target and short-circuits before
+// ShouldForward is proxied whole-cloth to target and short-circuits before
 // PocketBase's own handler runs; everything else proceeds normally.
 //
 // target is deliberately the same http.Handler the CQRS gateway's
@@ -64,7 +64,7 @@ var authFlowSuffixes = map[string]bool{
 // one "forward to master" building block, mounted at two places.
 func Register(e *core.ServeEvent, target http.Handler) {
 	e.Router.BindFunc(func(re *core.RequestEvent) error {
-		if !shouldForward(re.App, re.Request.Method, re.Request.URL.Path) {
+		if !ShouldForward(re.App, re.Request.Method, re.Request.URL.Path) {
 			return re.Next()
 		}
 
@@ -84,14 +84,16 @@ func Register(e *core.ServeEvent, target http.Handler) {
 	})
 }
 
-// shouldForward reports whether path (method-qualified) is PocketBase's own
+// ShouldForward reports whether path (method-qualified) is PocketBase's own
 // native traffic against an auth-type collection: one of the fixed
 // auth-flow suffixes, or a write-shaped (POST/PATCH/DELETE) request to an
 // auth-type collection's plain records endpoint. A pure function of
 // (app, method, path) deliberately -- not dependent on the request's
 // PathValue extraction, which this package's own global middleware binding
-// cannot be certain has already run by the time it executes.
-func shouldForward(app core.App, method, path string) bool {
+// cannot be certain has already run by the time it executes. Exported so
+// authverify's middleware can skip requests this package is about to proxy
+// whole to the master anyway.
+func ShouldForward(app core.App, method, path string) bool {
 	collection, rest, ok := splitCollectionPath(path)
 	if !ok {
 		return false

@@ -36,7 +36,7 @@ func TestShouldForwardAuthFlowSuffixes(t *testing.T) {
 		{http.MethodPost, "/api/collections/_superusers/impersonate/abc123"},
 	}
 	for _, c := range cases {
-		if !shouldForward(app, c.method, c.path) {
+		if !ShouldForward(app, c.method, c.path) {
 			t.Errorf("expected %s %s to be forwarded", c.method, c.path)
 		}
 	}
@@ -46,7 +46,7 @@ func TestShouldNotForwardAuthMethodsSchemaEndpoint(t *testing.T) {
 	// GET, config/schema only, identical on every node -- safe and better
 	// to serve locally, never forwarded
 	app := openTestApp(t)
-	if shouldForward(app, http.MethodGet, "/api/collections/_superusers/auth-methods") {
+	if ShouldForward(app, http.MethodGet, "/api/collections/_superusers/auth-methods") {
 		t.Fatal("expected auth-methods to be served locally, not forwarded")
 	}
 }
@@ -61,7 +61,7 @@ func TestShouldForwardWriteShapedRecordsOnAuthCollection(t *testing.T) {
 		if c.method == http.MethodPatch || c.method == http.MethodDelete {
 			path += "/someid"
 		}
-		if !shouldForward(app, c.method, path) {
+		if !ShouldForward(app, c.method, path) {
 			t.Errorf("expected %s %s to be forwarded", c.method, path)
 		}
 	}
@@ -70,10 +70,10 @@ func TestShouldForwardWriteShapedRecordsOnAuthCollection(t *testing.T) {
 func TestShouldNotForwardReadOnlyRecordsOnAuthCollection(t *testing.T) {
 	// GET (list/view) is a read -- reads stay local, only writes forward
 	app := openTestApp(t)
-	if shouldForward(app, http.MethodGet, "/api/collections/_superusers/records") {
+	if ShouldForward(app, http.MethodGet, "/api/collections/_superusers/records") {
 		t.Fatal("expected a GET to _superusers/records to stay local")
 	}
-	if shouldForward(app, http.MethodGet, "/api/collections/_superusers/records/someid") {
+	if ShouldForward(app, http.MethodGet, "/api/collections/_superusers/records/someid") {
 		t.Fatal("expected a GET to _superusers/records/{id} to stay local")
 	}
 }
@@ -84,14 +84,14 @@ func TestShouldNotForwardNonAuthCollection(t *testing.T) {
 	// exactly the negative case that matters: not everything under
 	// /api/collections/ should forward, only auth-type collections.
 	app := openTestApp(t)
-	if shouldForward(app, http.MethodPost, "/api/collections/_authOrigins/records") {
+	if ShouldForward(app, http.MethodPost, "/api/collections/_authOrigins/records") {
 		t.Fatal("expected _authOrigins (not an auth-type collection) to stay local")
 	}
 }
 
 func TestShouldNotForwardUnknownCollection(t *testing.T) {
 	app := openTestApp(t)
-	if shouldForward(app, http.MethodPost, "/api/collections/does-not-exist/records") {
+	if ShouldForward(app, http.MethodPost, "/api/collections/does-not-exist/records") {
 		t.Fatal("expected an unknown collection to stay local, not forwarded")
 	}
 }
@@ -105,7 +105,7 @@ func TestShouldNotForwardUnrelatedRoutes(t *testing.T) {
 		{http.MethodGet, "/api/collections/_superusers"}, // the collection itself, not a sub-route
 	}
 	for _, c := range cases {
-		if shouldForward(app, c.method, c.path) {
+		if ShouldForward(app, c.method, c.path) {
 			t.Errorf("expected %s %s to stay local", c.method, c.path)
 		}
 	}
