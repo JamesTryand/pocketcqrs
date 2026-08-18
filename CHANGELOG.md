@@ -3,7 +3,7 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased
+## v0.7.0 — a working secondary, and an admin-route gap the fix itself left open
 
 A logged-in user finally gets a working secondary. Since the multi-node flags
 landed, no combination of them could deliver both halves: with auth
@@ -51,6 +51,25 @@ signing authority besides.
   replica") instead of a generic `400` leaking the raw store error string —
   the same mapping the command gateway has always used.
 
+### Fixed
+
+- **Security: function-admin and reload routes now re-verify against the master too, not just the
+  ops routes.** A codebase audit for undocumented gaps found that the "ops routes re-verify on
+  every request" fix above only touched `ops.go`'s 8 routes, while `docs/reference/cli.md`
+  generalized the claim to the whole `/admin/*` path. `functions_admin.go`'s 7 routes
+  (push/read/delete function source, dry-run, scaffold) and `reload.go`'s 1 (hot reload) still
+  bound the plain, cached gate — meaning a superuser token revoked at the master could still push
+  and reload function code on a verify-mode secondary for up to `--cqrsVerifyCacheTTL`, or
+  indefinitely through an outage with `--cqrsVerifyGrace` set. All 8 now re-verify fresh against
+  the master too, matching the ops routes exactly.
+
+### Docs
+
+- `--cqrsVFS` now states plainly that it is a pass-through hook with no VFS/Litestream/LiteFS
+  integration anywhere in this codebase, rather than describing it as "untested" — which wrongly
+  implied a real mechanism existed. The multi-node section also now explicitly discourages
+  substituting a raw NFS/SMB-mounted `events.db` as a shortcut: it runs in WAL mode, and SQLite's
+  own documentation states WAL is not safe over network filesystems.
 
 
 Documentation tells you what exists. It does not stop you writing a projection that returns
