@@ -90,7 +90,73 @@ func (s *ReactorSpec) Apply(ctx context.Context, ev events.Event) error {
 		rt.logger("reactor returned values that are not dispatches; discarded",
 			"reactor", s.Reactor, "position", ev.Position, "count", ignored)
 	}
-	return reactors.Dispatch(ctx, registry, s.Reactor, ev, reactions, rt.logger)
+	return reactors.Dispatch(ctx, registry, s.Reactor, ev, reactions, rt.logger, rt.warn)
+}
+
+// CommandTarget is the slice of the decider registry that ValidateReactorSpec
+// needs: which aggregates exist, and which commands each DECLARES.
+//
+// It is an interface rather than *decider.Registry because a hot reload must
+// validate against the registry it is ABOUT to have, not the one it has — see
+// reload.go. At boot the live registry is the right answer, because deciders
+// are registered before reactors there.
+type CommandTarget interface {
+	Has(aggregate string) bool
+	Commands(aggregate string) []string
+}
+
+// ValidateReactorSpec checks every //@dispatches claim against target, so a
+// reactor wired to a command that cannot succeed is refused AT LOAD rather
+// than silently dropping its reactions at runtime (fault F-2).
+//
+// This is the same gate //@handles already applies to deciders, one tier
+// over: both directives are a claim about what the file talks to, and both
+// are checkable before the file goes live.
+//
+// The three-outcome rule matters and is not obvious:
+//
+//   - target declares the command               -> pass
+//   - target declares commands, this is not one -> REFUSE
+//   - target declares NO commands               -> pass, unverifiable
+//
+// The third case is deliberate. decider.Decider.Commands is documentation,
+// not enforcement — Decide still adjudicates, and an unlisted command is not
+// rejected there. Refusing an undeclaring target would reject every reactor
+// pointing at a hand-written aggregate that never declared, so this gate can
+// only tighten what is already claimed. Do not "fix" it into a refusal.
+//
+// A nil target disables the gate rather than failing everything: callers with
+// no registry to check against (dry-run paths, tests) must not be forced to
+// invent one.
+func ValidateReactorSpec(target CommandTarget, spec *ReactorSpec) error {
+	if target == nil {
+		return nil
+	}
+	for _, d := range spec.Dispatches {
+		aggregate, command, ok := strings.Cut(d, "/")
+		if !ok || aggregate == "" || command == "" {
+			// the loader already enforces this shape; kept so the gate is
+			// sound on its own rather than by someone else's invariant
+			return fmt.Errorf("validation: reactor %s declares //@dispatches %q, which is not <aggregate>/<Command>",
+				spec.Reactor, d)
+		}
+		if !target.Has(aggregate) {
+			// distinct from the command case below: <aggregate>/<Command>
+			// has two halves, and a missing aggregate is a different
+			// operator error from a command typo
+			return fmt.Errorf("validation: reactor %s dispatches %s, but no decider is registered for aggregate %q",
+				spec.Reactor, d, aggregate)
+		}
+		declared := target.Commands(aggregate)
+		if len(declared) == 0 {
+			continue // unverifiable, not invalid — see the doc comment
+		}
+		if !contains(declared, command) {
+			return fmt.Errorf("validation: reactor %s dispatches %s, but aggregate %q accepts only [%s]",
+				spec.Reactor, d, aggregate, strings.Join(declared, " "))
+		}
+	}
+	return nil
 }
 
 // buildReactorSpec compiles a reactor file.

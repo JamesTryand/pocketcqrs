@@ -113,7 +113,7 @@ func TestReactorCheckpointKeyDoesNotCollide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goKey := reactors.AsConsumer(reactors.Fulfillment(), nil, nil).Name()
+	goKey := reactors.AsConsumer(reactors.Fulfillment(), nil, nil, nil).Name()
 
 	if spec.Name() == goKey {
 		t.Fatalf("JS and Go reactors share the checkpoint key %q", spec.Name())

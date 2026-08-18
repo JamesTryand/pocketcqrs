@@ -53,7 +53,7 @@ func TestFulfillmentDispatchesTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := AsConsumer(Fulfillment(), r, nil)
+	c := AsConsumer(Fulfillment(), r, nil, nil)
 	for _, ev := range stream {
 		if err := c.Apply(ctx, ev); err != nil {
 			t.Fatal(err)
@@ -92,7 +92,7 @@ func TestFulfillmentReplayIsIdempotent(t *testing.T) {
 	stream, _ := store.LoadStream(ctx, aggregates.OrderAggregate, "o1")
 	confirmed := stream[2]
 
-	c := AsConsumer(Fulfillment(), r, nil)
+	c := AsConsumer(Fulfillment(), r, nil, nil)
 	if err := c.Apply(ctx, confirmed); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestFulfillmentIgnoresUnrelatedEvents(t *testing.T) {
 	placeAndConfirmOrder(t, r, "o1")
 	stream, _ := store.LoadStream(ctx, aggregates.OrderAggregate, "o1")
 
-	c := AsConsumer(Fulfillment(), r, nil)
+	c := AsConsumer(Fulfillment(), r, nil, nil)
 	for _, ev := range stream[:2] { // placed + line added only
 		if err := c.Apply(ctx, ev); err != nil {
 			t.Fatal(err)
@@ -168,7 +168,7 @@ func TestDispatchRetriesOnConcurrencyAndContinuesOnRejection(t *testing.T) {
 
 	// a concurrency conflict stops the batch so the event is retried whole
 	conflict := &fakeDispatcher{err: events.ErrConcurrency}
-	if err := Dispatch(ctx, conflict, "fulfillment", trigger, reactions, nil); err == nil {
+	if err := Dispatch(ctx, conflict, "fulfillment", trigger, reactions, nil, nil); err == nil {
 		t.Fatal("a concurrency conflict must propagate so the event is retried")
 	}
 	if conflict.calls != 1 {
@@ -177,7 +177,7 @@ func TestDispatchRetriesOnConcurrencyAndContinuesOnRejection(t *testing.T) {
 
 	// a domain rejection is logged and the rest still go out
 	rejected := &fakeDispatcher{err: errors.New("task already exists")}
-	if err := Dispatch(ctx, rejected, "fulfillment", trigger, reactions, nil); err != nil {
+	if err := Dispatch(ctx, rejected, "fulfillment", trigger, reactions, nil, nil); err != nil {
 		t.Fatalf("a domain rejection must not block the log: %v", err)
 	}
 	if rejected.calls != 2 {

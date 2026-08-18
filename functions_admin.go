@@ -502,15 +502,39 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 			summary += fmt.Sprintf(" %d returned value(s) were NOT dispatch descriptors and would be discarded at runtime.",
 				res.IgnoredValues)
 		}
+		// The //@dispatches gate, REPORTED rather than enforced (F-2).
+		//
+		// A dry run that passes what the reload then refuses is the same
+		// silent divergence the gate exists to close, one surface over — and
+		// this project has already learned once (F-9/F-10) that fixing a
+		// command without fixing its class leaves the next one open.
+		//
+		// It reports instead of erroring because a dry run's job is "tell me
+		// what would happen", and what would happen is a refusal. Erroring
+		// would also stop someone dry-running code they are part-way through
+		// fixing, which is when a dry run is most useful.
+		//
+		// This reads c.registry, the LIVE one. It does not install it on the
+		// scratch runtime above, so that runtime's "cannot dispatch even by
+		// accident" property is untouched.
+		wouldRefuse := ""
+		if err := functions.ValidateReactorSpec(c.registry, spec); err != nil {
+			wouldRefuse = err.Error()
+			summary += " IT WOULD BE REFUSED AT RELOAD: " + wouldRefuse
+		}
 		// "dispatches", not "events": `events` already carries a COUNT in
 		// the decider and projection modes and a produced-event list in
 		// decide, and one field meaning three shapes by mode is a trap.
-		return re.JSON(http.StatusOK, map[string]any{
+		out := map[string]any{
 			"mode": req.Mode, "ok": true, "reactor": res.Reactor,
 			"events": res.Events, "dispatches": res.Dispatches,
 			"ignoredValues": res.IgnoredValues,
 			"summary":       summary,
-		})
+		}
+		if wouldRefuse != "" {
+			out["wouldBeRefused"] = wouldRefuse
+		}
+		return re.JSON(http.StatusOK, out)
 
 	case "projection":
 		spec, err := functions.LoadProjectionSource(rt, c.app, req.Name, req.Source)

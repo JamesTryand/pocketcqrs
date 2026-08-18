@@ -171,12 +171,16 @@ curl -s -X POST http://127.0.0.1:8398/api/cqrs/admin/reload -H "Authorization: $
 ```json
 {
   "mode": "maintenance",
-  "reactorsReloaded": ["autoShipPendingOrders", "notifyShippingPartner"],
+  "reactorsReloaded": ["notifyShippingPartner"],
+  "reactorsRefused": ["validation: reactor autoShipPendingOrders dispatches order/ShipOrder, but aggregate \"order\" accepts only [AddOrderLine CancelOrder ConfirmOrder PlaceOrder]"],
   "projectionsReloaded": ["orderSummary", "pendingShipments"],
   "decidersReloaded": ["shipmentNotice"],
   "decidersRefused": ["order (collides with a built-in decider)"]
 }
 ```
+
+**Two refusals, and they are one collision seen from both ends.** Take them in
+turn.
 
 **`order` refused to load, on purpose.** `--tutorial` registered this repo's
 example Go `order` aggregate (`aggregates/order.go`) in `main.go`, before any
@@ -201,6 +205,28 @@ a real system does not have: drop `--tutorial`, and the name is free.) This
 walkthrough leaves it refused, deliberately, because the two slices that
 *did* load are enough to show the rest of the flow end to end without a
 rename.
+
+**`autoShipPendingOrders` refused too — and that is the more interesting
+half.** It is the *reactor* from the same slice as the refused `order`
+decider. Its job is to dispatch `ShipOrder`, but the `order` that survived
+the collision is the Go one, and its commands are `PlaceOrder`,
+`AddOrderLine`, `ConfirmOrder`, `CancelOrder`. `ShipOrder` is not among
+them, so the reaction could never succeed.
+
+A partial slice is the trap here: the decider half is refused loudly and the
+reactor half looks fine, because a reactor only fails when it *fires* — and
+this one fires on `OrderPlaced`, which this walkthrough never causes. Send
+`order/PlaceOrder` yourself, though, and it would have dispatched into
+nothing: the reaction rejected, no dead letter, and the reactor's checkpoint
+moving past the failure so it can never be retried. **Silent, and
+permanent.**
+
+`//@dispatches` is what makes this checkable. The directive already records
+which command a reactor sends, so the reload compares that claim against what
+the target actually accepts and refuses the mismatch — the same gate
+`//@handles` applies to deciders, one tier over. The refusal message names
+the commands that *are* available, which is usually enough to see whether you
+have a typo or a genuine rename.
 
 ## Go live with what did load
 

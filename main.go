@@ -510,7 +510,8 @@ func main() {
 		// they do.
 		if c.tutorial {
 			c.engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.registry,
-				func(msg string, args ...any) { logger.Info(msg, args...) }))
+				func(msg string, args ...any) { logger.Info(msg, args...) },
+				func(msg string, args ...any) { logger.Warn(msg, args...) }))
 		}
 
 		// JS reactors (tier 4): same dispatch rule as the Go ones, reached
@@ -518,8 +519,25 @@ func main() {
 		// are registered as consumers — a reactor without one fails loudly
 		// rather than quietly doing nothing.
 		rt.SetRegistry(c.registry)
-		c.jsReactors = loaded.Reactors
+		rt.SetWarn(func(msg string, args ...any) { logger.Warn(msg, args...) })
+		// //@dispatches gate (F-2): the registry is complete here — deciders
+		// were registered above — so the live registry IS the right thing to
+		// validate against at boot. A reload cannot say the same; see
+		// prospectiveCommands in reload.go.
+		var activeReactors []*functions.ReactorSpec
 		for _, spec := range loaded.Reactors {
+			if err := functions.ValidateReactorSpec(c.registry, spec); err != nil {
+				if strictBoot {
+					return fmt.Errorf("strict boot: JS reactor %q failed validation: %w", spec.Reactor, err)
+				}
+				logger.Error("JS reactor failed validation, NOT registered",
+					"reactor", spec.Reactor, "error", err)
+				continue
+			}
+			activeReactors = append(activeReactors, spec)
+		}
+		c.jsReactors = activeReactors
+		for _, spec := range activeReactors {
 			c.engine.Register(spec)
 			logger.Info("JS reactor active", "reactor", spec.Reactor, "on", spec.EventTypes)
 		}
