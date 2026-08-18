@@ -58,9 +58,9 @@ type components struct {
 	jsProjs     []*functions.JSProjection
 	fnRuntime   *functions.GojaRuntime
 
-	// batchWriter backs command batching (item 4), or is nil when
-	// --cqrsCommandBatching is absent (the default) or this node is a
-	// roleSecondary, which never runs its own writer.
+	// batchWriter backs command batching (item 4, on by default), or is
+	// nil when --cqrsCommandBatching=false or this node is a roleSecondary,
+	// which never runs its own writer.
 	batchWriter *batching.Writer
 
 	// role mirrors --cqrsRole (roleMaster or roleSecondary), set once
@@ -238,20 +238,28 @@ func main() {
 			"LOCAL reads on this secondary -- every token becomes master-signed and unverifiable here.",
 	)
 
-	// Command batching (item 4): off by default -- deliberately, since it
-	// is the one item in the scaling proposal flagged as needing to be
-	// argued rather than adopted reflexively (FAULTS-AND-WORK.md). With it
-	// off, the gateway's behavior is exactly what it was before this flag
-	// existed. No effect on roleSecondary, which never runs its own writer
-	// (it forwards or refuses; see --cqrsMasterAddr).
+	// Command batching (item 4): ON by default -- F-5's fix (queue-depth
+	// admission control, --cqrsCommandQueueMaxDepth) is only built on this
+	// path, so making it the default collapses two admission-control
+	// mechanisms (a bounded semaphore for the direct path, plus this
+	// queue's own depth check) down to one. Batching preserves the exact
+	// synchronous (events, error) response contract the direct path always
+	// returned, so this default is not a client-visible contract change --
+	// only variable added latency under load (bounded by
+	// --cqrsBatchTimeout) and, if --cqrsCommandQueueMaxDepth is set, a 503
+	// once that many commands are unfinished. No effect on roleSecondary,
+	// which never runs its own writer (it forwards or refuses; see
+	// --cqrsMasterAddr).
 	var commandBatching bool
 	app.RootCmd.PersistentFlags().BoolVar(
 		&commandBatching,
 		"cqrsCommandBatching",
-		false,
+		true,
 		"accumulate decided commands into batches committed in one transaction, instead of one "+
 			"transaction per command; raises write throughput under load at the cost of variable "+
-			"added latency, bounded by --cqrsBatchTimeout. Off by default.",
+			"added latency, bounded by --cqrsBatchTimeout. On by default; pass "+
+			"--cqrsCommandBatching=false for the old one-transaction-per-command path (that path "+
+			"has no admission control of its own -- see F-5).",
 	)
 	var batchTimeout time.Duration
 	app.RootCmd.PersistentFlags().DurationVar(
@@ -260,6 +268,15 @@ func main() {
 		10*time.Second,
 		"how long a command waits for its batch to commit when --cqrsCommandBatching is set "+
 			"before returning 504; matches events.db's own busy_timeout by default",
+	)
+	var commandQueueMaxDepth int
+	app.RootCmd.PersistentFlags().IntVar(
+		&commandQueueMaxDepth,
+		"cqrsCommandQueueMaxDepth",
+		0,
+		"shed new commands with 503 (Retry-After: 1) once this many are enqueued and not yet "+
+			"committed (F-5). Only takes effect when batching is active (on by default). "+
+			"0 disables shedding.",
 	)
 
 	app.RootCmd.AddCommand(newProjectionCommand(c))
@@ -395,7 +412,7 @@ func main() {
 			c.engine = consumers.NewEngine(store, engineLogger)
 		}
 
-		// command batching (item 4): off by default, and never on a
+		// command batching (item 4): on by default, and never on a
 		// secondary -- it has no writable store to enqueue into or commit
 		// against (a secondary forwards or refuses; see --cqrsMasterAddr).
 		if commandBatching && c.role != roleSecondary {
@@ -404,6 +421,7 @@ func main() {
 				return err
 			}
 			c.batchWriter = batching.NewWriter(store, queue, c.registry, engineLogger)
+			c.batchWriter.MaxDepth = commandQueueMaxDepth
 			gatewayCfg.Batching = c.batchWriter
 			gatewayCfg.BatchTimeout = batchTimeout
 		}

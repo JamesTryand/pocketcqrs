@@ -1,9 +1,11 @@
 package gateway_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -125,6 +127,44 @@ func TestGatewayBatchingTimesOutWhenWriterNeverRuns(t *testing.T) {
 	}
 	if !strings.Contains(body, "did not complete in time") {
 		t.Fatalf("expected the timeout message, got: %s", body)
+	}
+}
+
+func TestGatewayBatchingShedsQueueFullWith503(t *testing.T) {
+	srv, writer := newTestGatewayWithBatching(t, 5*time.Second, nil)
+	writer.MaxDepth = 1
+	// deliberately no writer.Start call -- nothing drains the queue, so
+	// depth stays exactly where each Enqueue leaves it
+
+	// seed the queue directly to depth 1, bypassing HTTP, so the gateway
+	// request below deterministically observes MaxDepth already reached
+	// rather than racing a background writer
+	if _, _, err := writer.Enqueue(context.Background(), "task", "seed", "Create",
+		json.RawMessage(`{}`), map[string]any{"now": "2026-01-01 00:00:00.000Z"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/cqrs/task/t1/Create", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", resp.StatusCode)
+	}
+	if resp.Header.Get("Retry-After") != "1" {
+		t.Fatalf("expected Retry-After: 1, got %q", resp.Header.Get("Retry-After"))
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "queue is full") || !strings.Contains(string(body), `"depth":1`) {
+		t.Fatalf("expected a queue-full body with depth 1, got: %s", body)
 	}
 }
 

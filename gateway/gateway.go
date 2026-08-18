@@ -205,6 +205,20 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 					"error": "batch commit did not complete in time",
 				})
 			}
+			var qf *batching.ErrQueueFull
+			if errors.As(err, &qf) {
+				// Not routed through respondJSON: nothing was applied, and
+				// future depth is unrelated to this moment's — caching this
+				// as the permanent idempotency-replay answer would wrongly
+				// block a later retry that might get in. Same reasoning
+				// ErrReadOnly below already uses.
+				re.Response.Header().Set("Retry-After", "1")
+				return re.JSON(http.StatusServiceUnavailable, map[string]any{
+					"error": "the command queue is full",
+					"hint":  "nothing was applied; safe to retry shortly (use an Idempotency-Key so a retry cannot double-apply once it does get in)",
+					"depth": qf.Depth,
+				})
+			}
 			switch {
 			case errors.Is(err, decider.ErrUnknownAggregate):
 				return apis.NewNotFoundError(err.Error(), err)

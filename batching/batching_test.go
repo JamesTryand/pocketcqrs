@@ -3,6 +3,7 @@ package batching
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -364,6 +365,49 @@ func TestRunOnceResumesAlreadyAppliedCommandWithoutRedeciding(t *testing.T) {
 	}
 	if len(pending) != 0 {
 		t.Fatalf("expected the resumed command to be marked done, got %d still pending", len(pending))
+	}
+}
+
+func TestEnqueueMaxDepthZeroNeverSheds(t *testing.T) {
+	_, _, _, w := setup(t)
+	ctx := context.Background()
+	// default MaxDepth is 0 -- nothing enqueued here is ever drained
+	// (Start/RunOnce never runs), so a nonzero MaxDepth would shed by the
+	// third Enqueue if it applied. It must not.
+	for i := 0; i < 5; i++ {
+		if _, _, err := w.Enqueue(ctx, "task", "t1", "Create", json.RawMessage(`{}`), metaNow()); err != nil {
+			t.Fatalf("enqueue %d: unexpected error with MaxDepth disabled: %v", i, err)
+		}
+	}
+}
+
+func TestEnqueueShedsWithErrQueueFullAtMaxDepth(t *testing.T) {
+	_, queue, _, w := setup(t)
+	w.MaxDepth = 1
+	ctx := context.Background()
+
+	if _, _, err := w.Enqueue(ctx, "task", "t1", "Create", json.RawMessage(`{}`), metaNow()); err != nil {
+		t.Fatalf("first enqueue at depth 0 should succeed, got %v", err)
+	}
+
+	_, _, err := w.Enqueue(ctx, "task", "t2", "Create", json.RawMessage(`{}`), metaNow())
+	if err == nil {
+		t.Fatal("expected the second enqueue to be shed once depth reached MaxDepth")
+	}
+	var qf *ErrQueueFull
+	if !errors.As(err, &qf) {
+		t.Fatalf("expected *ErrQueueFull, got %T: %v", err, err)
+	}
+	if qf.Depth != 1 {
+		t.Fatalf("expected reported depth 1, got %d", qf.Depth)
+	}
+
+	pending, err := queue.PendingCommands(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("expected the shed command to never be recorded, got %d pending", len(pending))
 	}
 }
 

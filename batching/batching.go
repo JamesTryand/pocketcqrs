@@ -51,9 +51,24 @@ type Writer struct {
 	interval time.Duration
 	maxBatch int
 
+	// MaxDepth sheds new commands with ErrQueueFull once the queue holds
+	// this many not-yet-done commands (Store.Depth). Zero (the default)
+	// disables shedding. Set directly after NewWriter, before Start.
+	MaxDepth int
+
 	nudge     chan struct{}
 	waitersMu sync.Mutex
 	waiters   map[string]chan Outcome
+}
+
+// ErrQueueFull is returned by Enqueue when MaxDepth is set and already
+// reached (F-5's admission control).
+type ErrQueueFull struct {
+	Depth int
+}
+
+func (e *ErrQueueFull) Error() string {
+	return fmt.Sprintf("batching: queue full at depth %d", e.Depth)
 }
 
 // NewWriter creates a Writer. logger may be nil (defaults to no-op).
@@ -85,6 +100,15 @@ func NewWriter(store *events.Store, queue *commandqueue.Store, registry *decider
 // the replayed events NOT match the original and break the whole pre-commit
 // crash-safety argument this package depends on.
 func (w *Writer) Enqueue(ctx context.Context, aggregate, aggregateID, command string, payload json.RawMessage, meta map[string]any) (id string, wait <-chan Outcome, err error) {
+	if w.MaxDepth > 0 {
+		depth, err := w.queue.Depth(ctx)
+		if err != nil {
+			return "", nil, fmt.Errorf("batching: read queue depth: %w", err)
+		}
+		if depth >= w.MaxDepth {
+			return "", nil, &ErrQueueFull{Depth: depth}
+		}
+	}
 	if _, ok := meta["now"]; !ok {
 		return "", nil, fmt.Errorf("batching: enqueue %s/%s/%s: meta must include \"now\", captured by the caller before enqueueing", aggregate, aggregateID, command)
 	}

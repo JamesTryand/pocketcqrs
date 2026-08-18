@@ -149,6 +149,20 @@ func (s *Store) PendingCommands(ctx context.Context, limit int) ([]QueuedCommand
 	return out, rows.Err()
 }
 
+// Depth reports how many enqueued commands are not yet done. Used for
+// admission control (F-5): a caller sheds new commands once this crosses a
+// configured ceiling, instead of letting them pile up as blocked goroutines
+// with no bound but SQLite's own busy_timeout.
+func (s *Store) Depth(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM command_queue WHERE done = 0`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("commandqueue: depth: %w", err)
+	}
+	return n, nil
+}
+
 // MarkDone marks the given command ids done. Pure bookkeeping, never
 // consulted for correctness (see the package doc comment) -- safe to call
 // late, out of order, or repeatedly on ids already marked done.

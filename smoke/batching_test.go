@@ -11,6 +11,11 @@ import (
 // item 4's design: with --cqrsCommandBatching on, a command still returns
 // 200 with its events synchronously, over a real HTTP round trip -- no
 // client-visible change from the non-batching default.
+//
+// The explicit --cqrsCommandBatching flag below is redundant now that
+// batching is the default -- left in place as a self-documenting assertion
+// that batching is genuinely on here, independent of whatever main.go's
+// default happens to be.
 func TestBatchingNormalRequestUnchangedContract(t *testing.T) {
 	h := startBackendFlags(t, nil, "--tutorial", "--cqrsCommandBatching")
 
@@ -46,5 +51,27 @@ func TestBatchingDomainRejectionReturns400(t *testing.T) {
 	status, body := h.api(http.MethodPost, "/api/cqrs/task/b2/CreateTask", jsonBody(map[string]string{"title": "x"}), nil)
 	if status != http.StatusBadRequest {
 		t.Fatalf("expected 400 for the duplicate create, got %d: %s", status, body)
+	}
+}
+
+// TestBatchingCanBeExplicitlyDisabled confirms the opt-out still works now
+// that batching is the default: --cqrsCommandBatching=false must return to
+// the direct, one-transaction-per-command path, with the gateway's
+// synchronous contract otherwise unchanged.
+func TestBatchingCanBeExplicitlyDisabled(t *testing.T) {
+	h := startBackendFlags(t, nil, "--tutorial", "--cqrsCommandBatching=false")
+
+	var report map[string]any
+	h.apiOK(http.MethodPost, "/api/cqrs/task/b3/CreateTask",
+		jsonBody(map[string]string{"title": "direct"}), &report)
+
+	events, ok := report["events"].([]any)
+	if !ok || len(events) != 1 {
+		t.Fatalf("expected 1 event in the response, got: %+v", report)
+	}
+
+	status, body := h.api(http.MethodPost, "/api/cqrs/task/b3/CreateTask", jsonBody(map[string]string{"title": "x"}), nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("expected 400 for the duplicate create on the direct path, got %d: %s", status, body)
 	}
 }

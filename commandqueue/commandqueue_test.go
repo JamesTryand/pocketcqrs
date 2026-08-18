@@ -143,6 +143,52 @@ func TestMarkDoneEmptyIsNoop(t *testing.T) {
 	}
 }
 
+func TestDepthZeroOnEmptyQueue(t *testing.T) {
+	s := openTest(t)
+	depth, err := s.Depth(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if depth != 0 {
+		t.Fatalf("expected depth 0 on an empty queue, got %d", depth)
+	}
+}
+
+func TestDepthCountsOnlyNotDone(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	a, err := s.EnqueueCommand(ctx, "task", "t1", "Create", nil, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnqueueCommand(ctx, "task", "t2", "Create", nil, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnqueueCommand(ctx, "task", "t3", "Create", nil, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	depth, err := s.Depth(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if depth != 3 {
+		t.Fatalf("expected depth 3, got %d", depth)
+	}
+
+	if err := s.MarkDone(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	depth, err = s.Depth(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if depth != 2 {
+		t.Fatalf("expected depth 2 after marking one done, got %d", depth)
+	}
+}
+
 // BenchmarkEnqueueCommand answers, with a number rather than a guess,
 // whether the enqueue step itself needs batching too (Stage 0's own
 // question -- see the plan). Run with: go test ./commandqueue/... -bench=. -benchtime=3s
