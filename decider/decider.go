@@ -175,6 +175,17 @@ func (r *Registry) Commands(aggregate string) []string {
 	return out
 }
 
+// CommandApplied reports whether a command has already produced events on a
+// stream, by delegating to the event store.
+//
+// It is on the registry because the registry is what callers deciding commands
+// already hold — a reactor dispatching a reaction has no reason to be handed
+// the store as well, and asking it to be would put the check somewhere it can
+// be forgotten.
+func (r *Registry) CommandApplied(ctx context.Context, aggregate, aggregateID, commandID string, afterPosition int64) (bool, error) {
+	return r.store.CommandApplied(ctx, aggregate, aggregateID, commandID, afterPosition)
+}
+
 // Handle loads the stream, folds it into state, decides the command and
 // appends the resulting events with optimistic concurrency.
 //

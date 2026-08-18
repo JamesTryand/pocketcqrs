@@ -11,8 +11,11 @@ package reactors
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/jamestryand/pocketcqrs/consumers"
 	"github.com/jamestryand/pocketcqrs/decider"
@@ -69,6 +72,17 @@ type Dispatcher interface {
 	HandleWithMeta(ctx context.Context, aggregate, id string, cmd decider.Command, meta map[string]any) ([]events.Event, error)
 }
 
+// applied reports whether a command has already produced events on a stream.
+//
+// Optional at the type level so a test fake need not implement it — but the
+// real *decider.Registry MUST, or redelivery protection silently does nothing.
+// That is not a hypothetical: this interface was added before the registry
+// implemented it, the assertion failed open, and three deliveries produced
+// three events with nothing to say why. assertAppliedImplemented pins it.
+type applied interface {
+	CommandApplied(ctx context.Context, aggregate, aggregateID, commandID string, afterPosition int64) (bool, error)
+}
+
 // Dispatch sends reactions to the registry on behalf of the reactor named
 // name, in response to ev.
 //
@@ -93,12 +107,47 @@ func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.E
 	if warn == nil {
 		warn = logger
 	}
-	for _, reaction := range reactions {
+	for i, reaction := range reactions {
+		// A reaction IS a command, so it carries a commandId like any other —
+		// the same durable proof CommitBatch stamps for queued commands.
+		//
+		// It has to be DERIVED, not minted. Delivery is at-least-once, so a
+		// redelivery of the same source event must produce the SAME id, or
+		// every replay looks like new work. The stable inputs are to hand: the
+		// reactor's name, the causing event's id, and this reaction's index.
+		commandID := reactionCommandID(name, ev.ID, i)
 		meta := map[string]any{
 			"actor":         "reactor:" + name,
 			"causationId":   ev.ID,
 			"correlationId": correlationID(ev),
+			"commandId":     commandID,
 		}
+
+		// Skip a reaction whose events are already in the log.
+		//
+		// Until now a redelivered reaction relied on the TARGET having a
+		// natural uniqueness rule to reject it — true for CreateTask, false
+		// for AddOrderLine, where adding the same line twice is a legitimate
+		// outcome. That is the same partial guarantee docs/reference/gateway.md
+		// was wrong to claim for retried commands, one tier over. A derived id
+		// plus this check does not depend on the domain's shape.
+		//
+		// A reaction cannot precede its cause, so the cause's own position
+		// bounds the scan — which is what lets idx_events_command_id serve it
+		// rather than walking the whole log.
+		if store, ok := registry.(applied); ok {
+			done, err := store.CommandApplied(ctx, reaction.Aggregate, reaction.ID, commandID, ev.Position-1)
+			if err != nil {
+				return err
+			}
+			if done {
+				logger("reaction already applied, skipped",
+					"reactor", name, "cause", ev.ID,
+					"target", reaction.Aggregate+"/"+reaction.ID, "command", reaction.Command.Name)
+				continue
+			}
+		}
+
 		_, err := registry.HandleWithMeta(ctx, reaction.Aggregate, reaction.ID, reaction.Command, meta)
 		switch {
 		case err == nil:
@@ -144,6 +193,26 @@ func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.E
 		}
 	}
 	return nil
+}
+
+// assertAppliedImplemented fails to compile if the real dispatcher stops
+// satisfying the optional check above. An optional interface that silently
+// does nothing is exactly the failure this file already exists to prevent.
+var _ applied = (*decider.Registry)(nil)
+
+// reactionCommandID derives a stable id for one reaction of one delivery.
+//
+// Deterministic by construction: the same cause redelivered derives the same
+// id, which is the whole point. Hashed rather than concatenated so the id is
+// opaque and fixed-width, and so a reactor name containing the separator
+// cannot collide with a different one.
+func reactionCommandID(reactor, causeID string, index int) string {
+	h := sha256.New()
+	for _, part := range []string{"reaction", reactor, causeID, strconv.Itoa(index)} {
+		h.Write([]byte(part))
+		h.Write([]byte{0}) // separator, so parts cannot run together
+	}
+	return "reaction-" + hex.EncodeToString(h.Sum(nil)[:16])
 }
 
 // correlationID inherits the triggering event's correlation, defaulting to
