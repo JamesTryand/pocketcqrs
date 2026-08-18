@@ -9,6 +9,7 @@ import (
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/jamestryand/pocketcqrs/authverify"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/writeguard"
@@ -46,7 +47,7 @@ func registerReloadRoute(e *core.ServeEvent, c *components, functionsDir string)
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, report)
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 }
 
 // reloadFunctions reloads the functions directory into the running system.

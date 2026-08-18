@@ -15,6 +15,7 @@ import (
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/jamestryand/pocketcqrs/authverify"
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
@@ -100,7 +101,7 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"dir": functionsDir, "files": files})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	e.Router.GET("/api/cqrs/admin/functions/{name}", func(re *core.RequestEvent) error {
 		path, err := resolveFunctionPath(functionsDir, re.Request.PathValue("name"))
@@ -122,7 +123,7 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			out["error"] = derr.Error()
 		}
 		return re.JSON(http.StatusOK, out)
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	// the copy kept when this file was last overwritten — the undo a bare
 	// os.WriteFile does not give you
@@ -138,7 +139,7 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 		return re.JSON(http.StatusOK, map[string]any{
 			"name": filepath.Base(path), "source": string(raw),
 		})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	e.Router.PUT("/api/cqrs/admin/functions/{name}", func(re *core.RequestEvent) error {
 		path, err := resolveFunctionPath(functionsDir, re.Request.PathValue("name"))
@@ -182,7 +183,7 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			"hasPrevious": replaced,
 			"hint":        activationHint(decl),
 		})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	e.Router.DELETE("/api/cqrs/admin/functions/{name}", func(re *core.RequestEvent) error {
 		path, err := resolveFunctionPath(functionsDir, re.Request.PathValue("name"))
@@ -200,11 +201,11 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			"deleted": true,
 			"hint":    "The file is gone, but whatever it registered is still serving until the next reload drops it.",
 		})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	e.Router.POST("/api/cqrs/admin/dryrun", func(re *core.RequestEvent) error {
 		return c.handleDryRun(re)
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 
 	// Generate a slice's source from a domain description. It writes
 	// nothing: the caller saves the files through PUT above, so generated
@@ -234,7 +235,7 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			"hint": "Nothing was written. Dry-run each file, save it, then reload — " +
 				"a generated decider and projection are a starting point, not a finished domain.",
 		})
-	}).Bind(apis.RequireSuperuserAuth())
+	}).Bind(authverify.RequireSuperuser(c.verifier))
 }
 
 // previousSuffix marks the copy kept when a file is overwritten. It is not

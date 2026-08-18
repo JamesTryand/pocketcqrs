@@ -1,5 +1,6 @@
 // Package functions provides the PocketCQRS functions-as-a-service layer:
-// user-defined functions triggered by domain events or HTTP (cron later).
+// user-defined functions triggered by domain events, HTTP requests, or a
+// cron schedule.
 //
 // Runtime is deliberately language/runtime-agnostic so isolated runtimes
 // (wasm, separate processes) can slot in once untrusted code is in scope.
@@ -7,8 +8,10 @@
 //
 // Event delivery is durable and at-least-once via the consumers engine
 // (checkpointed, replayed after restart). A function that fails on an event
-// is logged and skipped for that event — poison messages do not block the
-// log (dead-lettering is future work).
+// is captured as a dead letter (events.DeadLetter) rather than blocking the
+// log — the checkpoint still advances, and a dead letter can be inspected
+// and redelivered through the current code (see ops.go, the deadletter CLI
+// command).
 package functions
 
 import (

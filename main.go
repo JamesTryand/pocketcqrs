@@ -339,6 +339,17 @@ func main() {
 	}
 	c.role = role
 
+	if role != roleSecondary && app.RootCmd.PersistentFlags().Changed("cqrsVFS") {
+		log.Printf("warning: --cqrsVFS is set but --cqrsRole=%s ignores it (only %s opens events.db through a VFS)", role, roleSecondary)
+	}
+	if role == roleSecondary {
+		for _, name := range []string{"cqrsCommandBatching", "cqrsBatchTimeout", "cqrsCommandQueueMaxDepth"} {
+			if app.RootCmd.PersistentFlags().Changed(name) {
+				log.Printf("warning: --%s is set but --cqrsRole=%s never runs its own writer (a secondary forwards or refuses commands, it does not batch or queue them)", name, roleSecondary)
+			}
+		}
+	}
+
 	if forwardAuth && masterAddr == "" {
 		log.Fatal("invalid flags: --cqrsForwardAuth requires --cqrsMasterAddr")
 	}
