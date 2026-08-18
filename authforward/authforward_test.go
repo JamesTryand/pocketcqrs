@@ -67,14 +67,19 @@ func TestShouldForwardWriteShapedRecordsOnAuthCollection(t *testing.T) {
 	}
 }
 
-func TestShouldNotForwardReadOnlyRecordsOnAuthCollection(t *testing.T) {
-	// GET (list/view) is a read -- reads stay local, only writes forward
+func TestShouldForwardReadsOnAuthCollectionRecords(t *testing.T) {
+	// reads forward too: a secondary's auth-collection rows are its own
+	// local, divergent data, so listing/viewing them locally serves the
+	// wrong rows -- the same split-brain F-12 fixed for writes
 	app := openTestApp(t)
-	if ShouldForward(app, http.MethodGet, "/api/collections/_superusers/records") {
-		t.Fatal("expected a GET to _superusers/records to stay local")
+	if !ShouldForward(app, http.MethodGet, "/api/collections/_superusers/records") {
+		t.Fatal("expected a GET to _superusers/records to be forwarded")
 	}
-	if ShouldForward(app, http.MethodGet, "/api/collections/_superusers/records/someid") {
-		t.Fatal("expected a GET to _superusers/records/{id} to stay local")
+	if !ShouldForward(app, http.MethodGet, "/api/collections/_superusers/records/someid") {
+		t.Fatal("expected a GET to _superusers/records/{id} to be forwarded")
+	}
+	if !ShouldForward(app, http.MethodHead, "/api/collections/_superusers/records") {
+		t.Fatal("expected a HEAD to _superusers/records to be forwarded")
 	}
 }
 

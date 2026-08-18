@@ -86,8 +86,11 @@ func Register(e *core.ServeEvent, target http.Handler) {
 
 // ShouldForward reports whether path (method-qualified) is PocketBase's own
 // native traffic against an auth-type collection: one of the fixed
-// auth-flow suffixes, or a write-shaped (POST/PATCH/DELETE) request to an
-// auth-type collection's plain records endpoint. A pure function of
+// auth-flow suffixes, or any request to an auth-type collection's plain
+// records endpoint -- reads included, since F-12's split-brain applies to
+// them identically (a secondary listing _users would list its own local,
+// divergent rows, not the fleet's). Only auth-methods stays local, being
+// schema/config identical on every node. A pure function of
 // (app, method, path) deliberately -- not dependent on the request's
 // PathValue extraction, which this package's own global middleware binding
 // cannot be certain has already run by the time it executes. Exported so
@@ -107,7 +110,7 @@ func ShouldForward(app core.App, method, path string) bool {
 		return false
 	}
 	switch method {
-	case http.MethodPost, http.MethodPatch, http.MethodDelete:
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPatch, http.MethodDelete:
 	default:
 		return false
 	}
