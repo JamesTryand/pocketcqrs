@@ -3,7 +3,55 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## v0.6.0 — the knowledge ships with the thing
+## Unreleased
+
+A logged-in user finally gets a working secondary. Since the multi-node flags
+landed, no combination of them could deliver both halves: with auth
+forwarding on, a secondary could not verify its own users' tokens for local
+reads; with it off, a token from logging into a secondary was rejected by the
+master the moment a write forwarded there. Same root cause both ways — the
+token key material lives only in each node's own, never-replicated `data.db`.
+Syncing secrets would not have fixed it (half the key is per-record and read
+live on every check) and would have armed every secondary with the fleet's
+signing authority besides.
+
+### Added
+
+- **`--cqrsVerifyAuth` — remote token verification with a bounded cache.**
+  The master exposes `POST /api/cqrs/auth/verify`, a validity oracle running
+  the same check it applies to its own requests; a secondary verifies bearer
+  tokens there, materializes a local auth context from the answer, and
+  caches the verdict for `--cqrsVerifyCacheTTL` (default `5m`, never past
+  the token's own `exp`; SHA-256 of the token as the key — the raw token is
+  never stored). No signing material ever leaves the master; a compromised
+  secondary can forge nothing. Implies `--cqrsForwardAuth`: only
+  master-minted tokens can verify remotely, and with verification in place,
+  forwarding no longer breaks local reads — which was the only reason those
+  flags were ever separate.
+- **`--cqrsVerifyGrace`** — opt-in outage tolerance: serve expired verdicts
+  for a bounded window while the master is unreachable. Off by default;
+  without it, an expired verdict plus an unreachable master fails closed
+  with `503` — not `401`, which would send users to a login flow that
+  cannot work either while the master is down. The tradeoff is stated, not
+  hidden: grace extends availability and the revocation lag by the same
+  amount.
+
+### Changed
+
+- **The ops routes re-verify against the master on every request** on a
+  verify-mode secondary — no cache, no grace. Their gate used to check the
+  node-local `_superusers` table, which on a secondary is an unrelated
+  table, not a replica; and an operator revoking a suspected-compromised
+  admin token needs that to bite immediately, not after a TTL window.
+- **`authforward` now forwards auth-collection reads too**, not only
+  writes: `GET`/`HEAD` on an auth collection's records read the master's
+  rows instead of the secondary's own local, divergent ones. `auth-methods`
+  stays local as before.
+- **Ops write routes on a secondary answer a clean `503`** ("read-only
+  replica") instead of a generic `400` leaking the raw store error string —
+  the same mapping the command gateway has always used.
+
+
 
 Documentation tells you what exists. It does not stop you writing a projection that returns
 rows instead of row ops and silently writes nothing forever, because you have to already

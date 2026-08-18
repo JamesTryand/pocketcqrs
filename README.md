@@ -9,10 +9,11 @@ A CQRS + functions-as-a-service backend built on [PocketBase](https://pocketbase
 - **Sagas**: reactors are durable consumers that map committed events to follow-up commands, dispatched back through the registry with causation/correlation metadata — reactions become events like everything else.
 - **Functions (FaaS)**: user-defined JS functions from `pb_functions/` — effects (`//@trigger event`), HTTP (`//@trigger http`), cron (`//@trigger cron`), projections (`//@trigger projection` + `//@schema`), full deciders (`//@trigger decider`), and reactors (`//@trigger reactor` + `//@dispatches`) mapping events to follow-up commands — with durability, determinism tiers and read-only query-side bindings per role. Commands and HTTP functions require PocketBase auth by default (`--cqrsAllowAnonymous` for dev).
 - **Calling out**: a hard-bounded `$http` for event/cron functions and reactors, off unless `--cqrsAllowOutboundHTTP`, restricted to a deployment-wide host allow-list, with the resolved IP re-checked at dial time, no redirects, no retry, a concurrency cap and a body cap. Deciders and projections can never reach the network.
+- **Multi-node**: single writer, multiple readers. A `--cqrsRole=secondary` node polls a replicated `events.db` read-only, runs its own projections, forwards commands and auth traffic to the master (`--cqrsMasterAddr`), and — with `--cqrsVerifyAuth` — verifies bearer tokens against the master with a bounded local cache, so authenticated reads work on a secondary without any secret ever leaving the master. See the [CLI reference](docs/reference/cli.md#multi-node-single-writer-multiple-readers).
 
 ## Status
 
-**`v0.5.0`.** Usable and dogfooded; the API is not frozen. Not affiliated with PocketBase; upstream (`pocketbase/pocketbase`) is an unmodified dependency pinned in `go.mod`.
+**`v0.6.0`.** Usable and dogfooded; the API is not frozen. Not affiliated with PocketBase; upstream (`pocketbase/pocketbase`) is an unmodified dependency pinned in `go.mod`.
 
 **It ships empty on purpose.** No aggregates, no collections, nothing you did not write — `--tutorial` opts into the example domains this repo uses to teach and to test itself.
 

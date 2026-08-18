@@ -56,6 +56,68 @@ Two consequences worth knowing:
   when you drop the flag. They keep their write-guard rather than silently
   becoming writable, and boot logs a warning naming them.
 
+## Multi-node (single writer, multiple readers)
+
+One master appends to `events.db`; any number of secondaries poll a
+replicated copy of that file read-only (e.g. via a Litestream-provided VFS)
+and run their own local projections. There is no leader election — the
+master is fixed by configuration. `data.db` (auth records, settings, signing
+secrets) is per-node and **never replicated**; only `events.db` is.
+
+| flag | default | meaning |
+| --- | --- | --- |
+| `--cqrsRole` | `master` | `master` appends to `events.db`; `secondary` polls a replica read-only and refuses local writes |
+| `--cqrsEventsPath` | `<dir>/events.db` | where `events.db` lives — a secondary points this at the master's replicated file |
+| `--cqrsVFS` | *(none)* | SQLite VFS name to open `events.db` through on a secondary; empty opens the plain file read-only |
+| `--cqrsMasterAddr` | *(none)* | the master's base URL; when set on a secondary, commands are proxied there instead of refused |
+| `--cqrsForwardAuth` | `false` | also route PocketBase's own auth-collection traffic (login, token refresh, `_users`/`_superusers` records — reads included) to the master, since a secondary's copies of those tables are unrelated local tables, not replicas |
+| `--cqrsVerifyAuth` | `false` | verify bearer tokens against the master with a bounded local verdict cache, so a secondary's own authenticated **local** reads work; implies `--cqrsForwardAuth` |
+| `--cqrsVerifyCacheTTL` | `5m` | how long a verdict is trusted before re-checking, always additionally capped by the token's own `exp`. Also the revocation-lag bound |
+| `--cqrsVerifyGrace` | `0` | opt-in: how far past expiry a stale verdict may still serve while the master is **unreachable** (never past the token's `exp`). `0` fails closed |
+
+A read-write-capable secondary is these three together:
+
+```sh
+pocketcqrs serve --cqrsRole secondary \
+  --cqrsEventsPath /replica/events.db \
+  --cqrsMasterAddr http://master:8090 \
+  --cqrsVerifyAuth
+```
+
+### How auth works across nodes
+
+PocketBase verifies a token with per-record + per-collection key material
+that lives only in each node's own `data.db` — so no node can verify a
+token another node minted, and secrets are deliberately never synced (a
+compromised secondary must gain nothing). Instead:
+
+- **Login forwards.** With `--cqrsForwardAuth` (implied by
+  `--cqrsVerifyAuth`), every auth flow is proxied to the master, so every
+  token a client holds is master-minted.
+- **Verification asks the master.** The master exposes
+  `POST /api/cqrs/auth/verify` — a validity oracle running exactly the
+  check it applies to its own requests, returning the record the token
+  belongs to and nothing more. A secondary materializes a local auth
+  context from the answer and caches the verdict for `--cqrsVerifyCacheTTL`
+  (SHA-256 of the token as the key; the raw token is never stored).
+- **Writes always end at the master** and are verified there per request —
+  the cache is only ever about a secondary's own local reads.
+- **The ops routes never use the cache.** `/api/cqrs/events`, `/streams`,
+  `/deadletters/*`, `/admin/*` re-verify against the master on every
+  request, so revoking an operator's token (rotating its `tokenKey`) bites
+  immediately, not after a TTL window.
+- **Master unreachable**: a live cached verdict keeps serving; anything
+  else answers `503` (not `401` — a re-login cannot work either while the
+  master is down), unless `--cqrsVerifyGrace` opts into serving expired
+  verdicts for a bounded window. The tradeoff is explicit: grace extends
+  availability through an outage and extends the revocation lag by the
+  same amount.
+
+Known limits on a secondary: API rules referencing hidden fields of the
+authenticated record evaluate against the verdict's serialization, which
+omits them; protected-file tokens are not covered; rate-limit state stays
+per node.
+
 ## projection
 
 ```sh
