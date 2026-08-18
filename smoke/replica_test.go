@@ -46,7 +46,7 @@ func startSecondary(t *testing.T, master *harness, extra ...string) *harness {
 		"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir, "--tutorial",
 		"--cqrsRole", "secondary", "--cqrsEventsPath", masterEventsPath,
 	}, extra...)
-	serve(t, master.Bin, dir, "secondary", args...)
+	h.stop = serve(t, master.Bin, dir, "secondary", args...)
 	waitFor(t, h.BackendURL+"/api/health")
 
 	h.Token = h.authenticate()

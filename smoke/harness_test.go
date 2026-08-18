@@ -58,6 +58,11 @@ type harness struct {
 	Token        string
 
 	client *http.Client
+
+	// stop kills the backend process (idempotent; also registered as test
+	// cleanup) — for tests about what the REST of the fleet does when this
+	// node is gone, e.g. a verify-mode secondary riding out a master outage.
+	stop func()
 }
 
 // startBackend builds pocketcqrs, seeds a superuser and serves. Function
@@ -103,7 +108,7 @@ func startBackendFlags(t *testing.T, functions map[string]string, extra ...strin
 	args := append([]string{
 		"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir,
 	}, extra...)
-	serve(t, bin, dir, "backend", args...)
+	h.stop = serve(t, bin, dir, "backend", args...)
 	waitFor(t, h.BackendURL+"/api/health")
 
 	h.Token = h.authenticate()
