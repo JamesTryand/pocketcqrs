@@ -28,11 +28,40 @@ resulting event's metadata:
 | `401` | no/invalid auth token |
 | `404` | unknown aggregate |
 | `409` | concurrency conflict (the stream changed between load and append; retry the command) |
+| `422` | the `Idempotency-Key` was already used for a *different* request — see below |
 | `503` | maintenance mode — `{ error, hint }`; retry after `system maintenance off` |
 
-**Idempotency**: deciders that reject already-applied intents (e.g. "task
-already exists") make retried commands safe — a `400` after a timed-out
-`200` means the first attempt landed.
+### Idempotency
+
+**Send an `Idempotency-Key` header.** A retry carrying the same key *and* the
+same aggregate/id/command/body replays the original response verbatim — the
+same `200` and the same events, or the same `409` — instead of re-deciding the
+command. The same key with a *different* request is a `422` rather than being
+silently replayed or silently applied twice.
+
+Generate the key **client-side**. Only a caller that generates its own key can
+send the same one when it retries, which is the entire mechanism; a
+server-minted key would differ on every attempt and deduplicate nothing.
+
+Requests without the header are unaffected, and **that is the case to
+understand**: without a key there is no idempotency here at all.
+
+> **A decider is not a substitute, and this document used to say it was.**
+> A decider that happens to reject an already-applied intent ("task already
+> exists") does make *that* command safe to retry — but it is a property of the
+> domain, not of the platform. `AddOrderLine` twice is legitimately two lines,
+> and no decider can tell a retry from a genuine second intent, because nothing
+> on the wire distinguishes them. Without a key, a client that retries after an
+> ambiguous timeout can double-apply.
+
+Records live in their own `idempotency.db` and are pruned on a schedule, so a
+key is replayable for a bounded window rather than forever.
+
+**Reactions carry this too.** A reaction is a command, and it is stamped with a
+`commandId` derived from its cause — the reactor's name, the causing event's id
+and the reaction's index — so an at-least-once redelivery of the same event is
+recognised and skipped rather than relying on the target having a uniqueness
+rule of its own.
 
 ## HTTP functions
 
