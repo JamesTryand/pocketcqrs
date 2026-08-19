@@ -166,17 +166,30 @@ func WithVFS(name string) OpenOption {
 // that owns it (Open) is responsible for creating and migrating it.
 //
 // This is the entry point a single-writer/multi-reader secondary uses: it
-// VFS-mounts the master's replicated events.db (see WithVFS) and polls it,
-// but must never append to it directly. A secondary's own consumer
-// checkpoints cannot live in this Store either, for the same reason —
-// consumers.NewEngineWithCheckpoints takes a separate, locally writable
-// CheckpointStore for exactly this case.
+// polls a locally-replicated copy of the master's events.db and must never
+// append to it directly. A secondary's own consumer checkpoints cannot live
+// in this Store either, for the same reason — consumers.NewEngineWithCheckpoints
+// takes a separate, locally writable CheckpointStore for exactly this case.
+//
+// Deliberately does not request journal_mode(WAL): a reader doesn't need to
+// ask for the mode a file is already in -- SQLite negotiates it from the
+// file header on open -- and requesting it is actively harmful, not just
+// redundant, against a copy kept in sync by Litestream's `restore -f`
+// (litestream-vfs-scope.md): that tool deliberately rewrites a followed
+// copy's header into DELETE journal mode as part of its own concurrent-
+// reader safety mechanism, and a mode=ro connection cannot honor a
+// WAL-mode request against that file -- confirmed directly, not assumed:
+// it fails outright with "attempt to write a readonly database (8)" rather
+// than silently no-opping. Omitting the pragma is safe for both the
+// already-verified same-host WAL case (plain-file --cqrsEventsPath) and
+// this Litestream-followed DELETE-mode case, since the connection just
+// reads whichever mode the file is actually in either way.
 func OpenReadOnly(path string, opts ...OpenOption) (*Store, error) {
 	var cfg openConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=query_only(1)&mode=ro",
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(10000)&_pragma=query_only(1)&mode=ro",
 		path)
 	if cfg.vfs != "" {
 		dsn += "&vfs=" + cfg.vfs

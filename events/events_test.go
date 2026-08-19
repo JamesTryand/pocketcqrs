@@ -69,6 +69,72 @@ func TestOpenReadOnlyRejectsWrites(t *testing.T) {
 	}
 }
 
+// TestOpenReadOnlyAgainstDeleteModeCopy reproduces what a Litestream
+// `restore -f`-followed secondary copy of events.db actually looks like on
+// disk: DELETE journal mode (bytes 18-19 = 0x01,0x01) with a randomized
+// schema-change counter (bytes 24-27), the exact header rewrite
+// litestream/replica.go's applyLTXFile performs as its own concurrent-reader
+// safety mechanism (litestream-vfs-scope.md, "Why DELETE mode, not WAL").
+//
+// Confirmed live against a real litestream replicate + restore -f cycle
+// before this fix landed: without it, OpenReadOnly's old unconditional
+// `_pragma=journal_mode(WAL)` failed outright against a file in this shape
+// with "attempt to write a readonly database (8)" -- not a silent no-op.
+// This test pins that regression without needing a real litestream binary
+// in CI.
+func TestOpenReadOnlyAgainstDeleteModeCopy(t *testing.T) {
+	dir := t.TempDir()
+	writerPath := filepath.Join(dir, "events.db")
+
+	writer, err := Open(writerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := writer.Append(ctx, "task", "t1", 0, []NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// checkpoint the WAL into the main file so a raw byte copy below carries
+	// the full, current state -- mirrors what Litestream's own snapshot
+	// restore produces (a single self-contained file, no separate -wal).
+	if _, err := writer.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+
+	raw, err := os.ReadFile(writerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) < 28 {
+		t.Fatalf("events.db too small to carry a SQLite header: %d bytes", len(raw))
+	}
+	// the exact rewrite applyLTXFile performs (litestream/replica.go:974-976)
+	raw[18], raw[19] = 0x01, 0x01
+	raw[24], raw[25], raw[26], raw[27] = 0xe3, 0x2e, 0x37, 0x82
+
+	followedPath := filepath.Join(dir, "followed-events.db")
+	if err := os.WriteFile(followedPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ro, err := OpenReadOnly(followedPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly against a DELETE-mode Litestream-followed copy: %v", err)
+	}
+	t.Cleanup(func() { ro.Close() })
+
+	stream, err := ro.LoadStream(ctx, "task", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stream) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(stream))
+	}
+}
+
 func TestOpenReadOnlyDoesNotCreateMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "does-not-exist.db")
