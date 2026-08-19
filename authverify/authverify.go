@@ -4,10 +4,11 @@
 // PocketBase verifies an auth token with the HMAC key
 // record.TokenKey() + collection.AuthToken.Secret, both of which live only
 // in each node's own data.db — which is deliberately never replicated (only
-// events.db is; see SCALING.md). So a token minted by the master is
-// unverifiable on a secondary, and vice versa: no --cqrsForwardAuth setting
-// alone makes a secondary both read- and write-capable for a logged-in
-// user. Syncing secrets does not fix this either — the per-record TokenKey
+// events.db is; see docs/reference/cli.md's "Multi-node" section). So a
+// token minted by the master is unverifiable on a secondary, and vice
+// versa: no --cqrsForwardAuth setting alone makes a secondary both read-
+// and write-capable for a logged-in user. Syncing secrets does not fix
+// this either — the per-record TokenKey
 // would still need a live master read per check (see the planning record's
 // multi-node auth design analysis, shapes B/B′).
 //

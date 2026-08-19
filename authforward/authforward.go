@@ -6,11 +6,12 @@
 // collection are NOT projected from events.db by anything in this
 // project -- a secondary's copy of these tables is not a stale replica of
 // the master's, it is a different table with different rows, since only
-// events.db is replicated (see SCALING.md). Extending writeguard to deny
-// writes on them (as item 5 originally proposed) does not fix this: a
-// login on a secondary reads the wrong local data before any write even
-// happens. The actual fix is routing this traffic to the master entirely
-// -- reads and writes alike -- which is what this package does.
+// events.db is replicated (see docs/reference/cli.md's "Multi-node"
+// section). Extending writeguard to deny writes on them (as item 5
+// originally proposed) does not fix this: a login on a secondary reads
+// the wrong local data before any write even happens. The actual fix is
+// routing this traffic to the master entirely -- reads and writes alike
+// -- which is what this package does.
 //
 // This is a global router middleware, not a route the way the CQRS
 // gateway's Forward (item 3) is: PocketBase registers these routes itself

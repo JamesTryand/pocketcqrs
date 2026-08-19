@@ -40,9 +40,10 @@ import (
 // margin without letting the table grow unboundedly.
 const idempotencyRetention = 24 * time.Hour
 
-// Node roles for --cqrsRole (see SCALING.md's single-writer/multi-reader
-// design). roleMaster is this project's entire behavior before this flag
-// existed; roleSecondary is new and additive.
+// Node roles for --cqrsRole (see docs/reference/cli.md's "Multi-node"
+// section for the single-writer/multi-reader design). roleMaster is this
+// project's entire behavior before this flag existed; roleSecondary is
+// new and additive.
 const (
 	roleMaster    = "master"
 	roleSecondary = "secondary"
@@ -177,14 +178,17 @@ func main() {
 		"register this repo's example domains (task, order) and their collections; off by default — pocketcqrs ships empty",
 	)
 
-	// Node role for the single-writer/multi-reader deployment (story 2,
-	// SCALING.md): a secondary polls a replicated events.db read-only
-	// instead of appending to it, and checkpoints its own consumers
-	// separately since the read-only store can't hold them (see
-	// consumers.NewEngineWithCheckpoints, and events.ErrReadOnly below).
-	// What this flag does NOT do: forward commands or auth traffic to a
-	// master (item 3, unbuilt) — a secondary refuses commands outright
-	// (503) rather than silently accepting ones it can't durably apply.
+	// Node role for the single-writer/multi-reader deployment
+	// (docs/reference/cli.md's "Multi-node" section): a secondary polls a
+	// replicated events.db read-only instead of appending to it, and
+	// checkpoints its own consumers separately since the read-only store
+	// can't hold them (see consumers.NewEngineWithCheckpoints, and
+	// events.ErrReadOnly below).
+	// What this flag ALONE does NOT do: forward commands or auth traffic
+	// to a master (item 3 -- see --cqrsMasterAddr below, a separate,
+	// already-built flag) — a secondary with no --cqrsMasterAddr set
+	// refuses commands outright (503) rather than silently accepting
+	// ones it can't durably apply.
 	var role string
 	app.RootCmd.PersistentFlags().StringVar(
 		&role,
@@ -421,7 +425,7 @@ func main() {
 		// PocketBase's own migration runner), never events.db. Each node's
 		// data.db is local and always writable regardless of role — that is
 		// not a new risk this flag introduces, it's what a single instance
-		// already does today (SCALING.md).
+		// already does today (docs/reference/cli.md's "Multi-node" section).
 		if err := e.App.RunAppMigrations(); err != nil {
 			return err
 		}
