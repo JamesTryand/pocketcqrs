@@ -67,21 +67,21 @@ replicated**; only `events.db` is.
 **Verified today**: a secondary pointed at the master's `events.db` by a
 plain shared local path (`--cqrsEventsPath`, same machine or a filesystem
 both processes see directly) — this is what every test and this project's
-own smoke suite uses. **Not yet built**: genuine cross-host replication.
-`--cqrsVFS` exists as a hook for that (see the flag table below) but no
-driver integration exists in this codebase to make it work — that's tracked
-as open work, not a flag you can reach for today. Do not point
-`--cqrsEventsPath` at a network-mounted (NFS/SMB) copy of the file as a
-substitute: `events.db` runs in WAL mode, and SQLite's own documentation
-states WAL is not safe over network filesystems (the `-shm` coordination
-file needs shared-memory semantics those don't reliably provide) — a stated
-incompatibility, not a scale-dependent risk.
+own smoke suite uses. **Genuine cross-host replication uses LiteFS** (see
+"Cross-host replication with LiteFS" below) — decided and tested at the
+same-host, two-process level; not yet separately verified across a real
+network, though the mechanism is architecturally the same either way. Do not
+point `--cqrsEventsPath` at a network-mounted (NFS/SMB) copy of the file as a
+substitute for either approach: `events.db` runs in WAL mode, and SQLite's
+own documentation states WAL is not safe over network filesystems (the
+`-shm` coordination file needs shared-memory semantics those don't reliably
+provide) — a stated incompatibility, not a scale-dependent risk.
 
 | flag | default | meaning |
 | --- | --- | --- |
 | `--cqrsRole` | `master` | `master` appends to `events.db`; `secondary` polls a replica read-only and refuses local writes |
-| `--cqrsEventsPath` | `<dir>/events.db` | where `events.db` lives — a secondary points this at the master's replicated file |
-| `--cqrsVFS` | *(none)* | **a pass-through hook, not a built integration** — a SQLite VFS name to open `events.db` through on a secondary, if one is already registered with the driver. Nothing in this codebase registers a VFS (no Litestream, LiteFS, or other dependency in `go.mod`); the flag only works if an operator wires that up themselves. Empty (the default) opens the plain file read-only |
+| `--cqrsEventsPath` | `<dir>/events.db` | where `events.db` lives — a secondary points this at the master's replicated file (a LiteFS FUSE mount path, for genuine cross-host — see below) |
+| `--cqrsVFS` | *(none)* | **dead hook — not the cross-host mechanism.** A SQLite VFS name to open `events.db` through on a secondary, if one is already registered with the driver. Nothing in this codebase registers a VFS, and LiteFS (the actual decided mechanism) does not use this flag at all — it works by FUSE-mounting a directory, not by SQLite VFS registration. Leave this unset |
 | `--cqrsMasterAddr` | *(none)* | the master's base URL; when set on a secondary, commands are proxied there instead of refused |
 | `--cqrsForwardAuth` | `false` | also route PocketBase's own auth-collection traffic (login, token refresh, `_users`/`_superusers` records — reads included) to the master, since a secondary's copies of those tables are unrelated local tables, not replicas |
 | `--cqrsVerifyAuth` | `false` | verify bearer tokens against the master with a bounded local verdict cache, so a secondary's own authenticated **local** reads work; implies `--cqrsForwardAuth` |
@@ -96,6 +96,131 @@ pocketcqrs serve --cqrsRole secondary \
   --cqrsMasterAddr http://master:8090 \
   --cqrsVerifyAuth
 ```
+
+`/replica/events.db` above is deliberately generic — same-host, it's a path both processes see
+directly; under LiteFS, it's the `events.db` inside that node's own FUSE mount (see below).
+
+### Cross-host replication with LiteFS
+
+Decided after evaluating Litestream first: Litestream's `restore -f` follow mode stalls 30-90+
+seconds under a continuously-polling reader (confirmed cross-platform, not a Windows quirk) —
+exactly what a live secondary's own read loop is, so it cannot deliver the low-latency replication
+this design needs. [LiteFS](https://github.com/superfly/litefs) was tested under the identical
+scenario and showed no stall: writes replicate in roughly 1-2s, with no accumulating lag under
+sustained load. **`static` lease, not `consul`** — this project's multi-node design has one fixed
+master by configuration, deliberately no automatic failover (see "Manual promotion" below), so
+`static` needs no extra infrastructure. `consul` lease remains a real option if automatic failover
+is ever actually taken up as its own project — not something to reach for by default.
+
+LiteFS is a FUSE filesystem: it intercepts writes to a mounted directory and replicates them to
+other nodes, transparently to whatever opens files inside that directory. **The master's own
+`events.db` has to be opened from inside the FUSE mount, not a plain path** — this is the one real
+structural difference from a design like Litestream's, where a sidecar could tail an
+already-running master's plain file. `events.Open`/`events.OpenReadOnly` need no code changes to
+work through a FUSE mount — verified directly against both.
+
+LiteFS is not a pocketcqrs dependency (`go.mod` stays clean) — it runs as its own binary, one per
+node, alongside `pocketcqrs serve`. Get it from [GitHub
+releases](https://github.com/superfly/litefs/releases) or build it from source
+(`CGO_ENABLED=1 go build ./cmd/litefs` — needs `gcc`). Linux only: LiteFS is FUSE-based, and FUSE
+has no Windows or (without extra setup) macOS story.
+
+#### Config shape
+
+One `litefs.yml` per node. The primary:
+
+```yaml
+fuse:
+  dir: "/litefs/mnt"       # pocketcqrs's --cqrsEventsPath points inside here
+data:
+  dir: "/litefs/data"      # LiteFS's own internal storage -- not the FUSE mount
+http:
+  addr: ":20202"
+lease:
+  type: "static"
+  hostname: "primary"
+  advertise-url: "http://master.internal:20202"
+  candidate: true
+```
+
+Every secondary uses the same shape with `candidate: false` and its own `fuse.dir`/`data.dir` — but
+**`lease.advertise-url` is always the primary's address**, on every node including the primary
+itself (the primary's own address just happens to equal its own `advertise-url`). This is not a
+per-secondary setting to vary; it's the fixed address of whichever node is currently primary.
+
+Run `litefs mount -config litefs.yml` as its own process on every node, then point pocketcqrs's
+`--cqrsEventsPath` at `<fuse.dir>/events.db`:
+
+```sh
+# on the primary, after `litefs mount -config primary.yml` is running:
+pocketcqrs serve --cqrsEventsPath /litefs/mnt/events.db ...
+
+# on a secondary, after its own `litefs mount -config secondary.yml` is running:
+pocketcqrs serve --cqrsRole secondary \
+  --cqrsEventsPath /litefs/mnt/events.db \
+  --cqrsMasterAddr http://master:8090 \
+  --cqrsVerifyAuth
+```
+
+pocketcqrs must not start reading/writing `--cqrsEventsPath` before its node's `litefs mount` has
+actually become primary or finished syncing — starting them as two separately-supervised processes
+(the shape tested and documented here) needs that ordering handled by your process supervisor
+(health-check gate, or a startup script polling for the primary's log line
+`"primary lease acquired"` / the secondary's mount directory appearing). LiteFS also offers an
+`exec:` config option that runs a given command as its own supervised subprocess only once the node
+is ready, folding both processes into one unit — a real option, not yet exercised by this project's
+own testing, which deliberately keeps `litefs mount` and `pocketcqrs serve` as two separate,
+independently-inspectable processes.
+
+#### Adopting LiteFS on an existing deployment
+
+A single-instance deployment does not need to decide about LiteFS up front. Run on a plain
+`--cqrsEventsPath` for as long as you want; when you're ready for a secondary, migrate the existing
+`events.db` in with:
+
+```sh
+litefs import -url http://localhost:20202 -name events.db /path/to/existing/events.db
+```
+
+against an already-running (empty) primary. Verified directly: all pre-existing data survives, the
+primary keeps appending normally afterward, and a secondary attached only after the import receives
+the complete history automatically, indistinguishable from a database that lived inside LiteFS from
+the start.
+
+**Do not just `cp` the existing file into the FUSE mount** — this fails outright
+(`Input/output error`), and if the failure isn't checked, pocketcqrs will silently open a fresh,
+empty database at that path instead of the real one. `litefs import` is the only supported path.
+
+#### Restarts
+
+- **A secondary restarting** (same config, same local data dir) resyncs from its own persisted
+  state in a fraction of a second — not a from-scratch replica rebuild. Safe to restart routinely
+  (deploys, host reboots) without special handling.
+- **The primary restarting** with the same config (`candidate: true` unchanged) resumes as primary
+  cleanly — re-acquires its lease, all prior data intact, accepts writes immediately. Also no
+  special handling needed for an ordinary process restart.
+
+#### Manual promotion (the actual failover mechanism)
+
+`static` lease has **no automated handoff** — a secondary cannot be promoted by any LiteFS command
+or API call. If the primary is gone for good, promote a synced secondary manually:
+
+1. Confirm which secondary is most caught up (least lag), if more than one exists.
+2. Edit that secondary's `litefs.yml`: `lease.candidate: true`, `lease.advertise-url` set to **its
+   own** address.
+3. Restart its `litefs mount` process. It becomes primary, retaining everything already replicated
+   to it, and immediately accepts writes.
+4. Restart `pocketcqrs serve` on that node with `--cqrsRole master` (dropping `--cqrsRole secondary`
+   and its forwarding flags).
+5. Update every other node's `litefs.yml` (`lease.advertise-url`) to point at the new primary and
+   restart them.
+
+**Data-loss window, stated plainly rather than left implicit**: any write that had not yet
+replicated to the promoted secondary at the moment the old primary failed is genuinely lost — this
+is inherent to any primary/secondary replication design, not a LiteFS defect, but it is exactly what
+an operator needs to understand before promoting during a real incident. If the old primary is still
+reachable enough to check (a graceful failover, not a hard crash), confirming replication lag is
+near zero before promoting avoids this entirely.
 
 ### How auth works across nodes
 
