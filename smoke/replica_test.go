@@ -16,12 +16,22 @@ import (
 )
 
 // startSecondary boots a second, independent pocketcqrs process against its
-// own data dir, pointed at master's events.db via --cqrsEventsPath — the
-// single-writer/multi-reader shape (item 2). It reuses master's already-built
-// binary rather than building a second copy. extra is appended to the serve
-// args, e.g. "--cqrsMasterAddr", master.BackendURL to also wire forwarding
-// (item 3).
+// own data dir, pointed at master's events.db directly via --cqrsEventsPath
+// — the single-writer/multi-reader shape (item 2), same-host plain-file
+// case. It reuses master's already-built binary rather than building a
+// second copy. extra is appended to the serve args, e.g. "--cqrsMasterAddr",
+// master.BackendURL to also wire forwarding (item 3).
 func startSecondary(t *testing.T, master *harness, extra ...string) *harness {
+	t.Helper()
+	return startSecondaryAt(t, master, filepath.Join(master.DataDir, "events.db"), extra...)
+}
+
+// startSecondaryAt is startSecondary generalized to an explicit eventsPath,
+// for the case where the secondary reads a copy of events.db kept in sync by
+// something other than a direct shared path -- e.g. a Litestream
+// `restore -f`-followed file (see startLitestreamSecondary in
+// litestream_replica_test.go).
+func startSecondaryAt(t *testing.T, master *harness, eventsPath string, extra ...string) *harness {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -41,10 +51,9 @@ func startSecondary(t *testing.T, master *harness, extra ...string) *harness {
 
 	addr := freeAddr(t)
 	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: master.Bin, client: newClient(t)}
-	masterEventsPath := filepath.Join(master.DataDir, "events.db")
 	args := append([]string{
 		"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir, "--tutorial",
-		"--cqrsRole", "secondary", "--cqrsEventsPath", masterEventsPath,
+		"--cqrsRole", "secondary", "--cqrsEventsPath", eventsPath,
 	}, extra...)
 	h.stop = serve(t, master.Bin, dir, "secondary", args...)
 	waitFor(t, h.BackendURL+"/api/health")
