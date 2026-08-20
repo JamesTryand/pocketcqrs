@@ -83,6 +83,15 @@ type Config struct {
 	// trust that comes with one, that it does not hold the credential
 	// for. Empty (the default) disables this entirely: actorMeta falls
 	// back to today's behavior. See actorMeta.
+	//
+	// A record in this collection with an empty "name" field degrades to
+	// the raw record id as its actor -- deliberately, not silently: it
+	// still authenticates and its command still applies, it just won't
+	// get the "extcall:" label or ReactorFlows visibility until "name" is
+	// set. Provisioning tooling (pocketcqrs-extensions' planned Phase 6
+	// CLI) should always set it; this package has no logger to warn
+	// through, so the degradation is a documented default, not silent
+	// inertness left unstated.
 	ExternalCallerCollection string
 }
 
@@ -324,6 +333,13 @@ func actorMeta(re *core.RequestEvent, cfg Config) map[string]any {
 		return nil
 	}
 
+	// PocketBase's default record id (core.GenerateDefaultRandomId) is a
+	// 15-character string drawn from "abcdefghijklmnopqrstuvwxyz0123456789"
+	// -- never a ":" -- so an ordinary caller's actor (the bare id, below)
+	// practically can't collide with the "reactor:"/"extcall:" prefixes
+	// ReactorFlows and catalog.go's consumer-Kind switch both match on.
+	// Not a hard guarantee against every conceivable custom/imported id,
+	// but true for every id this codebase itself ever generates.
 	actor := re.Auth.Id
 	isExternalCaller := cfg.ExternalCallerCollection != "" &&
 		re.Auth.Collection().Name == cfg.ExternalCallerCollection
@@ -331,6 +347,9 @@ func actorMeta(re *core.RequestEvent, cfg Config) map[string]any {
 		if name := re.Auth.GetString("name"); name != "" {
 			actor = "extcall:" + name
 		}
+		// name == "" falls through with actor still the raw record id --
+		// deliberate degradation, not a silent failure to derive it. See
+		// Config.ExternalCallerCollection's doc comment.
 	}
 
 	meta := map[string]any{

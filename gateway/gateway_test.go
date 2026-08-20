@@ -148,6 +148,20 @@ func postCreateWithHeaders(t *testing.T, srv *httptest.Server, aggregateID strin
 // end user, for the negative-case tests) takes at the gateway.
 func newAuthRecord(t *testing.T, app core.App, collectionName, name string) (*core.Record, string) {
 	t.Helper()
+	rec, token := newAuthRecordWithEmail(t, app, collectionName, name+"@example.com")
+	rec.Set("name", name)
+	if err := app.Save(rec); err != nil {
+		t.Fatalf("saving record in %s: %v", collectionName, err)
+	}
+	return rec, token
+}
+
+// newAuthRecordWithEmail is newAuthRecord's shared setup, without ever
+// setting "name" -- used directly by
+// TestActorMetaFallsBackToRecordIdWhenNameEmpty to prove that omission
+// degrades gracefully rather than erroring.
+func newAuthRecordWithEmail(t *testing.T, app core.App, collectionName, email string) (*core.Record, string) {
+	t.Helper()
 	col, err := app.FindCollectionByNameOrId(collectionName)
 	if err != nil {
 		col = core.NewAuthCollection(collectionName)
@@ -157,9 +171,8 @@ func newAuthRecord(t *testing.T, app core.App, collectionName, name string) (*co
 		}
 	}
 	rec := core.NewRecord(col)
-	rec.SetEmail(name + "@example.com")
+	rec.SetEmail(email)
 	rec.SetPassword("1234567890")
-	rec.Set("name", name)
 	if err := app.Save(rec); err != nil {
 		t.Fatalf("saving record in %s: %v", collectionName, err)
 	}
@@ -170,10 +183,10 @@ func newAuthRecord(t *testing.T, app core.App, collectionName, name string) (*co
 	return rec, token
 }
 
-// firstEventActor decodes {"events":[...]} and returns the first event's
-// metadata.actor (and metadata.causationId/correlationId via the second
-// return), or fails the test -- the shape every actorMeta assertion below
-// needs to check.
+// firstEventMeta decodes {"events":[...]} and returns the first event's
+// full metadata map, or fails the test -- the shape every actorMeta
+// assertion below needs to check (actor, actorCollection, causationId,
+// correlationId, whichever the test cares about).
 func firstEventMeta(t *testing.T, body string) map[string]any {
 	t.Helper()
 	var decoded struct {
@@ -535,5 +548,64 @@ func TestActorMetaUnsetLeavesBehaviorUnchanged(t *testing.T) {
 	status, _ := postCreate(t, srv, "")
 	if status != http.StatusOK {
 		t.Fatalf("expected 200, got %d", status)
+	}
+}
+
+// A recognized-collection record with no "name" field set must degrade to
+// the raw record id, not fail the request -- documented in Config.
+// ExternalCallerCollection's own comment as a deliberate default (this
+// package has no logger to warn through), pinned here so it can't quietly
+// change into an error or an empty actor instead.
+func TestActorMetaFallsBackToRecordIdWhenNameEmpty(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv, app := newTestGatewayWithConfigAndApp(t, store, gateway.Config{
+		ExternalCallerCollection: "service_accounts",
+	})
+	rec, token := newAuthRecordWithEmail(t, app, "service_accounts", "noname@example.com")
+
+	status, body := postCreateWithHeaders(t, srv, "t1", map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("expected 200 (degrade, don't fail), got %d: %s", status, body)
+	}
+	meta := firstEventMeta(t, body)
+	if meta["actor"] != rec.Id {
+		t.Fatalf("expected the raw record id %q as actor when \"name\" is empty, got %v", rec.Id, meta["actor"])
+	}
+}
+
+// Pins the invariant actorMeta's own comment documents: an ordinary
+// caller's actor (a bare PocketBase record id) never collides with the
+// "reactor:"/"extcall:" prefixes ReactorFlows and catalog.go's
+// consumer-Kind switch match on, which is what lets those prefixes double
+// as an automation marker with no separate typed field.
+func TestOrdinaryCallerActorNeverMatchesAutomationPrefixes(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv, app := newTestGatewayWithConfigAndApp(t, store, gateway.Config{
+		ExternalCallerCollection: "service_accounts",
+	})
+	_, token := newAuthRecord(t, app, "users", "alice")
+
+	status, body := postCreateWithHeaders(t, srv, "t1", map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", status, body)
+	}
+	meta := firstEventMeta(t, body)
+	actor, _ := meta["actor"].(string)
+	if strings.HasPrefix(actor, "reactor:") || strings.HasPrefix(actor, "extcall:") {
+		t.Fatalf("an ordinary caller's actor collided with an automation prefix: %q", actor)
 	}
 }
