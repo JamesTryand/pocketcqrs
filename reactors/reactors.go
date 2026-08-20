@@ -100,6 +100,16 @@ type applied interface {
 // than a domain refusal (see the switch below); it may be nil, in which case
 // it falls back to logger. Both tiers pass their own, because the level rule
 // is part of the shared contract this function exists to keep in one place.
+//
+// actor and provenance answer different questions and must not be conflated:
+// actor says which reactor produced this reaction, unconditionally; provenance
+// (present only when the causing event carries one — see causeProvenance)
+// says whether that reactor's own cause crossed a trust boundary, e.g. a
+// federated peer deployment once that exists. A local reactor reacting to a
+// federation-ingested event inherits that event's provenance onto its own
+// reactions, the same way correlationId already propagates across a reaction
+// chain — so provenance survives however many local hops separate a command
+// from the peer-originated event that ultimately caused it.
 func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.Event, reactions []Reaction, logger, warn func(string, ...any)) error {
 	if logger == nil {
 		logger = func(string, ...any) {}
@@ -121,6 +131,9 @@ func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.E
 			"causationId":   ev.ID,
 			"correlationId": correlationID(ev),
 			"commandId":     commandID,
+		}
+		if provenance := causeProvenance(ev); provenance != "" {
+			meta["provenance"] = provenance
 		}
 
 		// Skip a reaction whose events are already in the log.
@@ -225,4 +238,20 @@ func correlationID(ev events.Event) string {
 		}
 	}
 	return ev.ID
+}
+
+// causeProvenance inherits the triggering event's provenance, if it has one.
+//
+// Unlike correlationID there is no meaningful self-value to fall back to: a
+// plain local event has nothing to claim, so the zero value ("") is the
+// correct answer, and callers must treat it as "omit the key" rather than
+// stamp an empty string into metadata forever.
+func causeProvenance(ev events.Event) string {
+	var meta map[string]any
+	if err := json.Unmarshal(ev.Metadata, &meta); err == nil {
+		if p, ok := meta["provenance"].(string); ok {
+			return p
+		}
+	}
+	return ""
 }

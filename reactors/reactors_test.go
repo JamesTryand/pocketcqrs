@@ -82,6 +82,66 @@ func TestFulfillmentDispatchesTask(t *testing.T) {
 	if meta["correlationId"] == "" {
 		t.Fatal("correlationId missing")
 	}
+	if _, ok := meta["provenance"]; ok {
+		t.Fatalf("unexpected provenance key on a purely local reaction: %v", meta)
+	}
+}
+
+// TestFulfillmentInheritsProvenance proves reactors.Dispatch propagates a
+// causing event's provenance onto its reaction, the mechanism the federation
+// trust model item in NEEDS.md needs: a local reactor reacting to an event
+// that itself carries provenance (e.g. once a federation-ingest write sets
+// it) must not silently drop that signal just because the reactor itself has
+// no idea federation exists.
+func TestFulfillmentInheritsProvenance(t *testing.T) {
+	store, r := setup(t)
+	ctx := context.Background()
+	mk := func(name string, payload any) decider.Command {
+		data, _ := json.Marshal(payload)
+		return decider.Command{Name: name, Payload: data}
+	}
+
+	if _, err := r.Handle(ctx, aggregates.OrderAggregate, "o1", mk(aggregates.CmdPlaceOrder, map[string]string{"customerRef": "c1"})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Handle(ctx, aggregates.OrderAggregate, "o1", mk(aggregates.CmdAddOrderLine, aggregates.OrderLine{SKU: "w", Qty: 1, Price: 100})); err != nil {
+		t.Fatal(err)
+	}
+	// stand in for a future federation-ingest write: the causing event
+	// itself carries provenance, as ordinary caller-supplied meta.
+	if _, err := r.HandleWithMeta(ctx, aggregates.OrderAggregate, "o1", mk(aggregates.CmdConfirmOrder, nil),
+		map[string]any{"provenance": "federated:peer1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stream, err := store.LoadStream(ctx, aggregates.OrderAggregate, "o1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := AsConsumer(Fulfillment(), r, nil, nil)
+	for _, ev := range stream {
+		if err := c.Apply(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tasks, err := store.LoadStream(ctx, aggregates.TaskAggregate, "fulfill-o1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %+v", tasks)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(tasks[0].Metadata, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["actor"] != "reactor:fulfillment" {
+		t.Fatalf("actor changed unexpectedly: %v", meta)
+	}
+	if meta["provenance"] != "federated:peer1" {
+		t.Fatalf("provenance not inherited: %v", meta)
+	}
 }
 
 func TestFulfillmentReplayIsIdempotent(t *testing.T) {
@@ -135,6 +195,19 @@ func TestCorrelationIDInherited(t *testing.T) {
 	ev = events.Event{ID: "root", Metadata: json.RawMessage(`{}`)}
 	if got := correlationID(ev); got != "root" {
 		t.Fatalf("expected self as root, got %q", got)
+	}
+}
+
+func TestCauseProvenanceInherited(t *testing.T) {
+	ev := events.Event{Metadata: json.RawMessage(`{"provenance":"federated:peer1"}`)}
+	if got := causeProvenance(ev); got != "federated:peer1" {
+		t.Fatalf("expected inherited provenance, got %q", got)
+	}
+	// no meaningful self-value: an event with nothing to claim has none,
+	// unlike correlationID which falls back to being its own root.
+	ev = events.Event{ID: "root", Metadata: json.RawMessage(`{}`)}
+	if got := causeProvenance(ev); got != "" {
+		t.Fatalf("expected empty provenance, got %q", got)
 	}
 }
 

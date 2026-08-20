@@ -128,10 +128,11 @@ func (r *GojaRuntime) runDecide(spec *DeciderSpec, cmd decider.Command, state an
 		}
 	}
 	command := map[string]any{
-		"name":    cmd.Name,
-		"payload": payload,
-		"now":     meta["now"],
-		"actor":   meta["actor"],
+		"name":       cmd.Name,
+		"payload":    payload,
+		"now":        meta["now"],
+		"actor":      meta["actor"],
+		"provenance": meta["provenance"],
 	}
 
 	fn, ok := goja.AssertFunction(vm.Get("decide"))

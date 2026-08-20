@@ -225,6 +225,42 @@ func TestTypedDeciderSeesActorAndNow(t *testing.T) {
 	}
 }
 
+// TestTypedDeciderSeesProvenance mirrors TestTypedDeciderSeesActorAndNow for
+// the Provenance field: populated from meta["provenance"] when present,
+// empty when absent -- the same convention Actor already follows.
+func TestTypedDeciderSeesProvenance(t *testing.T) {
+	var seen []string
+	echo := &Decider[struct{}]{
+		InitialState: func() struct{} { return struct{}{} },
+		Decide: func(cmd Command, state struct{}) ([]events.NewEvent, error) {
+			seen = append(seen, cmd.Provenance)
+			return []events.NewEvent{{Type: "Echoed", Data: json.RawMessage(`{}`)}}, nil
+		},
+		Evolve: func(state struct{}, ev events.Event) (struct{}, error) { return state, nil },
+	}
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	r := NewRegistry(store)
+	Register(r, "echo", echo)
+	ctx := context.Background()
+
+	if _, err := r.HandleWithMeta(ctx, "echo", "e1",
+		Command{Name: "Do"}, map[string]any{"provenance": "federated:peer1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.HandleWithMeta(ctx, "echo", "e2",
+		Command{Name: "Do"}, map[string]any{"actor": "user123"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(seen) != 2 || seen[0] != "federated:peer1" || seen[1] != "" {
+		t.Fatalf("unexpected provenance values seen: %+v", seen)
+	}
+}
+
 // fakeLoader lets a test control exactly what LoadStream returns,
 // independent of what's actually durable in the store -- standing in for
 // the batching writer's per-window overlay of not-yet-committed events.

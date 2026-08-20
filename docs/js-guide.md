@@ -218,7 +218,7 @@ catch up.
 function initialState() { return { exists: false, text: "", archived: false }; }
 
 function decide(command, state) {
-  // command: { name, payload, now, actor }
+  // command: { name, payload, now, actor, provenance }
   switch (command.name) {
     case "CreateNote":
       if (state.exists) throw new Error("note already exists");
@@ -311,6 +311,17 @@ still refuse.
   checkpoint. The metadata `actor` stamped on the dispatched command *does*
   use `reactor:<name>`, because that's what the catalog's flow detection
   joins on.
+- **`command.provenance`**: empty unless the event that caused this reaction
+  itself carried a `provenance` in its metadata, in which case it's inherited
+  onto the reaction's command — the same propagation `causationId`/
+  `correlationId` already get. This is how a reactor several hops downstream
+  of a federated peer deployment's event (once federation exists) still
+  carries that origin forward, without the reactor itself needing to know
+  anything about federation. `actor`'s `reactor:<name>` value never changes
+  because of this — it always says which reactor produced the command, not
+  where the causal chain started. See
+  [go-guide.md](go-guide.md#the-calling-actor-commandactor--commandnow) for
+  the full reasoning and the authorization guidance.
 - `//@dispatches <aggregate>/<Command>...` is optional and documentation-only
   (same limits as `//@commands`), but worth adding: a dispatched command
   leaves no trace of its own in the catalog until the reaction has actually

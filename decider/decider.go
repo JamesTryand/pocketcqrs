@@ -37,11 +37,23 @@ var ErrUnknownAggregate = errors.New("decider: unknown aggregate")
 // hold permission for this command") impossible to express in the
 // documented, idiomatic Go decider pattern. See platform/pocketbase-cqrs-faas
 // FAULTS-AND-WORK.md F-14 for the finding that surfaced this.
+//
+// Provenance is a separate question from Actor: Actor answers "who/what
+// issued this command" (a user id, or "reactor:<name>" for reactor
+// automation); Provenance answers "did the causal chain behind this command
+// cross a trust boundary" (e.g. a peer deployment, once federation exists).
+// It is empty for everything the gateway and local reactors produce today —
+// only a trusted local write path is meant to ever set it — so a decider
+// checking it for elevated trust is trusting whatever wrote that meta, not
+// pattern-matching Actor's string convention. See
+// platform/pocketbase-cqrs-faas NEEDS.md's federation trust model item for
+// the full reasoning.
 type Command struct {
-	Name    string          `json:"name"`
-	Payload json.RawMessage `json:"payload"`
-	Actor   string          `json:"actor,omitempty"`
-	Now     string          `json:"now,omitempty"`
+	Name       string          `json:"name"`
+	Payload    json.RawMessage `json:"payload"`
+	Actor      string          `json:"actor,omitempty"`
+	Now        string          `json:"now,omitempty"`
+	Provenance string          `json:"provenance,omitempty"`
 }
 
 // Decider is the write-side model of one aggregate type.
@@ -113,6 +125,9 @@ func Register[S any](r *Registry, aggregate string, d *Decider[S]) {
 			}
 			if now, ok := meta["now"].(string); ok {
 				cmd.Now = now
+			}
+			if provenance, ok := meta["provenance"].(string); ok {
+				cmd.Provenance = provenance
 			}
 			return d.Decide(cmd, state.(S))
 		},

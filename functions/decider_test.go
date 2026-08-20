@@ -101,6 +101,49 @@ func TestJSDeciderLifecycle(t *testing.T) {
 	}
 }
 
+// TestJSDeciderSeesProvenance proves command.provenance reaches the JS VM
+// the same way command.actor/command.now already do -- the JS-tier half of
+// the federation trust model mechanism (NEEDS.md).
+func TestJSDeciderSeesProvenance(t *testing.T) {
+	const src = `
+	function initialState() { return {}; }
+	function decide(command, state) {
+		return [{ type: "Seen", data: { provenance: command.provenance || null } }];
+	}
+	function evolve(state, event) { return state; }
+	`
+	_, registry := deciderSetup(t)
+	rt := NewGojaRuntime(nil)
+	spec := mkDeciderSpec(t, rt, "probe", src, []string{"Seen"}, nil)
+	registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
+	ctx := context.Background()
+
+	appended, err := registry.HandleWithMeta(ctx, "probe", "p1",
+		decider.Command{Name: "Go"}, map[string]any{"provenance": "federated:peer1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(appended[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["provenance"] != "federated:peer1" {
+		t.Fatalf("command.provenance not seen by JS decider: %v", data)
+	}
+
+	appended, err = registry.HandleWithMeta(ctx, "probe", "p2",
+		decider.Command{Name: "Go"}, map[string]any{"actor": "u1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(appended[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["provenance"] != nil {
+		t.Fatalf("expected no provenance when meta omits it, got: %v", data)
+	}
+}
+
 func TestTier3VMNeutering(t *testing.T) {
 	_, registry := deciderSetup(t)
 	rt := NewGojaRuntime(nil)

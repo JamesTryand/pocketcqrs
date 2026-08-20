@@ -146,6 +146,19 @@ stops it), but doing so breaks the same replay-reproducibility guarantee, so
 treat the ban as a convention worth keeping even though the compiler won't
 enforce it.
 
+`cmd.Provenance` is a separate, narrower signal: empty for everything the
+gateway and local reactors produce today, and set only by a trusted local
+write path that has verified a command's causal chain crossed a trust
+boundary (e.g. a federated peer deployment, once that exists — see
+platform/pocketbase-cqrs-faas NEEDS.md's federation trust model item). Do
+**not** infer trust from `cmd.Actor`'s `"reactor:<name>"` prefix — that
+string only says which reactor produced the command, unconditionally, and is
+identical whether the reactor reacted to a purely local event or one that
+originated at an independently-administered peer. A decider that wants to
+grant reactor automation elevated trust should check `cmd.Provenance`
+instead: it is empty unless something explicitly vouched for the command's
+origin.
+
 ## A Go projection
 
 ```go
