@@ -120,6 +120,25 @@ func main() {
 		return
 	}
 
+	// `schema import` is a pure file-to-file transformation (see
+	// newSchemaImportCommand's doc comment) with no dependency on a running
+	// platform, so it gets the same short-circuit as `skill` above, for the
+	// same reason: going through app.Start() bootstraps a full pb_data/
+	// before any RunE runs, with no per-command opt-out, and a refused
+	// import left one behind despite writing nothing itself (F-10).
+	// Short-circuiting also fixes F-9 for this command: PocketBase's own
+	// pb.Execute() discards RootCmd.Execute()'s return value, so a RunE
+	// error used to print correctly but never reach a non-zero exit code.
+	// Running Execute() directly here lets main() act on it.
+	if len(os.Args) > 2 && os.Args[1] == "schema" && os.Args[2] == "import" {
+		ic := newSchemaImportCommand()
+		ic.SetArgs(os.Args[3:])
+		if err := ic.Execute(); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+
 	app := pocketbase.New()
 	c := &components{}
 
@@ -334,7 +353,7 @@ func main() {
 	app.RootCmd.AddCommand(newSystemCommand(c))
 	app.RootCmd.AddCommand(newCatalogCommand(c))
 	app.RootCmd.AddCommand(newPackCommand(c, &functionsDir))
-	app.RootCmd.AddCommand(newSchemaCommand(c, &functionsDir))
+	app.RootCmd.AddCommand(newSchemaCommand(c))
 	app.RootCmd.AddCommand(newSkillCommand())
 	app.RootCmd.ParseFlags(os.Args[1:])
 	c.tutorial = tutorial

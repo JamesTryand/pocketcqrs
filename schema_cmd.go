@@ -11,21 +11,29 @@ import (
 	"github.com/jamestryand/pocketcqrs/emschema"
 )
 
-// newSchemaCommand builds the `schema` CLI group: import and export
-// EventModeling documents (github.com/jamestryand/eventmodelschema).
+// newSchemaImportCommand builds the standalone `schema import` command.
 //
-// Import is ONE-SHOT and writes nothing live. It produces the same files the
-// dashboard's scaffolder produces, saved through the ordinary function-file
-// path, so imported code goes through the same load check, dry run and
-// maintenance barrier as anything hand-written. There is no new activation
-// machinery, deliberately: a document is a description, and describing
-// something must not be a way to bypass the gates.
-func newSchemaCommand(c *components, functionsDir *string) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "schema",
-		Short: "Import and export EventModeling documents",
-	}
-
+// Extracted so main() can run it directly, before PocketBase ever
+// bootstraps (see main()'s short-circuit, mirroring the one already there
+// for `skill`) — import is a pure file-to-file transformation (emschema.Load
+// / Map / Verify, then plain os.WriteFile calls) with no dependency on a
+// running platform: it touches no *components field and no core.App. Making
+// it go through app.Start() anyway was F-10 — PocketBase bootstraps
+// (creating a full pb_data/) before any RunE runs and offers no per-command
+// opt-out, so even a REFUSED import left a data directory behind. It also
+// enabled F-9 for this command specifically: PocketBase's own
+// pb.Execute() discards RootCmd.Execute()'s return value ("leave to the
+// commands to decide whether to print their error" — pocketbase.go), so a
+// RunE error was printed but never turned into a non-zero exit code. Running
+// this command's own Execute() directly, outside that wrapper, fixes both:
+// no bootstrap happens at all, and main() can act on the returned error.
+//
+// It is still ALSO registered under the ordinary `schema` group by
+// newSchemaCommand below, purely so `pocketcqrs --help`/`schema --help`
+// continue to list it — mirroring the `skill` command's own precedent
+// (main.go's short-circuit comment explains why that copy stays registered
+// too). A real `schema import` invocation never reaches that copy.
+func newSchemaImportCommand() *cobra.Command {
 	imp := &cobra.Command{
 		Use:   "import <document.json|manifest-dir>",
 		Short: "Map an EventModeling document onto generated function files",
@@ -40,6 +48,7 @@ func newSchemaCommand(c *components, functionsDir *string) *cobra.Command {
 			overrides, _ := cmd.Flags().GetStringSlice("aggregate")
 			force, _ := cmd.Flags().GetBool("force")
 			skipScenarios, _ := cmd.Flags().GetBool("skip-scenarios")
+			functionsDir, _ := cmd.Flags().GetString("functionsDir")
 
 			opts := emschema.Options{AggregateOverrides: map[string]string{}}
 			for _, kv := range overrides {
@@ -89,7 +98,7 @@ func newSchemaCommand(c *components, functionsDir *string) *cobra.Command {
 			}
 			cmd.Printf("\nWrote %d file(s) to %s\n", written, outDir)
 			cmd.Println("Nothing is live yet. Save each file through the editor (or copy it into " +
-				*functionsDir + "), then reload — schema-bearing files need maintenance mode first.")
+				functionsDir + "), then reload — schema-bearing files need maintenance mode first.")
 			return nil
 		},
 	}
@@ -100,7 +109,30 @@ func newSchemaCommand(c *components, functionsDir *string) *cobra.Command {
 	imp.Flags().Bool("force", false, "overwrite existing files")
 	imp.Flags().Bool("skip-scenarios", false,
 		"do not run the document's scenarios against the generated code")
-	cmd.AddCommand(imp)
+	// Its own local flag, not shared with the app's --functionsDir: this
+	// command never runs alongside a booted app, so there's nothing to
+	// share it with. Only used for the completion message above.
+	imp.Flags().String("functionsDir", "pb_functions",
+		"the directory the completion message tells you to copy generated files into")
+	return imp
+}
+
+// newSchemaCommand builds the `schema` CLI group: import and export
+// EventModeling documents (github.com/jamestryand/eventmodelschema).
+//
+// Import is ONE-SHOT and writes nothing live. It produces the same files the
+// dashboard's scaffolder produces, saved through the ordinary function-file
+// path, so imported code goes through the same load check, dry run and
+// maintenance barrier as anything hand-written. There is no new activation
+// machinery, deliberately: a document is a description, and describing
+// something must not be a way to bypass the gates.
+func newSchemaCommand(c *components) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "schema",
+		Short: "Import and export EventModeling documents",
+	}
+
+	cmd.AddCommand(newSchemaImportCommand())
 
 	exp := &cobra.Command{
 		Use:   "export <document.json>",
