@@ -96,9 +96,12 @@ func (s *Store) StreamCounts(ctx context.Context) (map[string]int64, error) {
 	return out, rows.Err()
 }
 
-// ReactorFlow is one observed reaction edge: a reactor (metadata.actor
-// "reactor:<name>") produced target events in response to cause events
-// (metadata.causationId). Empirical, from the log — reactions are events.
+// ReactorFlow is one observed reaction edge: an in-process reactor
+// (metadata.actor "reactor:<name>") or a recognized out-of-process external
+// caller (metadata.actor "extcall:<name>" — see gateway.Config's
+// ExternalCallerCollection/pocketcqrs-extensions' extcaller) produced
+// target events in response to cause events (metadata.causationId).
+// Empirical, from the log — reactions are events.
 type ReactorFlow struct {
 	Reactor         string `json:"reactor"`
 	CauseAggregate  string `json:"causeAggregate"`
@@ -109,6 +112,14 @@ type ReactorFlow struct {
 }
 
 // ReactorFlows aggregates the observed reactor mappings in the log.
+//
+// The "reactor:%"/"extcall:%" match is pure event-metadata pattern
+// matching, joined on causationId — not cross-referenced against any
+// in-process consumer registry — so an out-of-process external caller's
+// dispatches (which never register as a checkpointed consumer here) are
+// exactly as visible to this query as an in-process reactor's, as long as
+// the dispatching caller set causationId (gateway.Config.
+// ExternalCallerCollection is what lets it).
 func (s *Store) ReactorFlows(ctx context.Context) ([]ReactorFlow, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT json_extract(e.metadata, '$.actor'),
@@ -116,6 +127,7 @@ func (s *Store) ReactorFlows(ctx context.Context) ([]ReactorFlow, error) {
 		 FROM events e
 		 JOIN events c ON c.id = json_extract(e.metadata, '$.causationId')
 		 WHERE json_extract(e.metadata, '$.actor') LIKE 'reactor:%'
+		    OR json_extract(e.metadata, '$.actor') LIKE 'extcall:%'
 		 GROUP BY 1, 2, 3, 4, 5
 		 ORDER BY 1, 2, 3, 4, 5`)
 	if err != nil {

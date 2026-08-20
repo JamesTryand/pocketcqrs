@@ -67,6 +67,23 @@ type Config struct {
 	// commit when Batching is set. Required (non-zero) whenever Batching
 	// is set; has no effect otherwise.
 	BatchTimeout time.Duration
+	// ExternalCallerCollection, when set, names a PocketBase auth
+	// collection whose authenticated records are external service
+	// integrations (e.g. pocketcqrs-extensions' extcaller) rather than end
+	// users or reactors. A record in this collection gets its commands'
+	// actor stamped as "extcall:<name>" (its own "name" field) instead of
+	// its raw record id, and -- only for this collection, never for an
+	// arbitrary authenticated caller -- may additionally supply
+	// Causation-Id/Correlation-Id request headers, merged into every
+	// resulting event's metadata the same way a local reactor's dispatch
+	// already carries them (see reactors.Dispatch). Everything here is
+	// derived from re.Auth (already verified by RequireAuth) and this
+	// config value, never from anything else the request supplies -- a
+	// caller cannot claim a service identity, or the elevated header
+	// trust that comes with one, that it does not hold the credential
+	// for. Empty (the default) disables this entirely: actorMeta falls
+	// back to today's behavior. See actorMeta.
+	ExternalCallerCollection string
 }
 
 // RegisterRoutes binds the command endpoint:
@@ -76,7 +93,13 @@ type Config struct {
 //
 // Unless AllowAnonymous is set, a valid PocketBase record or superuser auth
 // token is required; the authenticated record is stamped into every
-// resulting event's metadata as {"actor": ..., "actorCollection": ...}.
+// resulting event's metadata as {"actor": ..., "actorCollection": ...} —
+// actor is the record's raw id, except for a caller Config.
+// ExternalCallerCollection recognizes, which gets "extcall:<name>" instead
+// (see actorMeta). That same recognized caller may also supply
+// Causation-Id/Correlation-Id request headers, merged into the resulting
+// events' metadata the same way a local reactor's own dispatch already
+// carries them.
 //
 // While the system is in maintenance mode (see Config.Mode), commands are
 // rejected with 503: the write side is paused so schema-bearing functions
@@ -197,7 +220,7 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		} else {
 			appended, err = registry.HandleWithMeta(re.Request.Context(), aggregate, id,
 				decider.Command{Name: cmdName, Payload: json.RawMessage(payload)},
-				actorMeta(re))
+				actorMeta(re, cfg))
 		}
 		if err != nil {
 			if errors.Is(err, errBatchTimeout) {
@@ -263,7 +286,7 @@ var errBatchTimeout = errors.New("gateway: batch commit did not complete in time
 // here would silently defeat it regardless of how correct the writer
 // itself is.
 func handleViaBatching(re *core.RequestEvent, cfg Config, aggregate, id, cmdName string, payload []byte) ([]events.Event, error) {
-	meta := actorMeta(re)
+	meta := actorMeta(re, cfg)
 	if meta == nil {
 		meta = map[string]any{}
 	}
@@ -285,13 +308,51 @@ func handleViaBatching(re *core.RequestEvent, cfg Config, aggregate, id, cmdName
 	}
 }
 
-// actorMeta extracts the command-issuer identity from the request, if any.
-func actorMeta(re *core.RequestEvent) map[string]any {
+// actorMeta extracts the command-issuer identity from the request, if any,
+// and -- only for a caller cfg.ExternalCallerCollection recognizes -- the
+// optional causation/correlation metadata it supplies.
+//
+// Everything here is derived from re.Auth (already verified by
+// RequireAuth) and cfg (this deployment's own boot-time configuration),
+// never from anything else the request contains: actor is not
+// caller-assertable, and Causation-Id/Correlation-Id are only ever honored
+// for a caller whose collection membership already proves it holds a
+// recognized service-account credential -- the same pattern actor itself
+// already uses. See Config.ExternalCallerCollection's doc comment.
+func actorMeta(re *core.RequestEvent, cfg Config) map[string]any {
 	if re.Auth == nil {
 		return nil
 	}
-	return map[string]any{
-		"actor":           re.Auth.Id,
+
+	actor := re.Auth.Id
+	isExternalCaller := cfg.ExternalCallerCollection != "" &&
+		re.Auth.Collection().Name == cfg.ExternalCallerCollection
+	if isExternalCaller {
+		if name := re.Auth.GetString("name"); name != "" {
+			actor = "extcall:" + name
+		}
+	}
+
+	meta := map[string]any{
+		"actor":           actor,
 		"actorCollection": re.Auth.Collection().Name,
 	}
+
+	// Gated to a recognized external caller, not opened to every
+	// authenticated caller: these feed ReactorFlows/the catalog explorer's
+	// display, which an arbitrary caller fabricating edges would pollute
+	// for no legitimate reason. Unlike Idempotency-Key (no trust
+	// implication -- only affects which cached response replays), these
+	// affect what the flow diagrams show, so they get the same trust gate
+	// actor's own derivation does.
+	if isExternalCaller {
+		if v := re.Request.Header.Get("Causation-Id"); v != "" {
+			meta["causationId"] = v
+		}
+		if v := re.Request.Header.Get("Correlation-Id"); v != "" {
+			meta["correlationId"] = v
+		}
+	}
+
+	return meta
 }

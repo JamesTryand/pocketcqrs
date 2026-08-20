@@ -46,6 +46,16 @@ func newTestGatewayWithStore(t *testing.T, store *events.Store, idem *idempotenc
 
 func newTestGatewayWithConfig(t *testing.T, store *events.Store, cfg gateway.Config) *httptest.Server {
 	t.Helper()
+	srv, _ := newTestGatewayWithConfigAndApp(t, store, cfg)
+	return srv
+}
+
+// newTestGatewayWithConfigAndApp is newTestGatewayWithConfig, also
+// returning the underlying *tests.TestApp -- needed by any test that must
+// create an auth record (an external-caller identity, or an ordinary user)
+// to authenticate a request as, rather than relying on AllowAnonymous.
+func newTestGatewayWithConfigAndApp(t *testing.T, store *events.Store, cfg gateway.Config) (*httptest.Server, *tests.TestApp) {
+	t.Helper()
 
 	app, err := tests.NewTestApp()
 	if err != nil {
@@ -82,7 +92,7 @@ func newTestGatewayWithConfig(t *testing.T, store *events.Store, cfg gateway.Con
 	}
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, app
 }
 
 func postCreate(t *testing.T, srv *httptest.Server, idemKey string) (status int, body string) {
@@ -104,6 +114,84 @@ func postCreate(t *testing.T, srv *httptest.Server, idemKey string) (status int,
 		t.Fatal(err)
 	}
 	return resp.StatusCode, string(b)
+}
+
+// postCreateWithHeaders is postCreate, but lets a test set arbitrary
+// headers (a bearer token, Causation-Id/Correlation-Id) on a fresh
+// aggregate id each call, so tests exercising actorMeta's derivation don't
+// collide with each other or with postCreate's own fixed "t1".
+func postCreateWithHeaders(t *testing.T, srv *httptest.Server, aggregateID string, headers map[string]string) (status int, body string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/cqrs/task/"+aggregateID+"/Create", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(b)
+}
+
+// newAuthRecord creates collectionName (an auth collection, created fresh
+// if it does not already exist) with a "name" text field, a record in it
+// with that field set, and mints a real auth token for the record --
+// exactly the shape a recognized external-caller identity (or an ordinary
+// end user, for the negative-case tests) takes at the gateway.
+func newAuthRecord(t *testing.T, app core.App, collectionName, name string) (*core.Record, string) {
+	t.Helper()
+	col, err := app.FindCollectionByNameOrId(collectionName)
+	if err != nil {
+		col = core.NewAuthCollection(collectionName)
+		col.Fields.Add(&core.TextField{Name: "name"})
+		if err := app.Save(col); err != nil {
+			t.Fatalf("creating collection %s: %v", collectionName, err)
+		}
+	}
+	rec := core.NewRecord(col)
+	rec.SetEmail(name + "@example.com")
+	rec.SetPassword("1234567890")
+	rec.Set("name", name)
+	if err := app.Save(rec); err != nil {
+		t.Fatalf("saving record in %s: %v", collectionName, err)
+	}
+	token, err := rec.NewAuthToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec, token
+}
+
+// firstEventActor decodes {"events":[...]} and returns the first event's
+// metadata.actor (and metadata.causationId/correlationId via the second
+// return), or fails the test -- the shape every actorMeta assertion below
+// needs to check.
+func firstEventMeta(t *testing.T, body string) map[string]any {
+	t.Helper()
+	var decoded struct {
+		Events []struct {
+			Metadata json.RawMessage `json:"metadata"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("decoding response body: %v\n%s", err, body)
+	}
+	if len(decoded.Events) == 0 {
+		t.Fatalf("no events in response: %s", body)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(decoded.Events[0].Metadata, &meta); err != nil {
+		t.Fatalf("decoding event metadata: %v\n%s", err, decoded.Events[0].Metadata)
+	}
+	return meta
 }
 
 func TestGatewayWithoutIdempotencyKeyBehavesAsBefore(t *testing.T) {
@@ -316,5 +404,136 @@ func TestGatewayForwardSkipsLocalAuthCheck(t *testing.T) {
 	}
 	if !reached {
 		t.Fatal("the forward target was never reached")
+	}
+}
+
+// TestActorMetaStampsExtcallPrefixForRecognizedCaller and its siblings below
+// cover item 7/8: a recognized external-caller identity (a record in
+// Config.ExternalCallerCollection) gets its commands' actor stamped as
+// "extcall:<name>" and may additionally supply Causation-Id/Correlation-Id;
+// an ordinary caller in any other collection gets neither, unchanged from
+// before either field existed.
+func TestActorMetaStampsExtcallPrefixForRecognizedCaller(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv, app := newTestGatewayWithConfigAndApp(t, store, gateway.Config{
+		ExternalCallerCollection: "service_accounts",
+	})
+	_, token := newAuthRecord(t, app, "service_accounts", "orders-sync")
+
+	status, body := postCreateWithHeaders(t, srv, "t1", map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", status, body)
+	}
+	meta := firstEventMeta(t, body)
+	if meta["actor"] != "extcall:orders-sync" {
+		t.Fatalf("expected actor \"extcall:orders-sync\", got %v (full meta: %v)", meta["actor"], meta)
+	}
+}
+
+func TestActorMetaLeavesOrdinaryCallerUnchanged(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv, app := newTestGatewayWithConfigAndApp(t, store, gateway.Config{
+		ExternalCallerCollection: "service_accounts",
+	})
+	// an ordinary user, in a DIFFERENT collection than the recognized one
+	rec, token := newAuthRecord(t, app, "users", "alice")
+
+	status, body := postCreateWithHeaders(t, srv, "t1", map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", status, body)
+	}
+	meta := firstEventMeta(t, body)
+	if meta["actor"] != rec.Id {
+		t.Fatalf("expected the raw record id %q as actor (unchanged behavior), got %v", rec.Id, meta["actor"])
+	}
+	if meta["actorCollection"] != "users" {
+		t.Fatalf("expected actorCollection \"users\", got %v", meta["actorCollection"])
+	}
+}
+
+func TestActorMetaHonorsCausationAndCorrelationForRecognizedCaller(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv, app := newTestGatewayWithConfigAndApp(t, store, gateway.Config{
+		ExternalCallerCollection: "service_accounts",
+	})
+	_, token := newAuthRecord(t, app, "service_accounts", "orders-sync")
+
+	status, body := postCreateWithHeaders(t, srv, "t1", map[string]string{
+		"Authorization":  "Bearer " + token,
+		"Causation-Id":   "evt-123",
+		"Correlation-Id": "corr-456",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", status, body)
+	}
+	meta := firstEventMeta(t, body)
+	if meta["causationId"] != "evt-123" {
+		t.Fatalf("expected causationId \"evt-123\", got %v", meta["causationId"])
+	}
+	if meta["correlationId"] != "corr-456" {
+		t.Fatalf("expected correlationId \"corr-456\", got %v", meta["correlationId"])
+	}
+}
+
+// The gating is the point of item 8's design: an arbitrary authenticated
+// caller must not be able to fabricate the causation graph ReactorFlows and
+// the catalog explorer display -- only a recognized external caller may.
+func TestActorMetaIgnoresCausationAndCorrelationForOrdinaryCaller(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv, app := newTestGatewayWithConfigAndApp(t, store, gateway.Config{
+		ExternalCallerCollection: "service_accounts",
+	})
+	_, token := newAuthRecord(t, app, "users", "alice")
+
+	status, body := postCreateWithHeaders(t, srv, "t1", map[string]string{
+		"Authorization":  "Bearer " + token,
+		"Causation-Id":   "evt-123",
+		"Correlation-Id": "corr-456",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", status, body)
+	}
+	meta := firstEventMeta(t, body)
+	if _, present := meta["causationId"]; present {
+		t.Fatalf("an ordinary caller's Causation-Id header was honored: %v", meta)
+	}
+	if _, present := meta["correlationId"]; present {
+		t.Fatalf("an ordinary caller's Correlation-Id header was honored: %v", meta)
+	}
+}
+
+// Config.ExternalCallerCollection empty (the default) must leave every
+// existing test above unaffected -- pinned directly, not just implied by
+// the other tests still passing.
+func TestActorMetaUnsetLeavesBehaviorUnchanged(t *testing.T) {
+	srv := newTestGateway(t, nil) // AllowAnonymous: true, no ExternalCallerCollection
+
+	status, _ := postCreate(t, srv, "")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
 	}
 }

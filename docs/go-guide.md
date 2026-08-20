@@ -159,6 +159,18 @@ grant reactor automation elevated trust should check `cmd.Provenance`
 instead: it is empty unless something explicitly vouched for the command's
 origin.
 
+A third shape, `"extcall:<name>"`, marks a command dispatched over the HTTP
+gateway by a recognized **external-caller** identity — a record in the auth
+collection named by `gateway.Config.ExternalCallerCollection` (e.g.
+`pocketcqrs-extensions`' `extcaller`), not a plain user id or a local
+reactor. Like `"reactor:<name>"`, this is derived server-side from the
+authenticated caller's own collection membership, never from anything the
+request supplies — a caller cannot claim this label without holding the
+credential for a record already in that collection. Treat it the same way
+as `"reactor:"`: a naming convention for observability
+(`events/stats.go`'s `ReactorFlows` recognizes both prefixes), not a trust
+marker — check `cmd.Provenance` for that, exactly as above.
+
 ## A Go projection
 
 ```go

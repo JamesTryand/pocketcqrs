@@ -19,6 +19,47 @@ func TestMaxPositionEmptyLog(t *testing.T) {
 	}
 }
 
+// ReactorFlows must surface an external caller's dispatches the same way it
+// already surfaces a reactor's -- pocketcqrs-extensions' extcaller (or any
+// future out-of-process dispatcher recognized via
+// gateway.Config.ExternalCallerCollection) stamps actor as
+// "extcall:<name>", not "reactor:<name>", and this query is the only thing
+// deciding whether that shows up in the catalog/explorer/mermaid flow
+// diagrams. Pure event-metadata pattern matching, not cross-referenced
+// against any in-process consumer registry, so this holds even though
+// extcaller itself never registers as a checkpointed consumer here.
+func TestReactorFlowsIncludesExternalCallerActor(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	cause := []NewEvent{{Type: "OrderConfirmed", Data: json.RawMessage(`{}`)}}
+	caused, err := s.Append(ctx, "order", "o1", 0, cause)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := json.Marshal(map[string]string{
+		"actor": "extcall:orders-sync", "causationId": caused[0].ID, "correlationId": caused[0].ID,
+	})
+	if _, err := s.Append(ctx, "shipment", "sync-o1", 0, []NewEvent{
+		{Type: "ShipmentRegistered", Data: json.RawMessage(`{}`), Metadata: meta},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	flows, err := s.ReactorFlows(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flows) != 1 {
+		t.Fatalf("expected 1 flow, got %+v", flows)
+	}
+	f := flows[0]
+	if f.Reactor != "extcall:orders-sync" || f.CauseAggregate != "order" || f.CauseType != "OrderConfirmed" ||
+		f.TargetAggregate != "shipment" || f.TargetType != "ShipmentRegistered" || f.Count != 1 {
+		t.Fatalf("unexpected flow: %+v", f)
+	}
+}
+
 func TestStats(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
