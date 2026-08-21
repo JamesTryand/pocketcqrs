@@ -3,6 +3,43 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.8.0 — provenance, external-caller identity, and a CLI command that now tells you it failed
+
+Deciders, reactors, and the gateway all gain ways to say who or what really stands behind a
+command, and a longstanding CLI bug that hid failure behind a `0` exit code is fixed.
+
+### Added
+
+- **`Command.Provenance`** (Go) / `command.provenance` (JS): a sibling to `Actor` answering
+  "did the causal chain behind this command cross a trust boundary" (e.g. a peer deployment,
+  once federation exists), rather than "who/what issued it". Empty for everything the gateway
+  and local reactors produce today; inherited by `reactors.Dispatch` from the causing event's
+  own metadata the same way `correlationId` already propagates, so it survives however many
+  local reaction hops separate a command from the event that actually caused it.
+- **`gateway.Config.ExternalCallerCollection`**: when set, a caller authenticated against that
+  PocketBase auth collection gets its commands' actor stamped as `extcall:<name>` instead of
+  its raw record id, and may supply `Causation-Id`/`Correlation-Id` request headers merged into
+  the resulting events' metadata. Gated to that one collection, not opened to every authenticated
+  caller, since these feed ReactorFlows/the catalog explorer's display. `events/stats.go`'s
+  `ReactorFlows` widens its `WHERE` clause to match an `extcall:%` actor prefix the same way it
+  already matched `reactor:%`.
+
+### Fixed
+
+- **`schema import` now exits non-zero on refusal and no longer bootstraps a stray `pb_data/`**
+  (F-9/F-10). Root cause: PocketBase's own `Execute()` discards `RootCmd.Execute()`'s return
+  value, so a `RunE` error printed but never reached a non-zero exit; and bootstrap always ran
+  before any subcommand's `RunE`, with no per-command opt-out. `schema import` is now
+  short-circuited in `main()` before `pocketbase.New()`/`app.Start()` ever run, the same way
+  `skill install` already was — no bootstrap, and a real exit code. `--dir`/`--dev` were always
+  dead flags for this command; they're now rejected outright instead of silently accepted.
+- **`events.OpenReadOnly` no longer forces `journal_mode(WAL)`** on a store it isn't allowed to
+  write to.
+- **The `extcall:`/`reactor:` empty-name fallback is now documented and pinned**, not silent: an
+  `ExternalCallerCollection` record with no `name` field degrades to the raw record id as its
+  actor. That was already the behaviour; it just wasn't stated as deliberate anywhere, or backed
+  by a test.
+
 ## v0.7.0 — a working secondary, and an admin-route gap the fix itself left open
 
 A logged-in user finally gets a working secondary. Since the multi-node flags
@@ -71,6 +108,7 @@ signing authority besides.
   substituting a raw NFS/SMB-mounted `events.db` as a shortcut: it runs in WAL mode, and SQLite's
   own documentation states WAL is not safe over network filesystems.
 
+## v0.6.0 — the knowledge ships with the thing
 
 Documentation tells you what exists. It does not stop you writing a projection that returns
 rows instead of row ops and silently writes nothing forever, because you have to already
