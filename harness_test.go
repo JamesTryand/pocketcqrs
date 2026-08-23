@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jamestryand/pocketcqrs-extensions/internal/gatewayclient"
+	"github.com/jamestryand/pocketcqrs-extensions/extcaller"
 	"github.com/jamestryand/pocketcqrs-extensions/internal/localstore"
 )
 
@@ -246,6 +246,6 @@ func (h *harness) openStores(t *testing.T) *localstore.Stores {
 	return stores
 }
 
-func (h *harness) gatewayClient() *gatewayclient.Client {
-	return gatewayclient.New(h.BackendURL, h.Token, 10*time.Second)
+func (h *harness) gatewayClient() extcaller.Gateway {
+	return extcaller.NewGatewayClient(h.BackendURL, h.Token, 10*time.Second)
 }
