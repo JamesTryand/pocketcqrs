@@ -32,6 +32,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/reactors"
 	"github.com/jamestryand/pocketcqrs/roles"
+	"github.com/jamestryand/pocketcqrs/users"
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
@@ -456,6 +457,15 @@ func main() {
 	// --tutorial examples above -- it's this project's own feature, not
 	// switchable content, so every deployment gets it.
 	roles.RegisterCollection()
+
+	// Item 12: the users collection is a shipped, app-extensible end-user
+	// auth primitive -- always registered for the same reason roles is:
+	// it's core's own baseline, not example content a consumer opts into.
+	// Unlike roles/service_accounts it carries no special sensitivity or
+	// ops access of any kind (see users.ensureCollection's doc comment) --
+	// registering it here changes nothing about who can reach any existing
+	// route.
+	users.RegisterCollection()
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
 		// run the default bootstrap first: it creates the data dir and,

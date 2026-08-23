@@ -311,6 +311,41 @@ not capability-aware yet — a role session can reach these five routes
 directly, but the dashboard's own nav/panels are not filtered per role
 (tracked as follow-up work, not part of this build).
 
+### The `users` collection (Item 12, end-user identity)
+
+`pocketcqrs` also always provisions a plain, ordinary `users` auth
+collection — deliberately unrelated to everything above. `roles` and
+`_superusers` gate operator/ops-dashboard access; `service_accounts`
+(`pocketcqrs-extensions`) is for non-human integration credentials. `users`
+is neither: a blank slate for whatever end-user identity your own app
+needs, with no `capabilities` field and no special access of any kind — a
+`users` record can never satisfy `RequireCapability` or `RequireSuperuser`,
+no matter what fields your app adds to it later.
+
+Out of the box it ships with:
+
+- Password auth on, everything else PocketBase's own defaults.
+- `CreateRule ""` — open self-registration, the common baseline for a
+  collection literally named `users`.
+- `ListRule`/`ViewRule`/`UpdateRule`/`DeleteRule` `"@request.auth.id = id"`
+  — a signed-in user sees and manages only their own record.
+
+All four of those are ordinary collection settings, changeable at any time
+through PocketBase's own admin UI (`/_/`) or your own migration — lock down
+self-registration, add OAuth2 providers, whatever your app needs. **Used at
+the app level, by design**: core's own migration
+(`users.RegisterCollection`) is create-only — it never touches an
+already-existing `users` collection — so your app's own migration can
+safely fetch it (`app.FindCollectionByNameOrId("users")`) and add fields on
+top, the same additive pattern `//@schema` reconcile already uses, without
+fighting a later pocketcqrs boot reasserting a narrower shape.
+
+Not built yet: any actual sign-in method beyond PocketBase's own default
+password auth (Microsoft/Entra ID in particular — the OAuth2 provider
+config is confirmed config-only, but the PKCE login/callback route pair and
+session-cookie handling are still open work, tracked in this worktree's
+`NEEDS.md`/`FAULTS-AND-WORK.md` as Item 12's remainder).
+
 ## projection
 
 ```sh
