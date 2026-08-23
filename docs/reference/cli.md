@@ -18,6 +18,7 @@ PocketCQRS flags (persistent, on every command):
 | `--cqrsAllowPrivateOutbound` | `false` | dev/internal: let `$http` reach loopback and private ranges. Link-local (`169.254.0.0/16`, the metadata endpoint) stays blocked regardless |
 | `--cqrsExternalCallerCollection` | *(none)* | name of a PocketBase auth collection whose authenticated records are external service integrations (e.g. `pocketcqrs-extensions`' `extcaller`), not end users or reactors — see [the Go guide](../go-guide.md) for the `"extcall:<name>"` actor shape this produces |
 | `--cqrsSchemaDefaultRule` | *(none, = `public`)* | default `ListRule`/`ViewRule` for newly created `//@schema` collections: `public`, `authenticated`, or a raw PocketBase rule expression. A [`//@rule <collection> <value>`](directives.md#rule-collection-value) directive overrides this per collection. Writes stay write-guarded either way. Never changes an already-existing collection's rule — reconcile stays additive-only, same guarantee field changes already get |
+| `--cqrsSelfAddr` | `127.0.0.1:8090` | this node's own `--http` listen address, used only for the Microsoft/Entra sign-in callback's internal exchange call (Item 12, see below). Must match `--http` (or wherever this node actually listens) for that flow to work — an explicit, operator-supplied value, deliberately not derived from the incoming request |
 
 Outbound HTTP is off unless asked for, and asking for it takes two flags —
 enabling it with no `--cqrsOutboundHost` refuses every call and warns at boot.
@@ -340,11 +341,48 @@ safely fetch it (`app.FindCollectionByNameOrId("users")`) and add fields on
 top, the same additive pattern `//@schema` reconcile already uses, without
 fighting a later pocketcqrs boot reasserting a narrower shape.
 
-Not built yet: any actual sign-in method beyond PocketBase's own default
-password auth (Microsoft/Entra ID in particular — the OAuth2 provider
-config is confirmed config-only, but the PKCE login/callback route pair and
-session-cookie handling are still open work, tracked in this worktree's
-`NEEDS.md`/`FAULTS-AND-WORK.md` as Item 12's remainder).
+#### Microsoft/Entra sign-in
+
+Built: `GET /auth/microsoft/login` and `GET /auth/microsoft/callback`, plus
+a session-cookie bridge so a signed-in visitor's cookie authenticates
+subsequent requests (`pc_users_session`, `HttpOnly`, `SameSite=Lax`, same
+shape as `pocketcqrs-dashboard/server.go`'s own cookie).
+
+Configure it the ordinary PocketBase way — through `/_/` or your own
+migration, on the `users` collection's OAuth2 settings, provider name
+`"microsoft"` — then send visitors to `/auth/microsoft/login`. Nothing
+here is Microsoft-specific beyond the provider name: PocketBase's own
+built-in Microsoft/Entra provider (`tools/auth/microsoft.go`) does the rest
+(PKCE on by default, tenant-pinned `authURL`/`tokenURL`, the
+`idTokenEmailClaim` extra if you need it).
+
+**The callback does not reimplement the OAuth2 exchange.** It calls
+PocketBase's own real `/api/collections/users/auth-with-oauth2` handler —
+over HTTP, at `--cqrsSelfAddr` — rather than driving `tools/auth` and
+`app.Save` directly. That's deliberate: `auth-with-oauth2` is already on
+["How auth works across nodes"](#how-auth-works-across-nodes)'s forwarding
+suffix list, so on a `--cqrsRole=secondary` running `--cqrsForwardAuth`,
+the exchange is transparently proxied to the master and the record lands
+in the master's `data.db` — the same split-brain protection every other
+native auth flow already gets, for free. A reimplementation would bypass
+that middleware entirely (it intercepts by URL path, not by which code
+happens to call it) and write to whichever node's local, un-replicated
+`data.db` this handler's process happens to be — silently wrong on a
+secondary. Set `--cqrsSelfAddr` to match `--http` if you change the
+latter from its default.
+
+The OAuth2 `redirect_uri` sent to Microsoft is derived from the incoming
+request (`Host`, or `X-Forwarded-Host`/`X-Forwarded-Proto` behind a
+reverse proxy) — that's fine because Microsoft's own app-registration
+allowlist is the actual control on it. `--cqrsSelfAddr` is intentionally
+a *different* value used for a *different* job (the internal exchange
+call): deriving that one from request headers too would make it an SSRF
+primitive, since nothing external validates where it points.
+
+Not built: a login landing page (send visitors straight to
+`/auth/microsoft/login`, or build your own link) and a logout route
+(clearing `pc_users_session` is two lines your app can do itself). Neither
+was in this feature's scoped shape.
 
 ## projection
 

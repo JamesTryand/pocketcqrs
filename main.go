@@ -227,6 +227,26 @@ func main() {
 			"directive overrides this per collection. Never changes an existing collection's rule.",
 	)
 
+	// Item 12: the address entralogin.go's callback handler POSTs to for
+	// the real /api/collections/users/auth-with-oauth2 exchange -- this
+	// node's OWN --http listen address (PocketBase's own default, so an
+	// unconfigured deployment just works). Explicit and operator-supplied
+	// rather than derived from the incoming request's Host/X-Forwarded-*
+	// headers, which are client-controllable and would make the exchange
+	// call an SSRF primitive (see entralogin.go's package doc). Not read
+	// from PocketBase's own --http flag -- that flag belongs to the
+	// `serve` subcommand's own FlagSet, not reachable from here (confirmed
+	// via app.RootCmd.Flags().Lookup("http") returning nil at this point).
+	var selfAddr string
+	app.RootCmd.PersistentFlags().StringVar(
+		&selfAddr,
+		"cqrsSelfAddr",
+		"127.0.0.1:8090",
+		"this node's own --http listen address, used only for the internal Microsoft/Entra "+
+			"OAuth2 exchange call (Item 12); must match --http (or wherever this node actually "+
+			"listens) for that sign-in flow to work",
+	)
+
 	// Node role for the single-writer/multi-reader deployment
 	// (docs/reference/cli.md's "Multi-node" section): a secondary polls a
 	// replicated events.db read-only instead of appending to it, and
@@ -805,6 +825,7 @@ func main() {
 		registerFunctionAdminRoutes(e, c, functionsDir)
 		registerCatalogRoute(e, c)
 		registerOpsRoutes(e, c)
+		registerEntraLoginRoutes(e, selfAddr)
 		c.engine.Start(context.Background())
 		if c.batchWriter != nil {
 			c.batchWriter.Start(context.Background())
