@@ -24,7 +24,6 @@ import (
 	"github.com/jamestryand/pocketcqrs/outbound"
 
 	"github.com/jamestryand/pocketcqrs-extensions/extcaller"
-	"github.com/jamestryand/pocketcqrs-extensions/internal/gatewayclient"
 	"github.com/jamestryand/pocketcqrs-extensions/internal/localstore"
 )
 
@@ -91,7 +90,7 @@ func run() error {
 		return err
 	}
 
-	gwClient := gatewayclient.New(*gatewayURL, token, *gatewayTimeout)
+	gwClient := extcaller.NewGatewayClient(*gatewayURL, token, *gatewayTimeout)
 
 	consumer, err := extcaller.New(extcaller.Config{
 		Name:        *name,
