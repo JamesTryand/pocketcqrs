@@ -31,6 +31,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/outbound"
 	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/reactors"
+	"github.com/jamestryand/pocketcqrs/roles"
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
@@ -449,6 +450,12 @@ func main() {
 	if c.tutorial {
 		migrations.RegisterExamples()
 	}
+
+	// Item 11: the roles collection (capability-based ops/dashboard access,
+	// see ops.go's capOps* constants) is always registered, unlike the
+	// --tutorial examples above -- it's this project's own feature, not
+	// switchable content, so every deployment gets it.
+	roles.RegisterCollection()
 
 	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
 		// run the default bootstrap first: it creates the data dir and,

@@ -17,6 +17,22 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 )
 
+// Item 11's read-only observability scope: the ops/dashboard routes a
+// "roles" capability grant admits WITHOUT a full superuser token, wired up
+// alongside the RequireSuperuser gate every mutating route below keeps.
+// One capability string per route deliberately, not one shared "ops.read"
+// -- the accepted decision's whole point is a permission TABLE, not a
+// single fixed tier renamed; a future role can be granted a subset (e.g.
+// catalog visibility only, per the rest-api-webhook-facade cross-reference)
+// with no schema change.
+const (
+	capOpsEventsRead      = "ops.events.read"
+	capOpsStreamsRead     = "ops.streams.read"
+	capOpsDeadlettersRead = "ops.deadletters.read"
+	capOpsModeRead        = "ops.mode.read"
+	capOpsCatalogRead     = "ops.catalog.read"
+)
+
 // opsStoreErr maps a store-write failure on an ops route. On a
 // --cqrsRole=secondary the store is read-only and every write fails with
 // events.ErrReadOnly — answered as a clean 503 naming the actual problem,
@@ -71,7 +87,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"events": evs})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireCapability(c.verifier, capOpsEventsRead))
 
 	// one row per stream, optionally restricted to one aggregate
 	e.Router.GET("/api/cqrs/streams", func(re *core.RequestEvent) error {
@@ -81,7 +97,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"streams": streams})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireCapability(c.verifier, capOpsStreamsRead))
 
 	// failed function deliveries; pending only unless ?all=1
 	e.Router.GET("/api/cqrs/deadletters", func(re *core.RequestEvent) error {
@@ -91,7 +107,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"deadLetters": letters})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireCapability(c.verifier, capOpsDeadlettersRead))
 
 	// re-deliver one dead letter through the CURRENT function code.
 	//
@@ -150,7 +166,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]string{"mode": mode})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireCapability(c.verifier, capOpsModeRead))
 
 	e.Router.POST("/api/cqrs/admin/mode", func(re *core.RequestEvent) error {
 		payload, err := io.ReadAll(re.Request.Body)

@@ -243,8 +243,9 @@ compromised secondary must gain nothing). Instead:
 - **Writes always end at the master** and are verified there per request —
   the cache is only ever about a secondary's own local reads.
 - **The ops routes never use the cache.** `/api/cqrs/events`, `/streams`,
-  `/deadletters/*`, `/admin/*` re-verify against the master on every
-  request, so revoking an operator's token (rotating its `tokenKey`) bites
+  `/deadletters/*`, `/admin/*`, `/catalog` re-verify against the master on
+  every request, so revoking an operator's token (rotating its `tokenKey`,
+  or — for a capability grant, see below — editing it away) bites
   immediately, not after a TTL window.
 - **Master unreachable**: a live cached verdict keeps serving; anything
   else answers `503` (not `401` — a re-login cannot work either while the
@@ -257,6 +258,58 @@ Known limits on a secondary: API rules referencing hidden fields of the
 authenticated record evaluate against the verdict's serialization, which
 omits them; protected-file tokens are not covered; rate-limit state stays
 per node.
+
+### Capability-based access below superuser (Item 11)
+
+Five read-only ops routes accept more than a superuser token:
+`GET /api/cqrs/events`, `/streams`, `/deadletters`, `/admin/mode`, and
+`/catalog`. Every other ops/admin route (dead-letter retry/dismiss, the
+`POST /admin/mode` mode switch, function admin, dryrun, scaffold, reload)
+stays superuser-only — this does not touch write access anywhere.
+
+A superuser still passes every one of these unconditionally, exactly as
+before. Additionally, ANY authenticated record — from any auth collection,
+not only the `roles` one below — whose own `capabilities` JSON field
+contains the route's capability string also passes:
+
+| route | capability string |
+| --- | --- |
+| `GET /api/cqrs/events` | `ops.events.read` |
+| `GET /api/cqrs/streams` | `ops.streams.read` |
+| `GET /api/cqrs/deadletters` | `ops.deadletters.read` |
+| `GET /api/cqrs/admin/mode` | `ops.mode.read` |
+| `GET /api/cqrs/catalog` | `ops.catalog.read` |
+
+`pocketcqrs` provisions a `roles` auth collection for this (every login
+method enabled — a role record is a real person signing in, unlike
+`pocketcqrs-extensions`' `service_accounts`) with one `capabilities: json`
+field: an array of capability strings. Every collection rule is nil
+(superuser-only management, same sensitivity as editing superusers), so
+create a role and grant it capabilities through PocketBase's own admin UI
+(`/_/`) — there is no separate dashboard for this. `["ops.events.read",
+"ops.streams.read", "ops.deadletters.read", "ops.mode.read",
+"ops.catalog.read"]` reproduces the full "poweruser" observability tier the
+decision doc originally asked for; a subset is just as valid (e.g.
+`["ops.catalog.read"]` alone for a role that should only ever see the
+platform catalog).
+
+One capability string per route, deliberately, not one shared grant — a
+future role can be scoped to a subset with no schema or gate change, the
+actual point of building a general per-capability model (the accepted
+`pocketcqrs-futures` decision) instead of a single fixed tier. The gate is
+collection-agnostic (`authverify.RequireCapability`): it does not know
+about the `roles` collection by name, only about a `capabilities` field on
+whichever record authenticated — so a future role/permission field on a
+different collection (e.g. an end-user `users` collection) composes with
+zero gate changes.
+
+Multi-node: `RequireCapability` mirrors the superuser gate's remote-verify
+behavior exactly (`v == nil` uses the request's already-loaded auth record;
+with a `--cqrsVerifyAuth` `Verifier`, it re-verifies fresh against the
+master on every request, no cache). The `pocketcqrs-dashboard` UI itself is
+not capability-aware yet — a role session can reach these five routes
+directly, but the dashboard's own nav/panels are not filtered per role
+(tracked as follow-up work, not part of this build).
 
 ## projection
 
