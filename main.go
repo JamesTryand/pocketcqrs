@@ -149,6 +149,12 @@ func main() {
 		false,
 		"allow anonymous CQRS command execution (dev only; no actor metadata is stamped)",
 	)
+	app.RootCmd.PersistentFlags().StringVar(
+		&gatewayCfg.ExternalCallerCollection,
+		"cqrsExternalCallerCollection",
+		"",
+		"name of a PocketBase auth collection whose authenticated records are external service integrations (e.g. pocketcqrs-extensions' extcaller), not end users or reactors; unset (default) leaves actor/causation/correlation handling exactly as before this existed",
+	)
 
 	// Outbound HTTP for the effect/reactor tiers. Off by default: with these
 	// unset, core's posture is exactly what it was before the feature existed.

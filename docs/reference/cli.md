@@ -16,6 +16,7 @@ PocketCQRS flags (persistent, on every command):
 | `--cqrsAllowOutboundHTTP` | `false` | expose `$http` to **event, cron and reactor** functions. Not to `//@trigger http` functions (request-driven, so unbounded concurrency), and never to deciders or projections |
 | `--cqrsOutboundHost` | *(none)* | a hostname `$http` may call. Repeatable; deployment-wide, not per-function. **No entries permits nothing** |
 | `--cqrsAllowPrivateOutbound` | `false` | dev/internal: let `$http` reach loopback and private ranges. Link-local (`169.254.0.0/16`, the metadata endpoint) stays blocked regardless |
+| `--cqrsExternalCallerCollection` | *(none)* | name of a PocketBase auth collection whose authenticated records are external service integrations (e.g. `pocketcqrs-extensions`' `extcaller`), not end users or reactors — see [the Go guide](../go-guide.md) for the `"extcall:<name>"` actor shape this produces |
 
 Outbound HTTP is off unless asked for, and asking for it takes two flags —
 enabling it with no `--cqrsOutboundHost` refuses every call and warns at boot.
