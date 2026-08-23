@@ -263,7 +263,7 @@ func (r *Registry) DecideWithMeta(ctx context.Context, loader StreamLoader, aggr
 		meta = map[string]any{}
 	}
 	if _, ok := meta["now"]; !ok {
-		meta["now"] = time.Now().UTC().Format("2006-01-02 15:04:05.000Z")
+		meta["now"] = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 
 	stream, err := loader.LoadStream(ctx, aggregate, id)

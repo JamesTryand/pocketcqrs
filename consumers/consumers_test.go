@@ -172,6 +172,47 @@ func TestEngineWithSeparateCheckpointStore(t *testing.T) {
 	}
 }
 
+type failingConsumer struct {
+	name string
+	fail error
+}
+
+func (f *failingConsumer) Name() string                                     { return f.name }
+func (f *failingConsumer) Apply(ctx context.Context, ev events.Event) error { return f.fail }
+
+// TestRunOnceIsolatesFailingConsumerFromLaterOnes is a regression test for
+// F-17: a consumer registered before a failing one must not be starved by
+// it — RunOnce's own doc comment already promised this isolation, but the
+// implementation used to `return err` on the first failure, aborting every
+// consumer registered after it in the same pass.
+func TestRunOnceIsolatesFailingConsumerFromLaterOnes(t *testing.T) {
+	var dir string
+	store := openStore(t, &dir)
+	defer store.Close()
+	ctx := context.Background()
+
+	appendOne(t, store, "t1")
+
+	boom := errors.New("boom")
+	failing := &failingConsumer{name: "failing", fail: boom}
+	after := &recorder{}
+
+	engine := NewEngine(store, nil)
+	engine.Register(failing)
+	engine.Register(after)
+
+	err := engine.RunOnce(ctx)
+	if err == nil {
+		t.Fatal("expected an aggregated error from the failing consumer")
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("expected the aggregated error to wrap the consumer's error, got %v", err)
+	}
+	if after.count() != 1 {
+		t.Fatalf("expected the consumer registered after the failing one to still run, got %d deliveries", after.count())
+	}
+}
+
 func TestDeliverySurvivesRestart(t *testing.T) {
 	var dir string
 	ctx := context.Background()

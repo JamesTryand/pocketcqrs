@@ -453,7 +453,7 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 			cmdPayload = req.Payload
 		}
 		meta := map[string]any{
-			"now":   time.Now().UTC().Format("2006-01-02 15:04:05.000Z"),
+			"now":   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 			"actor": "dryrun",
 		}
 		res, err := functions.DryRunDecide(c.store, spec, req.StreamID,

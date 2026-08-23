@@ -12,6 +12,8 @@ package consumers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -150,36 +152,49 @@ func (e *Engine) Start(ctx context.Context) {
 
 // RunOnce applies every pending event to every consumer until caught up.
 // A failing consumer stops at the failing event and retries next pass;
-// other consumers are unaffected. The consumer set is snapshotted first,
-// so reload-driven swaps apply cleanly to the next pass.
+// other consumers are unaffected — their turn in this same pass, and every
+// future pass, is unaffected by an earlier consumer's failure. The consumer
+// set is snapshotted first, so reload-driven swaps apply cleanly to the next
+// pass. Returns an aggregated error (via errors.Join) covering every
+// consumer that failed this pass, or nil if all succeeded.
 func (e *Engine) RunOnce(ctx context.Context) error {
 	e.mu.RLock()
 	consumers := append([]Consumer(nil), e.consumers...)
 	e.mu.RUnlock()
+	var errs []error
 	for _, c := range consumers {
-		pos, err := e.checkpoints.Checkpoint(ctx, c.Name())
+		if err := e.runOnceFor(ctx, c); err != nil {
+			errs = append(errs, fmt.Errorf("consumer %s: %w", c.Name(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// runOnceFor applies every pending event to a single consumer until caught
+// up, or until the consumer's own checkpoint/poll/apply fails.
+func (e *Engine) runOnceFor(ctx context.Context, c Consumer) error {
+	pos, err := e.checkpoints.Checkpoint(ctx, c.Name())
+	if err != nil {
+		return err
+	}
+	for {
+		batch, err := e.source.Poll(ctx, pos, 100)
 		if err != nil {
 			return err
 		}
-		for {
-			batch, err := e.source.Poll(ctx, pos, 100)
-			if err != nil {
+		if len(batch) == 0 {
+			break
+		}
+		for _, ev := range batch {
+			if err := c.Apply(ctx, ev); err != nil {
+				e.logger("consumer apply error",
+					"consumer", c.Name(), "position", ev.Position, "error", err)
 				return err
 			}
-			if len(batch) == 0 {
-				break
+			if err := e.checkpoints.SaveCheckpoint(ctx, c.Name(), ev.Position); err != nil {
+				return err
 			}
-			for _, ev := range batch {
-				if err := c.Apply(ctx, ev); err != nil {
-					e.logger("consumer apply error",
-						"consumer", c.Name(), "position", ev.Position, "error", err)
-					return err
-				}
-				if err := e.checkpoints.SaveCheckpoint(ctx, c.Name(), ev.Position); err != nil {
-					return err
-				}
-				pos = ev.Position
-			}
+			pos = ev.Position
 		}
 	}
 	return nil

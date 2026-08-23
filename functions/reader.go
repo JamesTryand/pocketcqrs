@@ -1,7 +1,10 @@
 package functions
 
 import (
+	"encoding/json"
+
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/types"
 )
 
 // Reader is the controlled, read-only access functions get to the query
@@ -28,7 +31,7 @@ func (r *AppReader) FindRecord(collection, id string) (map[string]any, error) {
 	if err != nil {
 		return nil, nil // not found
 	}
-	return rec.PublicExport(), nil
+	return decodeJSONFields(rec.PublicExport()), nil
 }
 
 // Query implements Reader.
@@ -42,7 +45,31 @@ func (r *AppReader) Query(collection, filter string, limit int) ([]map[string]an
 	}
 	out := make([]map[string]any, 0, len(recs))
 	for _, rec := range recs {
-		out = append(out, rec.PublicExport())
+		out = append(out, decodeJSONFields(rec.PublicExport()))
 	}
 	return out, nil
+}
+
+// decodeJSONFields replaces any types.JSONRaw value in export (as produced by
+// Record.PublicExport for json-typed fields) with its parsed Go value.
+// PublicExport is correct as-is for encoding/json.Marshal, its intended
+// consumer, but a goja binding sees the raw []byte as an array of numeric
+// byte codes instead of a parsed value unless decoded first.
+func decodeJSONFields(export map[string]any) map[string]any {
+	for k, v := range export {
+		raw, ok := v.(types.JSONRaw)
+		if !ok {
+			continue
+		}
+		if len(raw) == 0 {
+			export[k] = nil
+			continue
+		}
+		var decoded any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			continue // leave the raw bytes rather than fail the whole read
+		}
+		export[k] = decoded
+	}
+	return export
 }

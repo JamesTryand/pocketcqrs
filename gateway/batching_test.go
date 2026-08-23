@@ -101,6 +101,43 @@ func TestGatewayBatchingReturnsSameSynchronousShapeAsDirect(t *testing.T) {
 	}
 }
 
+// TestGatewayBatchingStampsRFC3339Now is a regression test for F-16:
+// handleViaBatching's pre-enqueue "now" stamp must be real RFC3339
+// (T-separated), not the space-separated near-ISO format that silently
+// broke downstream date-time consumers.
+func TestGatewayBatchingStampsRFC3339Now(t *testing.T) {
+	srv, writer := newTestGatewayWithBatching(t, 5*time.Second, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	writer.Start(ctx)
+
+	status, body := postCreate(t, srv, "")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", status, body)
+	}
+
+	var resp struct {
+		Events []events.Event `json:"events"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Events) == 0 {
+		t.Fatal("expected at least one event")
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(resp.Events[0].Metadata, &meta); err != nil {
+		t.Fatal(err)
+	}
+	now, ok := meta["now"].(string)
+	if !ok {
+		t.Fatalf("expected now to be a string, got %T", meta["now"])
+	}
+	if _, err := time.Parse(time.RFC3339, now); err != nil {
+		t.Fatalf("stamped now %q is not RFC3339: %v", now, err)
+	}
+}
+
 func TestGatewayBatchingDomainRejectionReturns400(t *testing.T) {
 	srv, writer := newTestGatewayWithBatching(t, 5*time.Second, nil)
 	ctx, cancel := context.WithCancel(context.Background())

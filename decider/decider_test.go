@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jamestryand/pocketcqrs/events"
 )
@@ -334,6 +335,16 @@ func TestDecideWithMetaStampsNowOnlyIfAbsent(t *testing.T) {
 	}
 	if got2["now"] == nil || got2["now"] == "" {
 		t.Fatal("expected now to be filled in when absent")
+	}
+	// F-16: the stamped format must be real RFC3339 (T-separated), not the
+	// space-separated near-ISO format that broke downstream date-time
+	// consumers.
+	now, ok := got2["now"].(string)
+	if !ok {
+		t.Fatalf("expected now to be a string, got %T", got2["now"])
+	}
+	if _, err := time.Parse(time.RFC3339, now); err != nil {
+		t.Fatalf("stamped now %q is not RFC3339: %v", now, err)
 	}
 }
 
