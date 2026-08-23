@@ -69,6 +69,14 @@ type Command struct {
 	// event reuses the same key and gets the original response replayed
 	// rather than double-applying.
 	IdempotencyKeyParts []string
+
+	// CausationID and CorrelationID, when non-empty, are sent as the
+	// Causation-Id/Correlation-Id request headers — honored by the gateway
+	// only for a caller its ExternalCallerCollection recognizes (see
+	// gateway.actorMeta's doc comment); ignored otherwise. Empty means
+	// "don't send the header", not "send it empty".
+	CausationID   string
+	CorrelationID string
 }
 
 // Result is a successful dispatch's outcome.
@@ -106,6 +114,12 @@ func (c *Client) Dispatch(ctx context.Context, cmd Command) (*Result, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Idempotency-Key", idempotencyKey(cmd.IdempotencyKeyParts))
+	if cmd.CausationID != "" {
+		req.Header.Set("Causation-Id", cmd.CausationID)
+	}
+	if cmd.CorrelationID != "" {
+		req.Header.Set("Correlation-Id", cmd.CorrelationID)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

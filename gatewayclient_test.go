@@ -71,6 +71,37 @@ func TestDispatch_DifferentPartsProduceDifferentKeys(t *testing.T) {
 	}
 }
 
+func TestDispatch_SetsCausationAndCorrelationHeadersOnlyWhenNonEmpty(t *testing.T) {
+	var causation, correlation string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		causation = r.Header.Get("Causation-Id")
+		correlation = r.Header.Get("Correlation-Id")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"events":[]}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "tok", 2*time.Second)
+
+	if _, err := c.Dispatch(context.Background(), Command{
+		Aggregate: "task", ID: "t1", Name: "CreateTask", Payload: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("Dispatch without ids: %v", err)
+	}
+	if causation != "" || correlation != "" {
+		t.Fatalf("expected no headers when ids are empty, got Causation-Id=%q Correlation-Id=%q", causation, correlation)
+	}
+
+	if _, err := c.Dispatch(context.Background(), Command{
+		Aggregate: "task", ID: "t1", Name: "CreateTask", Payload: json.RawMessage(`{}`),
+		CausationID: "ev-1", CorrelationID: "root-1",
+	}); err != nil {
+		t.Fatalf("Dispatch with ids: %v", err)
+	}
+	if causation != "ev-1" || correlation != "root-1" {
+		t.Fatalf("expected Causation-Id=ev-1 Correlation-Id=root-1, got Causation-Id=%q Correlation-Id=%q", causation, correlation)
+	}
+}
+
 func TestDispatch_NonOKStatusReturnsErrStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
