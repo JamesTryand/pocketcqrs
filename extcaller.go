@@ -34,6 +34,41 @@ import (
 	"github.com/jamestryand/pocketcqrs-extensions/internal/gatewayclient"
 )
 
+// Command is one follow-up command to dispatch to a pocketcqrs gateway —
+// the shape Gateway.Dispatch receives. Deliberately its own type, not
+// gatewayclient.Command: gatewayclient stays under internal/, unreachable
+// from outside this module, so an external consumer implementing Gateway
+// needs a Command it can actually construct.
+type Command struct {
+	Aggregate string
+	ID        string
+	Name      string
+	Payload   json.RawMessage
+
+	// IdempotencyKeyParts, hashed together, derive the dispatch's
+	// idempotency key deterministically — see gatewayclient.Command's own
+	// doc comment for the full reasoning; the contract is identical here.
+	IdempotencyKeyParts []string
+
+	// CausationID and CorrelationID identify this follow-up's place in a
+	// reaction chain, mirroring reactors.Dispatch's own metadata (see
+	// pocketcqrs's reactors.go) — the gateway only honors them for a caller
+	// its ExternalCallerCollection recognizes. Consumer.Apply always sets
+	// both.
+	CausationID   string
+	CorrelationID string
+}
+
+// Gateway dispatches one follow-up command to a pocketcqrs deployment.
+// Satisfied by the value NewGatewayClient returns (which wraps the real
+// HTTP client this repo keeps under internal/gatewayclient); an external
+// module consuming this package supplies its own implementation instead —
+// see NEEDS.md's "extcaller cannot be consumed as an external Go module
+// dependency" for why this is an interface rather than a concrete type.
+type Gateway interface {
+	Dispatch(ctx context.Context, cmd Command) error
+}
+
 // FollowUp is one command a Rule's HandleResponse wants dispatched. The
 // consumer derives its own deterministic Idempotency-Key from the source
 // event and this follow-up's position in the slice HandleResponse returned,
@@ -94,8 +129,10 @@ type Config struct {
 	// this deployment's global host allow-list — extcaller does not modify
 	// or bypass it.
 	Outbound *outbound.Client
-	// Gateway dispatches follow-up commands.
-	Gateway *gatewayclient.Client
+	// Gateway dispatches follow-up commands. Build one with
+	// NewGatewayClient against a real pocketcqrs deployment, or supply your
+	// own implementation.
+	Gateway Gateway
 	// DeadLetters records permanent per-event failures. Point this at a
 	// locally-writable *events.Store this component owns outright — never
 	// the upstream deployment's own events.db (see internal/localstore).
@@ -182,14 +219,16 @@ func (c *Consumer) Apply(ctx context.Context, ev events.Event) error {
 	}
 
 	for i, f := range followUps {
-		cmd := gatewayclient.Command{
+		cmd := Command{
 			Aggregate:           f.Aggregate,
 			ID:                  f.ID,
 			Name:                f.Name,
 			Payload:             f.Payload,
 			IdempotencyKeyParts: []string{c.Name(), ev.ID, strconv.Itoa(i)},
+			CausationID:         ev.ID,
+			CorrelationID:       correlationID(ev),
 		}
-		if _, err := c.cfg.Gateway.Dispatch(ctx, cmd); err != nil {
+		if err := c.cfg.Gateway.Dispatch(ctx, cmd); err != nil {
 			// A follow-up dispatch failure (domain rejection, concurrency
 			// conflict, the target deployment unreachable) dead-letters the
 			// SOURCE event rather than retrying just this follow-up: partial
@@ -229,6 +268,49 @@ func (c *Consumer) callWithRetry(ctx context.Context, req outbound.Request) (*ou
 		}
 	}
 	return nil, lastErr
+}
+
+// correlationID inherits the causing event's own correlationId metadata,
+// defaulting to the event's own id if absent when it is itself the root of
+// the chain. Mirrors pocketcqrs's reactors.go correlationID rule exactly;
+// reimplemented here because that helper is unexported, and this is a
+// separate Go module regardless.
+func correlationID(ev events.Event) string {
+	var meta map[string]any
+	if err := json.Unmarshal(ev.Metadata, &meta); err == nil {
+		if corr, ok := meta["correlationId"].(string); ok && corr != "" {
+			return corr
+		}
+	}
+	return ev.ID
+}
+
+// gatewayClientAdapter adapts *gatewayclient.Client to Gateway, translating
+// between this package's public Command and gatewayclient's own (internal,
+// unreachable from outside this module) Command/Result types.
+type gatewayClientAdapter struct{ c *gatewayclient.Client }
+
+// Dispatch implements Gateway.
+func (a gatewayClientAdapter) Dispatch(ctx context.Context, cmd Command) error {
+	_, err := a.c.Dispatch(ctx, gatewayclient.Command{
+		Aggregate:           cmd.Aggregate,
+		ID:                  cmd.ID,
+		Name:                cmd.Name,
+		Payload:             cmd.Payload,
+		IdempotencyKeyParts: cmd.IdempotencyKeyParts,
+		CausationID:         cmd.CausationID,
+		CorrelationID:       cmd.CorrelationID,
+	})
+	return err
+}
+
+// NewGatewayClient builds a Gateway that dispatches over HTTP to one real
+// pocketcqrs deployment's command gateway. baseURL is the deployment's root
+// (e.g. "http://localhost:8090"); token is sent as "Authorization: Bearer
+// <token>" on every request — minting it (a superuser token or a dedicated
+// service-account record) is an operator decision, out of scope here.
+func NewGatewayClient(baseURL, token string, timeout time.Duration) Gateway {
+	return gatewayClientAdapter{c: gatewayclient.New(baseURL, token, timeout)}
 }
 
 // deadLetter records a permanent per-event failure.

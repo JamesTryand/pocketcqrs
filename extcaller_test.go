@@ -13,8 +13,6 @@ import (
 
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/outbound"
-
-	"github.com/jamestryand/pocketcqrs-extensions/internal/gatewayclient"
 )
 
 func newTestOutbound(t *testing.T, host string) *outbound.Client {
@@ -68,7 +66,7 @@ func TestApply_UnmatchedEventType_NoOp(t *testing.T) {
 	c, err := New(Config{
 		Name:        "t",
 		Outbound:    newTestOutbound(t, "example.com"),
-		Gateway:     gatewayclient.New("http://unused.invalid", "tok", time.Second),
+		Gateway:     NewGatewayClient("http://unused.invalid", "tok", time.Second),
 		DeadLetters: newTestDeadLetters(t),
 	})
 	if err != nil {
@@ -96,6 +94,16 @@ func TestApply_SuccessDispatchesFollowUp(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
 			t.Errorf("expected Authorization header, got %q", got)
 		}
+		// F-8 follow-up (NEEDS.md): extcaller must send Causation-Id (the
+		// causing event's own id) and Correlation-Id (inherited from the
+		// causing event's metadata, defaulting to its own id when absent --
+		// testEvent has no metadata, so both equal ev.ID here).
+		if got := r.Header.Get("Causation-Id"); got != "ev-1" {
+			t.Errorf("expected Causation-Id %q, got %q", "ev-1", got)
+		}
+		if got := r.Header.Get("Correlation-Id"); got != "ev-1" {
+			t.Errorf("expected Correlation-Id %q, got %q", "ev-1", got)
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"events":[]}`))
 	}))
@@ -118,7 +126,7 @@ func TestApply_SuccessDispatchesFollowUp(t *testing.T) {
 		Name:        "t",
 		Rules:       []Rule{rule},
 		Outbound:    newTestOutbound(t, hostOnly(t, thirdHost)),
-		Gateway:     gatewayclient.New(gw.URL, "tok", time.Second),
+		Gateway:     NewGatewayClient(gw.URL, "tok", time.Second),
 		DeadLetters: newTestDeadLetters(t),
 	})
 	if err != nil {
@@ -130,6 +138,56 @@ func TestApply_SuccessDispatchesFollowUp(t *testing.T) {
 	}
 	if len(dispatched) != 1 {
 		t.Fatalf("expected 1 gateway dispatch, got %d", len(dispatched))
+	}
+}
+
+func TestApply_InheritsCorrelationIdFromCausingEvent(t *testing.T) {
+	third := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer third.Close()
+	thirdHost := third.Listener.Addr().String()
+
+	var gotCausation, gotCorrelation string
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCausation = r.Header.Get("Causation-Id")
+		gotCorrelation = r.Header.Get("Correlation-Id")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"events":[]}`))
+	}))
+	defer gw.Close()
+
+	rule := Rule{
+		EventType: "order.Confirmed",
+		BuildRequest: func(ev events.Event) (outbound.Request, error) {
+			return outbound.Request{Method: "GET", URL: "http://" + thirdHost + "/lookup"}, nil
+		},
+		HandleResponse: func(ev events.Event, resp *outbound.Response) ([]FollowUp, error) {
+			return []FollowUp{{Aggregate: "fulfillment", ID: "fulfill-" + ev.ID, Name: "CreateTask", Payload: json.RawMessage(`{}`)}}, nil
+		},
+	}
+	c, err := New(Config{
+		Name:        "t",
+		Rules:       []Rule{rule},
+		Outbound:    newTestOutbound(t, hostOnly(t, thirdHost)),
+		Gateway:     NewGatewayClient(gw.URL, "tok", time.Second),
+		DeadLetters: newTestDeadLetters(t),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ev := testEvent("order.Confirmed")
+	ev.Metadata = json.RawMessage(`{"correlationId":"root-corr-1"}`)
+	if err := c.Apply(context.Background(), ev); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if gotCausation != "ev-1" {
+		t.Errorf("expected Causation-Id %q (the causing event's own id), got %q", "ev-1", gotCausation)
+	}
+	if gotCorrelation != "root-corr-1" {
+		t.Errorf("expected Correlation-Id inherited from the causing event's metadata (%q), got %q",
+			"root-corr-1", gotCorrelation)
 	}
 }
 
@@ -160,7 +218,7 @@ func TestApply_OutboundFailureExhaustsRetriesAndDeadLetters(t *testing.T) {
 		Name:        "t",
 		Rules:       []Rule{rule},
 		Outbound:    newTestOutbound(t, hostOnly(t, thirdHost)),
-		Gateway:     gatewayclient.New("http://unused.invalid", "tok", time.Second),
+		Gateway:     NewGatewayClient("http://unused.invalid", "tok", time.Second),
 		DeadLetters: deadLetters,
 		Retry:       RetryPolicy{MaxAttempts: 1, Backoff: time.Millisecond},
 	})
@@ -208,7 +266,7 @@ func TestApply_HostNotAllowed_DeadLetters(t *testing.T) {
 		Name:        "t",
 		Rules:       []Rule{rule},
 		Outbound:    newTestOutbound(t, "allowed.example"),
-		Gateway:     gatewayclient.New("http://unused.invalid", "tok", time.Second),
+		Gateway:     NewGatewayClient("http://unused.invalid", "tok", time.Second),
 		DeadLetters: deadLetters,
 		Retry:       RetryPolicy{MaxAttempts: 1, Backoff: time.Millisecond},
 	})
