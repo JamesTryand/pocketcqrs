@@ -415,7 +415,7 @@ Create/update a superuser (admin UI + reload endpoint auth).
 
 ```sh
 pocketcqrs schema import <document.json|manifest-dir> [--out dir] [--docs dir]
-    [--aggregate <elementId>=<name>]... [--force]
+    [--aggregate <elementId>=<name>]... [--lang js|go] [--force]
 pocketcqrs schema export <document.json>
 ```
 
@@ -426,14 +426,26 @@ see [the guide](../schema.md) for the mapping and what survives a round trip.
 `--out` it maps and reports without writing anything, which is the quickest
 way to see what a document would produce. `--docs` writes per-aggregate
 domain docs carrying the methodology prose (`reason`, `question`,
-descriptions, hotspots) that has no home in code. Existing files are skipped
-unless `--force`, matching `catalog --skeletons`, so a re-import cannot
-overwrite prose someone has edited.
+descriptions, hotspots) that has no home in code — ignored with `--lang go`.
+Existing files are skipped unless `--force`, matching `catalog --skeletons`,
+so a re-import cannot overwrite prose someone has edited.
 
 `--aggregate` supplies the aggregate for an element the document leaves
 untagged. Import **refuses** rather than guessing: the write side is
 organised by aggregate, and deriving one from the swimlane would silently
 merge unrelated stream families.
+
+`--lang` picks the output language: `js` (the default, unchanged) or `go` —
+a compiled decider/projection/reactor per [the Go guide](../go-guide.md)'s
+JS→Go table, printing suggested (not applied) registration lines for
+`main.go`. **Scaffolding, not migration**: there is no JS→Go transpiler,
+`go` output is exactly as much a starting point as `js` output is — see the
+Go guide for what "converting a domain" actually means per tier. Passing
+`--docs` alongside `--lang go` prints a warning that it was ignored, rather
+than writing nothing silently. Scenario checks (unless `--skip-scenarios`)
+always run against the JS mapping of the model — there is no Go-specific
+scenario checker — and the completion text says so for `--lang go` rather
+than implying the generated Go files themselves were exercised.
 
 Nothing imported is live. Save the generated files through the editor or copy
 them into `--functionsDir`, then reload — schema-bearing files behind the

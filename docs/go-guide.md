@@ -69,6 +69,30 @@ version independently, and only then remove the JS file — the registry
 refuses a name collision between a JS and a Go decider, so a partial
 migration is caught immediately rather than silently.
 
+**`pocketcqrs schema import --lang go`** scaffolds the Go starting point
+directly from an EventModeling document, alongside the existing (default)
+JS output — same model, same validation, second output language. It writes
+one file per decider/projection/reactor (all in one package, named after
+the aggregate) and prints suggested `decider.Register`/`engine.Register`
+lines for `main.go` — printed, not applied, for the same reason
+`aggregates.RegisterAll` isn't patched automatically: a one-line edit isn't
+worth code-mod machinery, and there's no "graduated" bookkeeping to keep in
+sync — the registry's own JS/Go name-collision refusal already makes a
+partial migration visible. This is scaffolding for a document you're
+importing fresh, not a converter for an existing hand-written JS file: the
+same "starting point, not a translation" caveat above applies to its output
+exactly as it does to the JS scaffolder's.
+
+Two folds worth knowing about before you rely on the generated Go: a
+`//@schema date` field becomes `time.Time`, which `encoding/json` unmarshals
+strictly as RFC3339 — a caller sending PocketBase's own space-separated
+date format will get a rejected command where the JS decider's untyped
+field would have passed it through. And the generated reactor's dispatched
+command payload is `ev.Data` untouched (matching the JS scaffolder's
+`Object.assign({}, event.data)`, field-for-field) — this only differs if an
+event's stored `Data` is nil rather than `{}`, which nothing in this
+codebase's own event construction currently does.
+
 See [js-guide.md](js-guide.md) for the JS-side detail on each tier.
 
 ## A Go decider

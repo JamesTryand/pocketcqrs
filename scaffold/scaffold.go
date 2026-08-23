@@ -316,6 +316,12 @@ func (d Domain) Warnings() []string {
 			}
 		}
 	}
+
+	// Go-specific, but folded in here rather than a separate GoWarnings:
+	// the underlying ambiguity (one field name, two declared types) is a
+	// property of the model, not of which language is generated.
+	out = append(out, d.fieldTypeConflictWarnings()...)
+
 	return out
 }
 

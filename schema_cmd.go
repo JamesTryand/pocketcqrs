@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jamestryand/pocketcqrs/emschema"
+	"github.com/jamestryand/pocketcqrs/scaffold"
 )
 
 // newSchemaImportCommand builds the standalone `schema import` command.
@@ -49,6 +50,10 @@ func newSchemaImportCommand() *cobra.Command {
 			force, _ := cmd.Flags().GetBool("force")
 			skipScenarios, _ := cmd.Flags().GetBool("skip-scenarios")
 			functionsDir, _ := cmd.Flags().GetString("functionsDir")
+			lang, _ := cmd.Flags().GetString("lang")
+			if lang != "js" && lang != "go" {
+				return fmt.Errorf("--lang wants \"js\" or \"go\", got %q", lang)
+			}
 
 			opts := emschema.Options{AggregateOverrides: map[string]string{}}
 			for _, kv := range overrides {
@@ -84,7 +89,7 @@ func newSchemaImportCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				printScenarios(cmd, results)
+				printScenarios(cmd, results, lang)
 			}
 
 			if outDir == "" {
@@ -92,6 +97,24 @@ func newSchemaImportCommand() *cobra.Command {
 					"The mapping above is what an import would produce.")
 				return nil
 			}
+
+			if lang == "go" {
+				written, err := writeSliceGo(mapped, outDir, force)
+				if err != nil {
+					return err
+				}
+				cmd.Printf("\nWrote %d file(s) to %s\n", written, outDir)
+				if docsDir != "" {
+					cmd.Printf("--docs %s was ignored: domain docs are generated only for --lang js.\n", docsDir)
+				}
+				cmd.Println("\nScaffolding, not migration: there is no JS→Go transpiler. Each file is a " +
+					"starting-point skeleton (state shape, Decide/Evolve signatures, Commands metadata) " +
+					"whose actual rules are yours to write — dry-run and test it independently before " +
+					"relying on it.")
+				printGoWiringSuggestions(cmd, mapped.Domains)
+				return nil
+			}
+
 			written, err := writeSlice(mapped, outDir, docsDir, force)
 			if err != nil {
 				return err
@@ -103,12 +126,13 @@ func newSchemaImportCommand() *cobra.Command {
 		},
 	}
 	imp.Flags().String("out", "", "write the generated function files into this directory")
-	imp.Flags().String("docs", "", "write per-aggregate domain docs into this directory (e.g. docs/domains)")
+	imp.Flags().String("docs", "", "write per-aggregate domain docs into this directory (e.g. docs/domains); ignored with --lang go")
 	imp.Flags().StringSlice("aggregate", nil,
 		"map an untagged element to an aggregate: --aggregate notify-shipping-partner=shipmentNotice (repeatable)")
 	imp.Flags().Bool("force", false, "overwrite existing files")
 	imp.Flags().Bool("skip-scenarios", false,
 		"do not run the document's scenarios against the generated code")
+	imp.Flags().String("lang", "js", "output language: \"js\" (hot-reloadable functions, the default) or \"go\" (compiled source, CLI-only — see docs/go-guide.md)")
 	// Its own local flag, not shared with the app's --functionsDir: this
 	// command never runs alongside a booted app, so there's nothing to
 	// share it with. Only used for the completion message above.
@@ -201,10 +225,19 @@ func printReport(cmd *cobra.Command, rep *emschema.Report) {
 // whose rules are the author's job, so a scenario failing usually means the
 // document describes behaviour nobody has written yet — which is worth
 // knowing precisely, and worth not treating as a broken import.
-func printScenarios(cmd *cobra.Command, results []emschema.ScenarioResult) {
+func printScenarios(cmd *cobra.Command, results []emschema.ScenarioResult, lang string) {
+	// Verify always runs the scenarios against the JS mapping (dryrun's
+	// engine has no Go counterpart) regardless of --lang: for --lang go this
+	// checks the same model the Go files were generated from, not the Go
+	// files themselves. Say so, rather than letting "the generated code"
+	// read as a claim that the Go output was exercised.
+	against := "the generated code"
+	if lang == "go" {
+		against = "the JS mapping of the same model (no Go-specific scenario checker exists yet)"
+	}
 	if len(results) == 0 {
-		cmd.Println("\nThe document declares no scenarios, so nothing could be checked " +
-			"against the generated code.")
+		cmd.Printf("\nThe document declares no scenarios, so nothing could be checked "+
+			"against %s.\n", against)
 		return
 	}
 	var passed, failed, skipped int
@@ -218,8 +251,8 @@ func printScenarios(cmd *cobra.Command, results []emschema.ScenarioResult) {
 			failed++
 		}
 	}
-	cmd.Printf("\nScenarios checked against the generated code: %d passed, %d failed, %d skipped\n",
-		passed, failed, skipped)
+	cmd.Printf("\nScenarios checked against %s: %d passed, %d failed, %d skipped\n",
+		against, passed, failed, skipped)
 	for _, r := range results {
 		mark := "✗"
 		switch {
@@ -276,6 +309,61 @@ func writeSlice(mapped *emschema.Mapped, outDir, docsDir string, force bool) (in
 		written += n
 	}
 	return written, nil
+}
+
+// writeSliceGo writes the generated Go files. No docsDir counterpart:
+// --lang go is CLI + --out only (docs/go-guide.md's own JS→Go table is the
+// standing documentation for what converting means), and domain docs are a
+// JS-side artifact of the dashboard scaffolder's own workflow.
+func writeSliceGo(mapped *emschema.Mapped, outDir string, force bool) (int, error) {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return 0, err
+	}
+	written := 0
+	for _, d := range mapped.Domains {
+		files, err := d.GenerateGo()
+		if err != nil {
+			return written, fmt.Errorf("generating %s: %w", d.Aggregate, err)
+		}
+		for _, f := range files {
+			n, err := writeIfAbsent(filepath.Join(outDir, f.Name), f.Source, force)
+			if err != nil {
+				return written, err
+			}
+			written += n
+		}
+	}
+	return written, nil
+}
+
+// printGoWiringSuggestions prints the registration line(s) a real deployment
+// needs to actually run the generated code, as suggested text — never
+// applied automatically. Auto-patching main.go for a one-line edit is not
+// worth the code-mod machinery it would take, and there is deliberately no
+// "graduated" bookkeeping: the registry already refuses a JS/Go name
+// collision, so a partial migration is caught immediately rather than
+// silently (docs/go-guide.md's "A word of caution on scope").
+func printGoWiringSuggestions(cmd *cobra.Command, domains []scaffold.Domain) {
+	cmd.Println("\nSuggested wiring (not applied automatically):")
+	for _, d := range domains {
+		// scaffold.ExportName and scaffold.GoPackageName, not a re-derived
+		// copy of the same casing transform: this line must name the exact
+		// package/func GenerateGo's files declare, or the suggestion could
+		// silently drift from the code it's describing.
+		pkg := scaffold.GoPackageName(d.Aggregate)
+		aggregateCtor := scaffold.ExportName(d.Aggregate)
+		cmd.Printf("\n  decider.Register(registry, %q, %s.%s())\n", d.Aggregate, pkg, aggregateCtor)
+		for _, rm := range d.ReadModels {
+			ctor := "New" + scaffold.ExportName(rm.Collection)
+			cmd.Printf("  // read model %q needs a PocketBase migration for its collection --\n", rm.Collection)
+			cmd.Println("  // see migrations/1754200000_tasks_collection.go for the shape.")
+			cmd.Printf("  engine.Register(%s.%s(app))\n", pkg, ctor)
+		}
+		for _, r := range d.Reactors {
+			reactorCtor := scaffold.ExportName(r.Name)
+			cmd.Printf("  engine.Register(reactors.AsConsumer(%s.%s(), registry, logger, warn))\n", pkg, reactorCtor)
+		}
+	}
 }
 
 func writeIfAbsent(path, content string, force bool) (int, error) {
