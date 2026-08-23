@@ -37,7 +37,7 @@ function project(event) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ReconcileSchemas(app, []*ProjectionSpec{spec}); err != nil {
+	if err := ReconcileSchemas(app, []*ProjectionSpec{spec}, ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"customers", "products"} {
@@ -113,7 +113,7 @@ function project(event) { return { upsert: { key: event.data.customerRef, fields
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ReconcileSchemas(app, []*ProjectionSpec{spec}); err != nil {
+	if err := ReconcileSchemas(app, []*ProjectionSpec{spec}, ""); err != nil {
 		t.Fatal(err)
 	}
 

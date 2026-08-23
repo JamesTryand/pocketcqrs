@@ -242,7 +242,7 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	}
 	report.SchemaTier = "reloaded"
 
-	if err := functions.ReconcileSchemas(c.app, loaded.Projections); err != nil {
+	if err := functions.ReconcileSchemas(c.app, loaded.Projections, c.schemaDefaultRule); err != nil {
 		return nil, fmt.Errorf("reload: schema reconcile: %w", err)
 	}
 

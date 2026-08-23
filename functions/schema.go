@@ -22,6 +22,13 @@ type SchemaSpec struct {
 	Collection string
 	Fields     []FieldSpec
 	Key        string // field used for idempotent upserts (unique index)
+
+	// RuleOverride is this collection's //@rule value, if the file declared
+	// one; nil means no directive, so createCollection falls back to the
+	// deployment-wide --cqrsSchemaDefaultRule. Distinct from "" (which would
+	// be indistinguishable from "not set") -- a directive of "public" must
+	// still win over a deployment default of "authenticated".
+	RuleOverride *string
 }
 
 // schemaFieldTypes maps directive types to PocketBase field constructors.
@@ -86,6 +93,24 @@ func parseSchemaDirective(rest string, key string) (*SchemaSpec, error) {
 	return spec, nil
 }
 
+// resolveRuleValue turns a //@rule or --cqrsSchemaDefaultRule value into the
+// PocketBase rule expression createCollection sets on ListRule/ViewRule.
+// "" and "public" both mean no restriction (PocketBase's own meaning of an
+// empty rule -- so an unset flag reproduces the pre-Item-9 default exactly);
+// "authenticated" requires a non-anonymous request; anything else is used
+// verbatim as a raw PocketBase rule expression, the escape hatch the
+// decision doc asked for.
+func resolveRuleValue(value string) string {
+	switch value {
+	case "", "public":
+		return ""
+	case "authenticated":
+		return `@request.auth.id != ""`
+	default:
+		return value
+	}
+}
+
 // uniqueIndexSQL builds the key index DDL. Names are regex-validated above.
 func (s *SchemaSpec) uniqueIndexSQL() string {
 	return fmt.Sprintf("CREATE UNIQUE INDEX idx_%s_%s ON %s (%s)", s.Collection, s.Key, s.Collection, s.Key)
@@ -105,10 +130,15 @@ func (s *SchemaSpec) uniqueIndexSQL() string {
 // missing collections are created, missing fields and the key index are
 // added — existing fields are never removed, retyped, or renamed (a
 // declared/actual type mismatch is logged and kept as-is).
-func ReconcileSchemas(app core.App, specs []*ProjectionSpec) error {
+// defaultRule is the resolved value of --cqrsSchemaDefaultRule: "" (or
+// "public") reproduces the pre-Item-9 default, "authenticated" locks every
+// newly created //@schema collection down, and anything else is a raw
+// PocketBase rule expression. A collection's own //@rule directive
+// (SchemaSpec.RuleOverride) wins over this when set.
+func ReconcileSchemas(app core.App, specs []*ProjectionSpec, defaultRule string) error {
 	for _, spec := range specs {
 		for _, s := range spec.Schemas {
-			if err := reconcileBase(app, spec, s); err != nil {
+			if err := reconcileBase(app, spec, s, defaultRule); err != nil {
 				return err
 			}
 		}
@@ -125,10 +155,10 @@ func ReconcileSchemas(app core.App, specs []*ProjectionSpec) error {
 
 // reconcileBase is pass 1: the collection exists and carries all declared
 // non-relation fields.
-func reconcileBase(app core.App, spec *ProjectionSpec, s *SchemaSpec) error {
+func reconcileBase(app core.App, spec *ProjectionSpec, s *SchemaSpec, defaultRule string) error {
 	col, err := app.FindCollectionByNameOrId(s.Collection)
 	if err != nil {
-		return createCollection(app, s)
+		return createCollection(app, s, defaultRule)
 	}
 
 	changed := false
@@ -205,11 +235,21 @@ func reconcileRelations(app core.App, spec *ProjectionSpec, s *SchemaSpec) error
 	return app.Save(col)
 }
 
-func createCollection(app core.App, s *SchemaSpec) error {
+func createCollection(app core.App, s *SchemaSpec, defaultRule string) error {
 	col := core.NewBaseCollection(s.Collection)
-	// read side: publicly queryable; writes rejected by the writeguard
-	col.ListRule = types.Pointer("")
-	col.ViewRule = types.Pointer("")
+	// read side: writes are rejected by the writeguard regardless of this
+	// rule. Precedence: the collection's own //@rule, else the
+	// deployment-wide --cqrsSchemaDefaultRule, else public (unchanged
+	// pre-Item-9 default). Never reached again once the collection exists
+	// -- reconcileBase only calls this for a brand-new collection, so an
+	// existing collection's rule is never touched by a later reload.
+	rule := defaultRule
+	if s.RuleOverride != nil {
+		rule = *s.RuleOverride
+	}
+	expr := resolveRuleValue(rule)
+	col.ListRule = types.Pointer(expr)
+	col.ViewRule = types.Pointer(expr)
 	for _, f := range s.Fields {
 		if f.Type == "relation" {
 			continue // pass 2: the target collection may not exist yet

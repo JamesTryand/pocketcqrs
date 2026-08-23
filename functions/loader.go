@@ -199,6 +199,12 @@ func declaration(name string, t triggers) (*Declaration, error) {
 //	                                                ops then need a "collection".
 //	                                                Each //@key pairs with the most
 //	                                                recent //@schema.
+//	//@rule <collection> <value>                  -> optional: overrides
+//	                                                --cqrsSchemaDefaultRule for
+//	                                                this collection's ListRule/
+//	                                                ViewRule. value is "public",
+//	                                                "authenticated", or a raw
+//	                                                PocketBase rule expression.
 //	//@trigger reactor <EventTypes...>             -> JS reactor (tier 4): maps
 //	//@dispatches <aggregate>/<Command>...          events to COMMANDS through
 //	                                                the decider registry.
@@ -316,6 +322,10 @@ func buildProjectionSpec(rt *GojaRuntime, app core.App, filename, src string, t 
 	}
 	schemas := make([]*SchemaSpec, 0, len(t.schemas))
 	seen := map[string]bool{}
+	remainingRules := make(map[string]string, len(t.rules))
+	for k, v := range t.rules {
+		remainingRules[k] = v
+	}
 	for _, rs := range t.schemas {
 		s, err := parseSchemaDirective(rs.raw, rs.key)
 		if err != nil {
@@ -325,7 +335,17 @@ func buildProjectionSpec(rt *GojaRuntime, app core.App, filename, src string, t 
 			return nil, fmt.Errorf("functions: %s: duplicate //@schema for collection %q", filename, s.Collection)
 		}
 		seen[s.Collection] = true
+		if value, ok := remainingRules[s.Collection]; ok {
+			s.RuleOverride = &value
+			delete(remainingRules, s.Collection)
+		}
 		schemas = append(schemas, s)
+	}
+	// A //@rule left unmatched names a collection this file never declared
+	// with //@schema — refused rather than silently ignored, the same
+	// posture //@key already takes for an unpaired directive.
+	for collection := range remainingRules {
+		return nil, fmt.Errorf("functions: %s: //@rule names collection %q, which has no //@schema in this file", filename, collection)
 	}
 	prog, err := goja.Compile(filename, src, false)
 	if err != nil {
@@ -378,6 +398,7 @@ type triggers struct {
 	projection   string   // //@trigger projection <name> on ...
 	projectionOn []string
 	schemas      []rawSchema         // //@schema ... (+ its //@key), repeatable
+	rules        map[string]string   // //@rule <collection> <value> (optional; keyed by collection)
 	decider      string              // //@trigger decider <aggregate>
 	handles      []string            // //@handles ...
 	commands     []string            // //@commands ... (optional; documentation)
@@ -390,7 +411,7 @@ type triggers struct {
 func (t triggers) empty() bool {
 	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && len(t.schemas) == 0 &&
 		t.decider == "" && len(t.handles) == 0 && len(t.commands) == 0 && len(t.transforms) == 0 &&
-		len(t.reactor) == 0 && len(t.dispatches) == 0 && len(t.produces) == 0
+		len(t.reactor) == 0 && len(t.dispatches) == 0 && len(t.produces) == 0 && len(t.rules) == 0
 }
 
 // parseTriggers scans the leading comment lines for //@ directives.
@@ -462,6 +483,29 @@ func parseTriggers(src string) (triggers, error) {
 				return t, fmt.Errorf("duplicate //@key for one //@schema")
 			}
 			last.key = fields[1]
+		case "rule":
+			// //@rule <collection> <public|authenticated|rule-expression> —
+			// Item 9's per-collection override of --cqrsSchemaDefaultRule.
+			// Named by collection rather than paired positionally like
+			// //@key, since a value may itself contain spaces (a raw rule
+			// expression) and a file may declare //@rule before or after
+			// the //@schema it targets.
+			raw := strings.TrimSpace(strings.TrimPrefix(rest, "rule"))
+			collection, value, ok := strings.Cut(raw, " ")
+			value = strings.TrimSpace(value)
+			if !ok || collection == "" || value == "" {
+				return t, fmt.Errorf("//@rule wants: rule <collection> <public|authenticated|rule-expression>")
+			}
+			if !validName.MatchString(collection) {
+				return t, fmt.Errorf("invalid collection name %q in //@rule", collection)
+			}
+			if t.rules == nil {
+				t.rules = map[string]string{}
+			}
+			if _, dup := t.rules[collection]; dup {
+				return t, fmt.Errorf("duplicate //@rule for collection %q", collection)
+			}
+			t.rules[collection] = value
 		case "handles":
 			t.handles = append(t.handles, fields[1:]...)
 		case "commands":

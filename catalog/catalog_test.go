@@ -113,7 +113,7 @@ function project(event) { return { upsert: { key: event.aggregateId, fields: {} 
 	}
 
 	// reconcile + register the JS projection's consumer
-	if err := functions.ReconcileSchemas(app, loaded.Projections); err != nil {
+	if err := functions.ReconcileSchemas(app, loaded.Projections, ""); err != nil {
 		t.Fatal(err)
 	}
 	var jsProjs []*functions.JSProjection

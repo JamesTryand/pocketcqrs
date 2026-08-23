@@ -63,6 +63,133 @@ func TestParseSchemaDirectiveRejections(t *testing.T) {
 	}
 }
 
+func TestResolveRuleValue(t *testing.T) {
+	cases := []struct{ value, want string }{
+		{"", ""},
+		{"public", ""},
+		{"authenticated", `@request.auth.id != ""`},
+		{`@request.auth.id != "" && status = "active"`, `@request.auth.id != "" && status = "active"`},
+	}
+	for _, tc := range cases {
+		if got := resolveRuleValue(tc.value); got != tc.want {
+			t.Fatalf("resolveRuleValue(%q) = %q, want %q", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestCreateCollectionRulePrecedence(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	rt := NewGojaRuntime(nil)
+	override := "authenticated"
+	specs := []*ProjectionSpec{
+		{
+			Name: "p",
+			Schemas: []*SchemaSpec{
+				// no directive: falls back to the deployment default
+				{Collection: "public_by_default", Key: "k", Fields: []FieldSpec{{Name: "k", Type: "text"}}},
+				// directive present: overrides the deployment default
+				{Collection: "locked_down", Key: "k", Fields: []FieldSpec{{Name: "k", Type: "text"}}, RuleOverride: &override},
+			},
+			runtime: rt,
+		},
+	}
+	if err := ReconcileSchemas(app, specs, "public"); err != nil {
+		t.Fatal(err)
+	}
+
+	byDefault, err := app.FindCollectionByNameOrId("public_by_default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byDefault.ListRule == nil || *byDefault.ListRule != "" {
+		t.Fatalf("public_by_default.ListRule = %v, want empty (public)", byDefault.ListRule)
+	}
+
+	lockedDown, err := app.FindCollectionByNameOrId("locked_down")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `@request.auth.id != ""`
+	if lockedDown.ListRule == nil || *lockedDown.ListRule != want || lockedDown.ViewRule == nil || *lockedDown.ViewRule != want {
+		t.Fatalf("locked_down rules = list:%v view:%v, want %q", lockedDown.ListRule, lockedDown.ViewRule, want)
+	}
+}
+
+func TestCreateCollectionDeploymentDefaultAppliesWithNoDirective(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	rt := NewGojaRuntime(nil)
+	specs := []*ProjectionSpec{{
+		Name:    "p",
+		Schemas: []*SchemaSpec{{Collection: "locked_by_flag", Key: "k", Fields: []FieldSpec{{Name: "k", Type: "text"}}}},
+		runtime: rt,
+	}}
+	if err := ReconcileSchemas(app, specs, "authenticated"); err != nil {
+		t.Fatal(err)
+	}
+
+	col, err := app.FindCollectionByNameOrId("locked_by_flag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `@request.auth.id != ""`
+	if col.ListRule == nil || *col.ListRule != want {
+		t.Fatalf("locked_by_flag.ListRule = %v, want %q", col.ListRule, want)
+	}
+}
+
+func TestReconcileSchemasRuleAdditiveSafeOnReload(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	rt := NewGojaRuntime(nil)
+	spec := func() []*ProjectionSpec {
+		return []*ProjectionSpec{{
+			Name:    "p",
+			Schemas: []*SchemaSpec{{Collection: "notes", Key: "k", Fields: []FieldSpec{{Name: "k", Type: "text"}}}},
+			runtime: rt,
+		}}
+	}
+
+	// first reconcile: no default set, so the collection is created public
+	if err := ReconcileSchemas(app, spec(), ""); err != nil {
+		t.Fatal(err)
+	}
+	col, err := app.FindCollectionByNameOrId("notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if col.ListRule == nil || *col.ListRule != "" {
+		t.Fatalf("first reconcile: ListRule = %v, want empty", col.ListRule)
+	}
+
+	// second reconcile (simulating a hot reload) flips the deployment
+	// default -- an ALREADY-EXISTING collection must not be touched, the
+	// same guarantee field changes already get
+	if err := ReconcileSchemas(app, spec(), "authenticated"); err != nil {
+		t.Fatal(err)
+	}
+	col, err = app.FindCollectionByNameOrId("notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if col.ListRule == nil || *col.ListRule != "" {
+		t.Fatalf("second reconcile changed an existing collection's rule: %v", col.ListRule)
+	}
+}
+
 func TestReconcileSchemasRelations(t *testing.T) {
 	app, err := tests.NewTestApp()
 	if err != nil {
@@ -94,7 +221,7 @@ func TestReconcileSchemasRelations(t *testing.T) {
 			FieldSpec{Name: "ref", Type: "text"},
 		),
 	}
-	if err := ReconcileSchemas(app, specs); err != nil {
+	if err := ReconcileSchemas(app, specs, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +259,7 @@ func TestReconcileSchemasRelations(t *testing.T) {
 	}
 
 	// idempotent: a second reconcile adds nothing and keeps the wiring
-	if err := ReconcileSchemas(app, specs); err != nil {
+	if err := ReconcileSchemas(app, specs, ""); err != nil {
 		t.Fatal(err)
 	}
 	again, err := app.FindCollectionByNameOrId("child_rows")
@@ -160,7 +287,7 @@ func TestReconcileSchemasRelationTargetMissing(t *testing.T) {
 		}}},
 		runtime: rt,
 	}}
-	if err := ReconcileSchemas(app, specs); err == nil {
+	if err := ReconcileSchemas(app, specs, ""); err == nil {
 		t.Fatal("expected missing relation target error")
 	}
 }

@@ -82,6 +82,11 @@ and kept). Relation targets may be other declared collections (any order) or
 pre-existing ones (migration-created, auth collections). A relation whose
 target collection does not exist fails the reconcile.
 
+A newly created collection's `ListRule`/`ViewRule` defaults to public
+(`""`), or `--cqrsSchemaDefaultRule` when the deployment sets one — see
+`//@rule` below to override that per collection. Writes are rejected by the
+writeguard either way.
+
 ## `//@key <field>`
 
 The projection's idempotency key: upserts find-or-create by it, and it gets
@@ -96,6 +101,34 @@ key is a load error.
 //@schema products sku:text sold:number
 //@key sku
 ```
+
+## `//@rule <collection> <value>`
+
+Optional, per-collection override of `--cqrsSchemaDefaultRule` (the
+deployment-wide default, see [the CLI reference](cli.md)) for a `//@schema`
+collection's `ListRule`/`ViewRule` — writes stay write-guarded regardless of
+either. Named by collection rather than paired positionally like `//@key`,
+since `value` may itself be a multi-word raw rule expression and the
+directive may appear before or after the `//@schema` it targets. `value` is
+one of:
+
+| value | resolves to |
+| --- | --- |
+| `public` (or omitting the directive with no deployment default set) | `""` — no restriction |
+| `authenticated` | `@request.auth.id != ""` |
+| anything else | used verbatim as a raw PocketBase rule expression |
+
+```js
+//@schema tickets ticketId:text status:text
+//@key ticketId
+//@rule tickets authenticated
+```
+
+A `//@rule` naming a collection this file has no `//@schema` for is a load
+error, same posture as an unpaired `//@key`. **Only applies when the
+collection is first created** — reconcile never rewrites an existing
+collection's rule on a later boot or reload, the same additive-only
+guarantee field changes already get.
 
 ## `//@trigger decider <aggregate>`
 

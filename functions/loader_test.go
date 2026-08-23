@@ -205,3 +205,73 @@ func TestParseTriggers(t *testing.T) {
 		t.Fatal("expected malformed projection directive error")
 	}
 }
+
+func TestParseTriggersRule(t *testing.T) {
+	tr, err := parseTriggers("//@rule tickets authenticated\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tr.rules["tickets"], "authenticated"; got != want {
+		t.Fatalf("rules[tickets] = %q, want %q", got, want)
+	}
+
+	// a raw rule expression keeps its internal spaces
+	tr, err = parseTriggers(`//@rule tickets @request.auth.id != ""` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tr.rules["tickets"], `@request.auth.id != ""`; got != want {
+		t.Fatalf("rules[tickets] = %q, want %q", got, want)
+	}
+
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"missing value", "//@rule tickets\n"},
+		{"missing collection and value", "//@rule\n"},
+		{"invalid collection name", "//@rule 1tickets public\n"},
+		{"duplicate rule for one collection", "//@rule tickets public\n//@rule tickets authenticated\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseTriggers(tc.src); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+}
+
+func TestLoadDirProjectionRule(t *testing.T) {
+	dir := t.TempDir()
+	writeFn(t, dir, "rollup.js", `//@trigger projection tickets_by_status on TicketOpened
+//@schema tickets_by_status ticketId:text status:text
+//@key ticketId
+//@rule tickets_by_status authenticated
+function project(event) { return; }
+`)
+
+	rt := NewGojaRuntime(nil)
+	loaded, err := LoadDir(rt, nil, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := loaded.Projections[0]
+	if p.Schemas[0].RuleOverride == nil || *p.Schemas[0].RuleOverride != "authenticated" {
+		t.Fatalf("unexpected rule override: %+v", p.Schemas[0].RuleOverride)
+	}
+}
+
+func TestLoadDirProjectionRuleUnmatchedCollectionRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFn(t, dir, "bad.js", `//@trigger projection tickets on TicketOpened
+//@schema tickets ticketId:text
+//@key ticketId
+//@rule other_collection authenticated
+function project(event) { return; }
+`)
+	rt := NewGojaRuntime(nil)
+	if _, err := LoadDir(rt, nil, dir); err == nil {
+		t.Fatal("expected rejection: //@rule names a collection with no //@schema")
+	}
+}

@@ -98,6 +98,12 @@ type components struct {
 	// see the same answer. When false this repo's example domains are not
 	// wired at all — the platform ships empty.
 	tutorial bool
+
+	// schemaDefaultRule mirrors --cqrsSchemaDefaultRule (Item 9). Set once
+	// immediately after ParseFlags, same lifecycle as tutorial above. Read
+	// by ReconcileSchemas at boot and on every maintenance reload, so a hot
+	// reload sees the same deployment-wide default it booted with.
+	schemaDefaultRule string
 }
 
 func main() {
@@ -201,6 +207,22 @@ func main() {
 		"tutorial",
 		false,
 		"register this repo's example domains (task, order) and their collections; off by default — pocketcqrs ships empty",
+	)
+
+	// Item 9: //@schema-created collections default to public ListRule/
+	// ViewRule (writes stay write-guarded regardless). This flag changes
+	// the deployment-wide default; a //@rule directive in a function file
+	// overrides it per collection. Neither ever touches an already-existing
+	// collection's rule — reconcile stays additive-only, same guarantee
+	// field changes already get.
+	var schemaDefaultRule string
+	app.RootCmd.PersistentFlags().StringVar(
+		&schemaDefaultRule,
+		"cqrsSchemaDefaultRule",
+		"",
+		`default ListRule/ViewRule for newly created //@schema collections: "public" (default), `+
+			`"authenticated", or a raw PocketBase rule expression. A //@rule <collection> <value> `+
+			"directive overrides this per collection. Never changes an existing collection's rule.",
 	)
 
 	// Node role for the single-writer/multi-reader deployment
@@ -363,6 +385,7 @@ func main() {
 	app.RootCmd.AddCommand(newSkillCommand())
 	app.RootCmd.ParseFlags(os.Args[1:])
 	c.tutorial = tutorial
+	c.schemaDefaultRule = schemaDefaultRule
 	if role != roleMaster && role != roleSecondary {
 		log.Fatalf("invalid --cqrsRole %q (want %q or %q)", role, roleMaster, roleSecondary)
 	}
@@ -631,7 +654,7 @@ func main() {
 
 		// JS projection schemas are materialized at boot (a restart IS the
 		// maintenance window), additively: create/extend, never drop
-		if err := functions.ReconcileSchemas(e.App, loaded.Projections); err != nil {
+		if err := functions.ReconcileSchemas(e.App, loaded.Projections, c.schemaDefaultRule); err != nil {
 			return err
 		}
 

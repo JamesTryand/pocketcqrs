@@ -182,7 +182,10 @@ function project(event) {
 
 - `//@schema <collection> <field>:<type> ...` declares the output collection.
   It is materialized at boot **additively** (create missing collections/fields,
-  never drop or retype) and publicly readable; writes are write-guarded.
+  never drop or retype); writes are write-guarded regardless. Reads default to
+  public, overridable deployment-wide with `--cqrsSchemaDefaultRule` or
+  per-collection with [`//@rule`](reference/directives.md#rule-collection-value) —
+  neither ever touches an already-existing collection's rule.
   Field types: `text | number | bool | date | json | relation(<collection>)`.
   Relations wire by target collection name (single, `maxSelect: 1`).
 - `//@key <field>` is the idempotency key: upserts find-or-create by it, and

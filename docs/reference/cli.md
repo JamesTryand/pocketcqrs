@@ -17,6 +17,7 @@ PocketCQRS flags (persistent, on every command):
 | `--cqrsOutboundHost` | *(none)* | a hostname `$http` may call. Repeatable; deployment-wide, not per-function. **No entries permits nothing** |
 | `--cqrsAllowPrivateOutbound` | `false` | dev/internal: let `$http` reach loopback and private ranges. Link-local (`169.254.0.0/16`, the metadata endpoint) stays blocked regardless |
 | `--cqrsExternalCallerCollection` | *(none)* | name of a PocketBase auth collection whose authenticated records are external service integrations (e.g. `pocketcqrs-extensions`' `extcaller`), not end users or reactors — see [the Go guide](../go-guide.md) for the `"extcall:<name>"` actor shape this produces |
+| `--cqrsSchemaDefaultRule` | *(none, = `public`)* | default `ListRule`/`ViewRule` for newly created `//@schema` collections: `public`, `authenticated`, or a raw PocketBase rule expression. A [`//@rule <collection> <value>`](directives.md#rule-collection-value) directive overrides this per collection. Writes stay write-guarded either way. Never changes an already-existing collection's rule — reconcile stays additive-only, same guarantee field changes already get |
 
 Outbound HTTP is off unless asked for, and asking for it takes two flags —
 enabling it with no `--cqrsOutboundHost` refuses every call and warns at boot.
