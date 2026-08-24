@@ -3,6 +3,67 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.9.0 — end-user auth, capability-scoped ops access, and Go-native schema codegen
+
+Core ships its own end-user auth primitive and a Microsoft/Entra sign-in path for it, ops routes
+gain a real capability tier below superuser instead of all-or-nothing, and `schema import` can
+now generate Go instead of just JS.
+
+### Added
+
+- **`users` collection** (Item 12, part 1): a shipped, app-extensible end-user auth primitive,
+  deliberately separate from `roles`/`_superusers` (ops/dashboard access) and
+  pocketcqrs-extensions' `service_accounts` (non-human integration credentials). Carries no
+  `capabilities` field, so a self-registered user can never satisfy `RequireCapability` or
+  `RequireSuperuser` no matter what an app adds to the collection. Registered unconditionally in
+  `main.go`, same posture as `roles`; `ensureCollection` is create-only so an app's own migration
+  can extend the shape afterward without a later boot reasserting it.
+- **Microsoft/Entra sign-in for `users`** (Item 12, completing it): a login/callback route pair
+  plus a session-cookie bridge. The callback exchanges the code via a loopback call to PocketBase's
+  own `auth-with-oauth2` endpoint at a new `--cqrsSelfAddr`, rather than reimplementing the
+  exchange — that endpoint is already on `authforward`'s forwarding suffix list, so a
+  `--cqrsRole=secondary` running `--cqrsForwardAuth` gets F-12's split-brain protection for free.
+  `--cqrsSelfAddr` is operator-set, not header-derived, since a header-derived outbound call target
+  would be an SSRF primitive; the public `redirect_uri` sent to Microsoft stays header-derived
+  because Microsoft's own allowlist is the real control there.
+- **Capability-based access below superuser for read-only ops routes** (Item 11, first slice):
+  a `roles` auth collection with a `capabilities` JSON field, and
+  `authverify.RequireCapability` — collection-agnostic, so a future role/permission field on a
+  different collection composes with no gate change. Scoped to five read-only routes (events,
+  streams, deadletters, admin/mode, catalog) per product decision; every mutating route stays
+  superuser-only. The catalog route's bare `apis.RequireSuperuserAuth()` is replaced with
+  `authverify.RequireSuperuser` in the process, making it remote-verify-aware on a secondary like
+  every other ops route already was. Not yet built: the dashboard's own nav/panels are not
+  capability-aware, and role editing outside PocketBase's admin UI remains open.
+- **Configurable default read-rule for `//@schema` collections** (Item 9): `createCollection`
+  always created a public-read collection with no way to ask for anything else. Adds a
+  deployment-wide `--cqrsSchemaDefaultRule` flag and a per-collection `//@rule <collection>
+  <value>` directive that overrides it. Writes stay write-guarded regardless; an already-existing
+  collection's rule is never touched, since the new logic only runs the one time a collection is
+  first created.
+- **`schema import --lang go`**: `Domain.GenerateGo()` generates a decider/projection/reactor per
+  aggregate, mirroring the JS generator's model, `Validate()`/`Warnings()` gate, and
+  format-validated output. Conflicting `//@schema` field types across events are caught by
+  `Warnings()` and resolved to one consistent Go type; a read model's triggering events are
+  emitted as string literals rather than same-package Go constants, since `On` may legitimately
+  name another aggregate's events. `--docs` and scenario-check output are explicit about what
+  `--lang go` doesn't yet cover instead of silently doing nothing.
+- **`--cqrsExternalCallerCollection` flag** (F-18): `gateway.Config.ExternalCallerCollection`
+  shipped as a Go field in v0.8.0, but no stock binary could actually set it — found while wiring
+  up pocketcqrs-extensions' service-account CLI. Mirrors `--cqrsAllowAnonymous`'s pattern: empty
+  default, zero behavior change when unset.
+
+### Fixed
+
+- **A JSON-typed field read via `FindRecord`/`Query` reached JS unparsed** (F-15), silently
+  corrupting a read-modify-write projection's own column on its second write cycle.
+- **`command.now` was stamped with a space instead of a `T`** (F-16), breaking downstream
+  date-time consumers; fixed at all four sites that produce the value, including both dry-run
+  paths, so previews stay faithful to real behavior.
+- **A failing consumer aborted the whole `RunOnce` pass**, starving every consumer registered
+  after it (F-17) — contradicting the function's own doc comment. The loop now continues past a
+  failing consumer and aggregates failures via `errors.Join`.
+
 ## v0.8.0 — provenance, external-caller identity, and a CLI command that now tells you it failed
 
 Deciders, reactors, and the gateway all gain ways to say who or what really stands behind a
