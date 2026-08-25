@@ -195,6 +195,18 @@ func ImportEvents(ctx context.Context, store *events.Store, checkpoints checkpoi
 		// transaction that gets rolled back. A write landing between this
 		// read and a real import can change the answer; that is an
 		// accepted property of any preview, not a correctness bug here.
+		//
+		// current + len(batch) assumes AUTOINCREMENT hands out exactly
+		// len(batch) consecutive positions starting at current+1, which
+		// holds only because nothing in this codebase ever deletes a row
+		// from the events table (confirmed: no DELETE FROM events path
+		// anywhere; projection rebuild wipes a projection's OWN pb
+		// collections and checkpoint, never the log). If a future feature
+		// ever deletes log rows, SQLite's sqlite_sequence (which
+		// AUTOINCREMENT reads from) still reflects the highest position
+		// ever used, not MAX(position) over what remains — this arithmetic
+		// would then need Store to expose that value directly instead of
+		// deriving it from MaxPosition.
 		if err := store.CheckImportCollisions(ctx, batch); err != nil {
 			return nil, err
 		}
