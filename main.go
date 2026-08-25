@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/jamestryand/pocketcqrs/adminapi"
 	"github.com/jamestryand/pocketcqrs/aggregates"
 	"github.com/jamestryand/pocketcqrs/authforward"
 	"github.com/jamestryand/pocketcqrs/authverify"
@@ -51,16 +51,17 @@ const (
 	roleSecondary = "secondary"
 )
 
-// components is filled during bootstrap, before the server starts.
+// components is the stock binary's own bootstrap state. It embeds
+// *adminapi.State (Item 10: the admin/introspection HTTP surface, factored
+// out so a Go embedder can register the same routes in its own main.go)
+// plus the handful of fields that are this binary's own concern and never
+// reach the admin surface: command idempotency, command batching, node
+// role, and remote-verify caching. See adminapi.State's doc comment for
+// why the split lands exactly where it does.
 type components struct {
-	app         core.App
-	store       *events.Store
+	*adminapi.State
+
 	idempotency *idempotency.Store
-	registry    *decider.Registry
-	engine      *consumers.Engine
-	httpFns     *functions.HTTPRegistry
-	jsProjs     []*functions.JSProjection
-	fnRuntime   *functions.GojaRuntime
 
 	// batchWriter backs command batching (item 4, on by default), or is
 	// nil when --cqrsCommandBatching=false or this node is a roleSecondary,
@@ -68,44 +69,14 @@ type components struct {
 	batchWriter *batching.Writer
 
 	// role mirrors --cqrsRole (roleMaster or roleSecondary), set once
-	// immediately after ParseFlags, same lifecycle as tutorial below.
+	// immediately after ParseFlags, same lifecycle as State.Tutorial.
 	role string
 
-	// verifier backs --cqrsVerifyAuth (F-13): remote token verification
-	// against the master, with verifyCache holding the bounded-TTL verdicts.
-	// Both nil except on a secondary running verify mode.
-	verifier    *authverify.Verifier
+	// verifyCache holds --cqrsVerifyAuth's (F-13) bounded-TTL verdicts.
+	// Nil except on a secondary running verify mode. State.Verifier reads
+	// through this cache; components only holds it to start/stop its
+	// pruner.
 	verifyCache *authverify.Cache
-
-	// outbound backs the $http binding, or is nil when
-	// --cqrsAllowOutboundHTTP is absent (the default). Held here because a
-	// hot reload builds a fresh runtime and must carry it across — otherwise
-	// $http would work until the first reload and then vanish.
-	outbound *outbound.Client
-
-	// jsDeciders tracks JS-managed aggregates (vs built-in Go deciders)
-	// with their active specs, for hot-reload swaps and upcaster rebuilds.
-	jsDeciders map[string]*functions.DeciderSpec
-	// jsReactors tracks the active JS reactors so a reload can unregister
-	// exactly what it registered (their checkpoint keys are stable, so a
-	// swapped reactor resumes where the old code left off).
-	jsReactors []*functions.ReactorSpec
-	// cronJobs lists the registered cron job ids ("fn:"+name).
-	cronJobs []string
-	// reloadMu serializes hot reloads.
-	reloadMu sync.Mutex
-
-	// tutorial mirrors --tutorial. Set once immediately after ParseFlags,
-	// before anything reads it, so OnBootstrap and every subcommand's RunE
-	// see the same answer. When false this repo's example domains are not
-	// wired at all — the platform ships empty.
-	tutorial bool
-
-	// schemaDefaultRule mirrors --cqrsSchemaDefaultRule (Item 9). Set once
-	// immediately after ParseFlags, same lifecycle as tutorial above. Read
-	// by ReconcileSchemas at boot and on every maintenance reload, so a hot
-	// reload sees the same deployment-wide default it booted with.
-	schemaDefaultRule string
 }
 
 func main() {
@@ -148,7 +119,7 @@ func main() {
 	}
 
 	app := pocketbase.New()
-	c := &components{}
+	c := &components{State: &adminapi.State{}}
 
 	var gatewayCfg gateway.Config
 	app.RootCmd.PersistentFlags().BoolVar(
@@ -406,8 +377,8 @@ func main() {
 	app.RootCmd.AddCommand(newSchemaCommand(c))
 	app.RootCmd.AddCommand(newSkillCommand())
 	app.RootCmd.ParseFlags(os.Args[1:])
-	c.tutorial = tutorial
-	c.schemaDefaultRule = schemaDefaultRule
+	c.Tutorial = tutorial
+	c.SchemaDefaultRule = schemaDefaultRule
 	if role != roleMaster && role != roleSecondary {
 		log.Fatalf("invalid --cqrsRole %q (want %q or %q)", role, roleMaster, roleSecondary)
 	}
@@ -468,12 +439,12 @@ func main() {
 	// unregistered migration is never applied AND never recorded, so the
 	// examples can be switched off and on again without either direction
 	// being a one-way door. See migrations.RegisterExamples.
-	if c.tutorial {
+	if c.Tutorial {
 		migrations.RegisterExamples()
 	}
 
 	// Item 11: the roles collection (capability-based ops/dashboard access,
-	// see ops.go's capOps* constants) is always registered, unlike the
+	// see adminapi's capOps* constants) is always registered, unlike the
 	// --tutorial examples above -- it's this project's own feature, not
 	// switchable content, so every deployment gets it.
 	roles.RegisterCollection()
@@ -499,7 +470,7 @@ func main() {
 		if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
 			return err
 		}
-		c.app = e.App
+		c.App = e.App
 
 		// collections-as-DDL: apply the shipped app migrations now. Serve
 		// would run them later (apis.Serve), which is too late for
@@ -539,7 +510,7 @@ func main() {
 		if err != nil {
 			return err
 		}
-		c.store = store
+		c.Store = store
 
 		// idempotency records for the command gateway: a separate small
 		// SQLite file, deliberately off events.db's hot append path.
@@ -561,17 +532,17 @@ func main() {
 				return err
 			}
 			c.verifyCache = cache
-			c.verifier = authverify.New(masterURL, cache, verifyCacheTTL, verifyGrace)
+			c.Verifier = authverify.New(masterURL, cache, verifyCacheTTL, verifyGrace)
 		}
 
 		// write side: deciders + command handling. The platform registers no
 		// aggregates of its own — task and order are example content, and
 		// without --tutorial their names are free for a JS decider to claim.
-		c.registry = decider.NewRegistry(store)
-		if c.tutorial {
-			aggregates.RegisterAll(c.registry)
+		c.Registry = decider.NewRegistry(store)
+		if c.Tutorial {
+			aggregates.RegisterAll(c.Registry)
 		}
-		c.jsDeciders = map[string]*functions.DeciderSpec{}
+		c.JSDeciders = map[string]*functions.DeciderSpec{}
 
 		// the gateway rejects domain commands while the system is in
 		// maintenance mode (hot reload of schema-bearing functions)
@@ -590,9 +561,9 @@ func main() {
 			if err != nil {
 				return err
 			}
-			c.engine = consumers.NewEngineWithCheckpoints(store, checkpoints, engineLogger)
+			c.Engine = consumers.NewEngineWithCheckpoints(store, checkpoints, engineLogger)
 		} else {
-			c.engine = consumers.NewEngine(store, engineLogger)
+			c.Engine = consumers.NewEngine(store, engineLogger)
 		}
 
 		// command batching (item 4): on by default, and never on a
@@ -603,7 +574,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			c.batchWriter = batching.NewWriter(store, queue, c.registry, engineLogger)
+			c.batchWriter = batching.NewWriter(store, queue, c.Registry, engineLogger)
 			c.batchWriter.MaxDepth = commandQueueMaxDepth
 			gatewayCfg.Batching = c.batchWriter
 			gatewayCfg.BatchTimeout = batchTimeout
@@ -611,8 +582,9 @@ func main() {
 
 		// read side: projections into PocketBase collections
 		projs := c.allProjections(e.App)
+		c.GoProjections = projs
 		for _, p := range projs {
-			c.engine.Register(p)
+			c.Engine.Register(p)
 		}
 
 		// functions (FaaS): JS functions loaded from functionsDir
@@ -636,7 +608,7 @@ func main() {
 			if err != nil {
 				return fmt.Errorf("outbound HTTP config: %w", err)
 			}
-			c.outbound = client
+			c.Outbound = client
 			rt.SetOutbound(client)
 			if len(outboundHosts) == 0 {
 				logger.Warn("outbound HTTP is enabled but no --cqrsOutboundHost was given, " +
@@ -648,12 +620,12 @@ func main() {
 			}
 		}
 
-		c.fnRuntime = rt
+		c.FnRuntime = rt
 		loaded, err := functions.LoadDir(rt, e.App, functionsDir)
 		if err != nil {
 			return err
 		}
-		c.httpFns = loaded.HTTP
+		c.HTTPFns = loaded.HTTP
 
 		// JS deciders (tier 3): dry-run validated against existing history
 		// at boot, then registered alongside the Go deciders. Failures are
@@ -661,7 +633,7 @@ func main() {
 		// --cqrsStrictBoot is set (boot aborts instead).
 		var validatedDeciders []*functions.DeciderSpec
 		for _, spec := range loaded.Deciders {
-			if c.registry.Has(spec.Aggregate) {
+			if c.Registry.Has(spec.Aggregate) {
 				if strictBoot {
 					return fmt.Errorf("strict boot: JS decider aggregate %q collides with an existing decider", spec.Aggregate)
 				}
@@ -677,8 +649,8 @@ func main() {
 					"aggregate", spec.Aggregate, "error", err)
 				continue
 			}
-			c.registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
-			c.jsDeciders[spec.Aggregate] = spec
+			c.Registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
+			c.JSDeciders[spec.Aggregate] = spec
 			validatedDeciders = append(validatedDeciders, spec)
 			logger.Info("JS decider active", "aggregate", spec.Aggregate)
 		}
@@ -687,11 +659,11 @@ func main() {
 		// compose into the store's read path, so every consumer (deciders,
 		// projections, functions, reactors) sees events at their latest
 		// schema version. Only validated specs contribute.
-		c.store.SetUpcaster(functions.BuildUpcaster(validatedDeciders))
+		c.Store.SetUpcaster(functions.BuildUpcaster(validatedDeciders))
 
 		// JS projection schemas are materialized at boot (a restart IS the
 		// maintenance window), additively: create/extend, never drop
-		if err := functions.ReconcileSchemas(e.App, loaded.Projections, c.schemaDefaultRule); err != nil {
+		if err := functions.ReconcileSchemas(e.App, loaded.Projections, c.SchemaDefaultRule); err != nil {
 			return err
 		}
 
@@ -699,18 +671,18 @@ func main() {
 		// projections (which may read Go-maintained collections), then
 		// reactors and effect functions
 		for _, spec := range loaded.Projections {
-			c.jsProjs = append(c.jsProjs, spec.Consumer())
+			c.JSProjs = append(c.JSProjs, spec.Consumer())
 		}
-		for _, p := range c.jsProjs {
-			c.engine.Register(p)
+		for _, p := range c.JSProjs {
+			c.Engine.Register(p)
 		}
 
 		// sagas: reactors dispatch follow-up commands through the registry.
 		// The fulfillment saga is example content — it wires the example
 		// order aggregate to the example task one, so it only exists when
 		// they do.
-		if c.tutorial {
-			c.engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.registry,
+		if c.Tutorial {
+			c.Engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.Registry,
 				func(msg string, args ...any) { logger.Info(msg, args...) },
 				func(msg string, args ...any) { logger.Warn(msg, args...) }))
 		}
@@ -719,15 +691,15 @@ func main() {
 		// from a function file. The registry must be installed BEFORE they
 		// are registered as consumers — a reactor without one fails loudly
 		// rather than quietly doing nothing.
-		rt.SetRegistry(c.registry)
+		rt.SetRegistry(c.Registry)
 		rt.SetWarn(func(msg string, args ...any) { logger.Warn(msg, args...) })
 		// //@dispatches gate (F-2): the registry is complete here — deciders
 		// were registered above — so the live registry IS the right thing to
 		// validate against at boot. A reload cannot say the same; see
-		// prospectiveCommands in reload.go.
+		// adminapi's State.ProspectiveCommands.
 		var activeReactors []*functions.ReactorSpec
 		for _, spec := range loaded.Reactors {
-			if err := functions.ValidateReactorSpec(c.registry, spec); err != nil {
+			if err := functions.ValidateReactorSpec(c.Registry, spec); err != nil {
 				if strictBoot {
 					return fmt.Errorf("strict boot: JS reactor %q failed validation: %w", spec.Reactor, err)
 				}
@@ -737,15 +709,15 @@ func main() {
 			}
 			activeReactors = append(activeReactors, spec)
 		}
-		c.jsReactors = activeReactors
+		c.JSReactors = activeReactors
 		for _, spec := range activeReactors {
-			c.engine.Register(spec)
+			c.Engine.Register(spec)
 			logger.Info("JS reactor active", "reactor", spec.Reactor, "on", spec.EventTypes)
 		}
 
 		// write-guard: no out-of-band writes on projection-owned collections
 		guarded := c.allProjections(e.App)
-		for _, p := range c.jsProjs {
+		for _, p := range c.JSProjs {
 			guarded = append(guarded, p)
 		}
 		cols := projections.GuardedCollections(guarded...)
@@ -756,7 +728,7 @@ func main() {
 		// model is bad, an unmaintained read model anyone can write to is
 		// worse — but say so, because a collection that quietly stopped
 		// updating is the kind of thing found months later.
-		if !c.tutorial {
+		if !c.Tutorial {
 			var orphaned []string
 			for _, name := range exampleCollections(e.App) {
 				if slices.Contains(cols, name) {
@@ -782,7 +754,7 @@ func main() {
 
 		// effect functions: durable delivery through the consumers engine
 		for _, fc := range rt.Consumers() {
-			c.engine.Register(fc)
+			c.Engine.Register(fc)
 		}
 
 		// cron functions: scheduled by PocketBase's cron service
@@ -791,20 +763,20 @@ func main() {
 			if err := e.App.Cron().Add(id, job.Schedule, job.Fire); err != nil {
 				return err
 			}
-			c.cronJobs = append(c.cronJobs, id)
+			c.CronJobs = append(c.CronJobs, id)
 		}
 
 		return nil
 	})
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
-		gateway.RegisterRoutes(e, c.registry, gatewayCfg)
+		gateway.RegisterRoutes(e, c.Registry, gatewayCfg)
 		// the verify oracle answers on every node (a secondary delegates to
 		// the master), so it is registered unconditionally; the verifying
 		// middleware only exists where there is a verifier
-		authverify.RegisterEndpoint(e, c.verifier)
-		if c.verifier != nil {
-			authverify.Register(e, c.verifier)
+		authverify.RegisterEndpoint(e, c.Verifier)
+		if c.Verifier != nil {
+			authverify.Register(e, c.Verifier)
 		}
 		if forwardAuth && gatewayCfg.Forward != nil {
 			// item 5's remainder (F-12): PocketBase's own native auth
@@ -820,13 +792,10 @@ func main() {
 			// --cqrsMasterAddr automatically.
 			authforward.Register(e, gatewayCfg.Forward)
 		}
-		functions.RegisterHTTPRoutes(e, c.httpFns, !gatewayCfg.AllowAnonymous)
-		registerReloadRoute(e, c, functionsDir)
-		registerFunctionAdminRoutes(e, c, functionsDir)
-		registerCatalogRoute(e, c)
-		registerOpsRoutes(e, c)
+		functions.RegisterHTTPRoutes(e, c.HTTPFns, !gatewayCfg.AllowAnonymous)
+		adminapi.RegisterRoutes(e, c.State, adminapi.Config{FunctionsDir: functionsDir})
 		registerEntraLoginRoutes(e, selfAddr)
-		c.engine.Start(context.Background())
+		c.Engine.Start(context.Background())
 		if c.batchWriter != nil {
 			c.batchWriter.Start(context.Background())
 		}

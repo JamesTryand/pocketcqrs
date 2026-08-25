@@ -1,4 +1,4 @@
-package main
+package adminapi
 
 import (
 	"context"
@@ -47,7 +47,7 @@ func opsStoreErr(re *core.RequestEvent, err error) error {
 	return apis.NewBadRequestError(err.Error(), err)
 }
 
-// registerOpsRoutes binds the superuser-only operational API:
+// RegisterOpsRoutes binds the superuser-only operational API:
 //
 //	GET  /api/cqrs/events?after=&before=&limit=&aggregate=&aggregateId=&type=
 //	GET  /api/cqrs/streams?aggregate=
@@ -62,7 +62,7 @@ func opsStoreErr(re *core.RequestEvent, err error) error {
 // out-of-process read-model consumers tail the log through it instead of
 // touching events.db (preserving the single-process model). All reads see
 // events at their latest schema version (store-level upcasting).
-func registerOpsRoutes(e *core.ServeEvent, c *components) {
+func RegisterOpsRoutes(e *core.ServeEvent, s *State) {
 	// the log feed, in position order; limit defaults to 100, capped at 1000
 	e.Router.GET("/api/cqrs/events", func(re *core.RequestEvent) error {
 		qv := re.Request.URL.Query()
@@ -75,7 +75,7 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 		if limit > 1000 {
 			limit = 1000
 		}
-		evs, err := c.store.QueryEvents(re.Request.Context(), events.EventQuery{
+		evs, err := s.Store.QueryEvents(re.Request.Context(), events.EventQuery{
 			After:       after,
 			Before:      before,
 			Limit:       limit,
@@ -87,27 +87,27 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"events": evs})
-	}).Bind(authverify.RequireCapability(c.verifier, capOpsEventsRead))
+	}).Bind(authverify.RequireCapability(s.Verifier, capOpsEventsRead))
 
 	// one row per stream, optionally restricted to one aggregate
 	e.Router.GET("/api/cqrs/streams", func(re *core.RequestEvent) error {
-		streams, err := c.store.ListStreamInfos(re.Request.Context(),
+		streams, err := s.Store.ListStreamInfos(re.Request.Context(),
 			re.Request.URL.Query().Get("aggregate"))
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"streams": streams})
-	}).Bind(authverify.RequireCapability(c.verifier, capOpsStreamsRead))
+	}).Bind(authverify.RequireCapability(s.Verifier, capOpsStreamsRead))
 
 	// failed function deliveries; pending only unless ?all=1
 	e.Router.GET("/api/cqrs/deadletters", func(re *core.RequestEvent) error {
 		includeResolved := re.Request.URL.Query().Get("all") == "1"
-		letters, err := c.store.DeadLetters(re.Request.Context(), includeResolved)
+		letters, err := s.Store.DeadLetters(re.Request.Context(), includeResolved)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"deadLetters": letters})
-	}).Bind(authverify.RequireCapability(c.verifier, capOpsDeadlettersRead))
+	}).Bind(authverify.RequireCapability(s.Verifier, capOpsDeadlettersRead))
 
 	// re-deliver one dead letter through the CURRENT function code.
 	//
@@ -119,29 +119,29 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 		if err != nil {
 			return apis.NewBadRequestError("invalid dead letter id", err)
 		}
-		letters, err := c.pendingDeadLetters(re.Request.Context(), id)
+		letters, err := s.pendingDeadLetters(re.Request.Context(), id)
 		if err != nil {
 			return err
 		}
-		results, err := c.retryDeadLetters(re.Request.Context(), letters)
+		results, err := s.RetryDeadLetters(re.Request.Context(), letters)
 		if err != nil {
 			return opsStoreErr(re, err)
 		}
 		return re.JSON(http.StatusOK, results[0])
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 
 	// re-deliver every pending dead letter, oldest first
 	e.Router.POST("/api/cqrs/deadletters/retry", func(re *core.RequestEvent) error {
-		letters, err := c.store.DeadLetters(re.Request.Context(), false)
+		letters, err := s.Store.DeadLetters(re.Request.Context(), false)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
-		results, err := c.retryDeadLetters(re.Request.Context(), letters)
+		results, err := s.RetryDeadLetters(re.Request.Context(), letters)
 		if err != nil {
 			return opsStoreErr(re, err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"results": results})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 
 	// resolve a dead letter without re-delivering it
 	e.Router.POST("/api/cqrs/deadletters/{id}/dismiss", func(re *core.RequestEvent) error {
@@ -149,24 +149,24 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 		if err != nil {
 			return apis.NewBadRequestError("invalid dead letter id", err)
 		}
-		if err := c.store.ResolveDeadLetter(re.Request.Context(), id); err != nil {
+		if err := s.Store.ResolveDeadLetter(re.Request.Context(), id); err != nil {
 			if errors.Is(err, events.ErrReadOnly) {
 				return opsStoreErr(re, err)
 			}
 			return apis.NewNotFoundError(fmt.Sprintf("no dead letter with id %d", id), err)
 		}
-		return re.JSON(http.StatusOK, deadLetterResult{ID: id, Resolved: true})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+		return re.JSON(http.StatusOK, DeadLetterResult{ID: id, Resolved: true})
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 
 	// the system mode barrier (running|maintenance); POST wraps SetMode,
 	// so an invalid value is a 400 and the current mode never changes
 	e.Router.GET("/api/cqrs/admin/mode", func(re *core.RequestEvent) error {
-		mode, err := c.store.Mode(re.Request.Context())
+		mode, err := s.Store.Mode(re.Request.Context())
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]string{"mode": mode})
-	}).Bind(authverify.RequireCapability(c.verifier, capOpsModeRead))
+	}).Bind(authverify.RequireCapability(s.Verifier, capOpsModeRead))
 
 	e.Router.POST("/api/cqrs/admin/mode", func(re *core.RequestEvent) error {
 		payload, err := io.ReadAll(re.Request.Body)
@@ -179,21 +179,21 @@ func registerOpsRoutes(e *core.ServeEvent, c *components) {
 		if err := json.Unmarshal(payload, &body); err != nil {
 			return apis.NewBadRequestError("invalid JSON body: "+err.Error(), err)
 		}
-		if err := c.store.SetMode(re.Request.Context(), body.Mode); err != nil {
+		if err := s.Store.SetMode(re.Request.Context(), body.Mode); err != nil {
 			return opsStoreErr(re, err)
 		}
 		return re.JSON(http.StatusOK, map[string]string{"mode": body.Mode})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 }
 
-// deadLetterResult reports the outcome of one retry or dismissal.
+// DeadLetterResult reports the outcome of one retry or dismissal.
 //
 // A retry that fails again is NOT an HTTP error: a poison event staying
 // poison is the ordinary case, and the caller needs to tell it apart from
 // "the endpoint is broken". So every adjudicated delivery answers 200 with
 // Resolved=false and the failure text; 4xx is reserved for a malformed or
 // unknown id.
-type deadLetterResult struct {
+type DeadLetterResult struct {
 	ID       int64  `json:"id"`
 	Consumer string `json:"consumer,omitempty"`
 	Resolved bool   `json:"resolved"`
@@ -201,50 +201,63 @@ type deadLetterResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// FilterLetters narrows a dead-letter listing down to the entries matching
+// id. Exported: the stock CLI's `deadletter retry <id>` command shares it,
+// so the CLI and the HTTP API can never adjudicate an id differently.
+func FilterLetters(letters []events.DeadLetter, id int64) []events.DeadLetter {
+	var out []events.DeadLetter
+	for _, dl := range letters {
+		if dl.ID == id {
+			out = append(out, dl)
+		}
+	}
+	return out
+}
+
 // pendingDeadLetters returns the single pending dead letter with the given
 // id, or a 404 when there is none.
-func (c *components) pendingDeadLetters(ctx context.Context, id int64) ([]events.DeadLetter, error) {
-	letters, err := c.store.DeadLetters(ctx, false)
+func (s *State) pendingDeadLetters(ctx context.Context, id int64) ([]events.DeadLetter, error) {
+	letters, err := s.Store.DeadLetters(ctx, false)
 	if err != nil {
 		return nil, apis.NewBadRequestError(err.Error(), err)
 	}
-	letters = filterLetters(letters, id)
+	letters = FilterLetters(letters, id)
 	if len(letters) == 0 {
 		return nil, apis.NewNotFoundError(fmt.Sprintf("no pending dead letter with id %d", id), nil)
 	}
 	return letters, nil
 }
 
-// retryDeadLetters re-delivers each letter through the current function
+// RetryDeadLetters re-delivers each letter through the current function
 // code, resolving the ones that now succeed and recording an attempt on the
 // ones that do not — the same adjudication as `pocketcqrs deadletter retry`,
 // shared so the CLI and the HTTP API can never drift apart.
 //
-// It holds reloadMu because a hot reload swaps c.fnRuntime wholesale: a
+// It holds reloadMu because a hot reload swaps FnRuntime wholesale: a
 // retry must run entirely against one runtime, not half of each.
-func (c *components) retryDeadLetters(ctx context.Context, letters []events.DeadLetter) ([]deadLetterResult, error) {
-	c.reloadMu.Lock()
-	defer c.reloadMu.Unlock()
+func (s *State) RetryDeadLetters(ctx context.Context, letters []events.DeadLetter) ([]DeadLetterResult, error) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
 
-	if c.fnRuntime == nil {
+	if s.FnRuntime == nil {
 		return nil, errors.New("function runtime not initialized")
 	}
 
-	results := make([]deadLetterResult, 0, len(letters))
+	results := make([]DeadLetterResult, 0, len(letters))
 	for _, dl := range letters {
-		res := deadLetterResult{ID: dl.ID, Consumer: dl.Consumer, Attempts: dl.Attempts}
+		res := DeadLetterResult{ID: dl.ID, Consumer: dl.Consumer, Attempts: dl.Attempts}
 		// dead letters record the consumer name ("fn:<name>"); the runtime
 		// knows the function by its bare name
 		name := strings.TrimPrefix(dl.Consumer, "fn:")
-		if err := c.fnRuntime.RetryEventFunction(name, dl.Event); err != nil {
+		if err := s.FnRuntime.RetryEventFunction(name, dl.Event); err != nil {
 			res.Error = err.Error()
 			res.Attempts = dl.Attempts + 1
-			if serr := c.store.FailDeadLetterRetry(ctx, dl.ID, err); serr != nil {
+			if serr := s.Store.FailDeadLetterRetry(ctx, dl.ID, err); serr != nil {
 				return nil, serr
 			}
 		} else {
 			res.Resolved = true
-			if serr := c.store.ResolveDeadLetter(ctx, dl.ID); serr != nil {
+			if serr := s.Store.ResolveDeadLetter(ctx, dl.ID); serr != nil {
 				return nil, serr
 			}
 		}

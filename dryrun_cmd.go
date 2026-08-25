@@ -28,7 +28,7 @@ func newDryrunCommand(c *components) *cobra.Command {
 		Short: "Extract a stream as a JSON fixture (the harness's 'prior events')",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			stream, err := c.store.LoadStream(context.Background(), args[0], args[1])
+			stream, err := c.Store.LoadStream(context.Background(), args[0], args[1])
 			if err != nil {
 				return err
 			}
@@ -60,7 +60,7 @@ func newDryrunCommand(c *components) *cobra.Command {
 		Short: "Fold existing streams through a candidate JS decider (no appends)",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			spec, err := functions.LoadDeciderFile(c.fnRuntime, args[0])
+			spec, err := functions.LoadDeciderFile(c.FnRuntime, args[0])
 			if err != nil {
 				return err
 			}
@@ -68,7 +68,7 @@ func newDryrunCommand(c *components) *cobra.Command {
 			if len(args) == 2 {
 				streamID = args[1]
 			}
-			res, err := functions.DryRunDecider(c.store, spec, streamID)
+			res, err := functions.DryRunDecider(c.Store, spec, streamID)
 			if err != nil {
 				return err
 			}
@@ -89,7 +89,7 @@ func newDryrunCommand(c *components) *cobra.Command {
 		Short: "Show the events a command WOULD produce on a real stream (no append)",
 		Args:  cobra.RangeArgs(3, 4),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			spec, err := functions.LoadDeciderFile(c.fnRuntime, args[0])
+			spec, err := functions.LoadDeciderFile(c.FnRuntime, args[0])
 			if err != nil {
 				return err
 			}
@@ -104,7 +104,7 @@ func newDryrunCommand(c *components) *cobra.Command {
 				"now":   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 				"actor": "dryrun",
 			}
-			res, err := functions.DryRunDecide(c.store, spec, args[1],
+			res, err := functions.DryRunDecide(c.Store, spec, args[1],
 				decider.Command{Name: args[2], Payload: payload}, meta)
 			if err != nil {
 				return err
@@ -133,11 +133,11 @@ func newDryrunCommand(c *components) *cobra.Command {
 		Short: "Simulate a candidate JS projection over the log in memory (--diff against the live collection)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			spec, err := functions.LoadProjectionFile(c.fnRuntime, c.app, args[0])
+			spec, err := functions.LoadProjectionFile(c.FnRuntime, c.App, args[0])
 			if err != nil {
 				return err
 			}
-			res, err := functions.DryRunProjection(c.store, spec)
+			res, err := functions.DryRunProjection(c.Store, spec)
 			if err != nil {
 				return err
 			}
@@ -154,7 +154,7 @@ func newDryrunCommand(c *components) *cobra.Command {
 			}
 			totalDiffs := 0
 			for _, s := range spec.Schemas {
-				live, err := c.app.FindRecordsByFilter(s.Collection, "", "", -1, 0)
+				live, err := c.App.FindRecordsByFilter(s.Collection, "", "", -1, 0)
 				if err != nil {
 					return err
 				}

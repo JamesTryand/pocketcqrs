@@ -1,4 +1,4 @@
-package main
+package adminapi
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func TestRetryDeadLettersAdjudication(t *testing.T) {
 	}
 	// deleted.js is deliberately NOT registered
 
-	c := &components{store: store, fnRuntime: rt}
+	s := &State{Store: store, FnRuntime: rt}
 
 	pending, err := store.DeadLetters(ctx, false)
 	if err != nil {
@@ -56,7 +56,7 @@ func TestRetryDeadLettersAdjudication(t *testing.T) {
 		t.Fatalf("expected 3 pending dead letters, got %d", len(pending))
 	}
 
-	results, err := c.retryDeadLetters(ctx, pending)
+	results, err := s.RetryDeadLetters(ctx, pending)
 	if err != nil {
 		t.Fatalf("retry batch failed as a whole: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestRetryDeadLettersAdjudication(t *testing.T) {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 
-	byConsumer := map[string]deadLetterResult{}
+	byConsumer := map[string]DeadLetterResult{}
 	for _, res := range results {
 		byConsumer[res.Consumer] = res
 	}

@@ -21,7 +21,7 @@ import (
 // than a function taking a bool because every call site already holds the
 // components, which makes calling it with the wrong answer impossible.
 func (c *components) allProjections(app core.App) []projections.Projection {
-	if !c.tutorial {
+	if !c.Tutorial {
 		return nil
 	}
 	return exampleProjections(app)
@@ -44,14 +44,14 @@ func newProjectionCommand(c *components) *cobra.Command {
 			name := args[0]
 
 			var target projections.Projection
-			for _, p := range c.allProjections(c.app) {
+			for _, p := range c.allProjections(c.App) {
 				if p.Name() == name {
 					target = p
 					break
 				}
 			}
 			if target == nil {
-				for _, p := range c.jsProjs {
+				for _, p := range c.JSProjs {
 					if p.Name() == name {
 						target = p
 						break
@@ -61,7 +61,7 @@ func newProjectionCommand(c *components) *cobra.Command {
 			if target == nil {
 				return fmt.Errorf("unknown projection %q", name)
 			}
-			if c.store == nil {
+			if c.Store == nil {
 				return errors.New("event store not initialized")
 			}
 
@@ -70,12 +70,12 @@ func newProjectionCommand(c *components) *cobra.Command {
 			// wipe the target collections (internal writes pass the writeguard)
 			wiped := 0
 			for _, colName := range target.Collections() {
-				recs, err := c.app.FindRecordsByFilter(colName, "", "", -1, 0)
+				recs, err := c.App.FindRecordsByFilter(colName, "", "", -1, 0)
 				if err != nil {
 					return fmt.Errorf("failed listing %q records: %w", colName, err)
 				}
 				for _, rec := range recs {
-					if err := c.app.DeleteWithContext(writeguard.MarkInternal(ctx), rec); err != nil {
+					if err := c.App.DeleteWithContext(writeguard.MarkInternal(ctx), rec); err != nil {
 						return fmt.Errorf("failed deleting %q record %q: %w", colName, rec.Id, err)
 					}
 					wiped++
@@ -83,17 +83,17 @@ func newProjectionCommand(c *components) *cobra.Command {
 			}
 
 			// reset the durable checkpoint and replay the log
-			if err := c.store.SaveCheckpoint(ctx, target.Name(), 0); err != nil {
+			if err := c.Store.SaveCheckpoint(ctx, target.Name(), 0); err != nil {
 				return err
 			}
 
-			engine := consumers.NewEngine(c.store, nil)
+			engine := consumers.NewEngine(c.Store, nil)
 			engine.Register(target)
 			if err := engine.RunOnce(ctx); err != nil {
 				return fmt.Errorf("replay failed: %w", err)
 			}
 
-			pos, err := c.store.Checkpoint(ctx, target.Name())
+			pos, err := c.Store.Checkpoint(ctx, target.Name())
 			if err != nil {
 				return err
 			}

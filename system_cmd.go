@@ -25,20 +25,20 @@ func newSystemCommand(c *components) *cobra.Command {
 			ctx := context.Background()
 			switch args[0] {
 			case "status":
-				mode, err := c.store.Mode(ctx)
+				mode, err := c.Store.Mode(ctx)
 				if err != nil {
 					return err
 				}
 				cmd.Printf("mode: %s\n", mode)
 				return nil
 			case "on":
-				if err := c.store.SetMode(ctx, events.ModeMaintenance); err != nil {
+				if err := c.Store.SetMode(ctx, events.ModeMaintenance); err != nil {
 					return err
 				}
 				cmd.Println("maintenance mode ON: domain commands are rejected (503); schema-bearing functions may now be reloaded (POST /api/cqrs/admin/reload)")
 				return nil
 			case "off":
-				if err := c.store.SetMode(ctx, events.ModeRunning); err != nil {
+				if err := c.Store.SetMode(ctx, events.ModeRunning); err != nil {
 					return err
 				}
 				cmd.Println("maintenance mode OFF: serving domain commands")

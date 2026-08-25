@@ -1,4 +1,4 @@
-package main
+package adminapi
 
 import (
 	"encoding/json"
@@ -60,8 +60,8 @@ func resolveFunctionPath(dir, name string) (string, error) {
 	return full, nil
 }
 
-// functionFile is one entry of the function-file listing.
-type functionFile struct {
+// FunctionFile is one entry of the function-file listing.
+type FunctionFile struct {
 	Name     string `json:"name"`
 	Size     int64  `json:"size"`
 	Modified string `json:"modified"`
@@ -74,7 +74,7 @@ type functionFile struct {
 	HasPrevious bool `json:"hasPrevious,omitempty"`
 }
 
-// registerFunctionAdminRoutes binds the superuser-only function-file API:
+// RegisterFunctionAdminRoutes binds the superuser-only function-file API:
 //
 //	GET    /api/cqrs/admin/functions          list pb_functions/*.js
 //	GET    /api/cqrs/admin/functions/{name}   read one file's source
@@ -94,14 +94,14 @@ type functionFile struct {
 // so one bad save would block the fix for it. Nothing written here is live
 // until POST /api/cqrs/admin/reload — and schema-bearing files need the
 // maintenance barrier first.
-func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir string) {
+func RegisterFunctionAdminRoutes(e *core.ServeEvent, s *State, functionsDir string) {
 	e.Router.GET("/api/cqrs/admin/functions", func(re *core.RequestEvent) error {
 		files, err := listFunctionFiles(functionsDir)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"dir": functionsDir, "files": files})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 
 	e.Router.GET("/api/cqrs/admin/functions/{name}", func(re *core.RequestEvent) error {
 		path, err := resolveFunctionPath(functionsDir, re.Request.PathValue("name"))
@@ -123,7 +123,7 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			out["error"] = derr.Error()
 		}
 		return re.JSON(http.StatusOK, out)
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 
 	// the copy kept when this file was last overwritten — the undo a bare
 	// os.WriteFile does not give you
@@ -139,7 +139,7 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 		return re.JSON(http.StatusOK, map[string]any{
 			"name": filepath.Base(path), "source": string(raw),
 		})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 
 	e.Router.PUT("/api/cqrs/admin/functions/{name}", func(re *core.RequestEvent) error {
 		path, err := resolveFunctionPath(functionsDir, re.Request.PathValue("name"))
@@ -160,19 +160,19 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 
 		// load-check before writing: an unloadable file in the directory
 		// would abort every later reload, including the one that fixes it
-		decl, err := c.checkFunctionSource(name, body.Source)
+		decl, err := s.CheckFunctionSource(name, body.Source)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 
 		// writes take the reload lock: a reload reads the whole directory,
 		// and a write landing mid-read would tear the load
-		c.reloadMu.Lock()
+		s.reloadMu.Lock()
 		replaced, err := keepPreviousVersion(path)
 		if err == nil {
 			err = os.WriteFile(path, []byte(body.Source), 0o644)
 		}
-		c.reloadMu.Unlock()
+		s.reloadMu.Unlock()
 		if err != nil {
 			return apis.NewBadRequestError("failed writing the function file: "+err.Error(), err)
 		}
@@ -183,16 +183,16 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			"hasPrevious": replaced,
 			"hint":        activationHint(decl),
 		})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 
 	e.Router.DELETE("/api/cqrs/admin/functions/{name}", func(re *core.RequestEvent) error {
 		path, err := resolveFunctionPath(functionsDir, re.Request.PathValue("name"))
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
-		c.reloadMu.Lock()
+		s.reloadMu.Lock()
 		err = os.Remove(path)
-		c.reloadMu.Unlock()
+		s.reloadMu.Unlock()
 		if err != nil {
 			return apis.NewNotFoundError("no such function file", err)
 		}
@@ -201,11 +201,11 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			"deleted": true,
 			"hint":    "The file is gone, but whatever it registered is still serving until the next reload drops it.",
 		})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 
 	e.Router.POST("/api/cqrs/admin/dryrun", func(re *core.RequestEvent) error {
-		return c.handleDryRun(re)
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+		return s.handleDryRun(re)
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 
 	// Generate a slice's source from a domain description. It writes
 	// nothing: the caller saves the files through PUT above, so generated
@@ -235,7 +235,7 @@ func registerFunctionAdminRoutes(e *core.ServeEvent, c *components, functionsDir
 			"hint": "Nothing was written. Dry-run each file, save it, then reload — " +
 				"a generated decider and projection are a starting point, not a finished domain.",
 		})
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 }
 
 // previousSuffix marks the copy kept when a file is overwritten. It is not
@@ -273,9 +273,9 @@ func activationHint(d *functions.Declaration) string {
 	return "Saved, not live. Reload to activate it; effect, HTTP and cron functions reload in any mode."
 }
 
-// checkFunctionSource loads candidate source the way the loader would,
+// CheckFunctionSource loads candidate source the way the loader would,
 // without registering anything, and reports what it declares.
-func (c *components) checkFunctionSource(name, src string) (*functions.Declaration, error) {
+func (s *State) CheckFunctionSource(name, src string) (*functions.Declaration, error) {
 	decl, err := functions.Declares(name, src)
 	if err != nil {
 		return nil, err
@@ -289,7 +289,7 @@ func (c *components) checkFunctionSource(name, src string) (*functions.Declarati
 			return nil, err
 		}
 	case functions.KindProjection:
-		if _, err := functions.LoadProjectionSource(rt, c.app, name, src); err != nil {
+		if _, err := functions.LoadProjectionSource(rt, s.App, name, src); err != nil {
 			return nil, err
 		}
 	default:
@@ -341,7 +341,7 @@ type fixtureEvent struct {
 
 // toEvents numbers a fixture into real events. Positions start at 1 and
 // sequences count per stream, mirroring what the store would have done.
-func (c *components) fixtureEvents(in []fixtureEvent) ([]events.Event, error) {
+func (s *State) fixtureEvents(in []fixtureEvent) ([]events.Event, error) {
 	out := make([]events.Event, 0, len(in))
 	seq := map[string]int64{}
 	for i, f := range in {
@@ -373,7 +373,7 @@ func (c *components) fixtureEvents(in []fixtureEvent) ([]events.Event, error) {
 
 // handleDryRun runs candidate source against real history without appending
 // events or touching collections — the HTTP face of the `dryrun` CLI.
-func (c *components) handleDryRun(re *core.RequestEvent) error {
+func (s *State) handleDryRun(re *core.RequestEvent) error {
 	payload, err := io.ReadAll(re.Request.Body)
 	if err != nil {
 		return apis.NewBadRequestError("failed reading request body", err)
@@ -388,21 +388,21 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 
 	// candidates are compiled into a scratch runtime, never the live one
 	rt := functions.NewGojaRuntime(func(string, ...any) {})
-	rt.SetReader(functions.NewAppReader(c.app))
-	rt.SetStore(c.store)
+	rt.SetReader(functions.NewAppReader(s.App))
+	rt.SetStore(s.Store)
 	// A dry run answers "what would this do?" and must not make it happen —
 	// the same reason mode=projection reads through an isolated reader. The
 	// stub refuses and names the call it would have sent, which beats leaving
 	// $http undefined and failing with an error about the binding rather than
 	// an answer about the function. Only installed when the instance actually
 	// has outbound enabled, so a dry run reports what production would do.
-	if c.outbound != nil {
+	if s.Outbound != nil {
 		rt.SetOutbound(functions.DryRunOutbound())
 	}
 
 	switch req.Mode {
 	case "compile":
-		decl, err := c.checkFunctionSource(req.Name, req.Source)
+		decl, err := s.CheckFunctionSource(req.Name, req.Source)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
@@ -422,10 +422,10 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 		// history yet — a decider missing decide() would "pass" vacuously,
 		// then be refused at activation. The operator's real question is
 		// "will the reload accept this?", so ask it here.
-		if err := functions.ValidateDeciderSpec(c.store, spec); err != nil {
+		if err := functions.ValidateDeciderSpec(s.Store, spec); err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
-		res, err := functions.DryRunDecider(c.store, spec, req.StreamID)
+		res, err := functions.DryRunDecider(s.Store, spec, req.StreamID)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
@@ -456,7 +456,7 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 			"now":   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 			"actor": "dryrun",
 		}
-		res, err := functions.DryRunDecide(c.store, spec, req.StreamID,
+		res, err := functions.DryRunDecide(s.Store, spec, req.StreamID,
 			decider.Command{Name: req.Command, Payload: cmdPayload}, meta)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
@@ -493,7 +493,7 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 		// No registry is installed on this scratch runtime, and that is the
 		// point: a dry run reports what WOULD be dispatched and cannot
 		// dispatch it even by accident.
-		res, err := functions.DryRunReactor(c.store, spec)
+		res, err := functions.DryRunReactor(s.Store, spec)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
@@ -515,11 +515,11 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 		// would also stop someone dry-running code they are part-way through
 		// fixing, which is when a dry run is most useful.
 		//
-		// This reads c.registry, the LIVE one. It does not install it on the
+		// This reads s.Registry, the LIVE one. It does not install it on the
 		// scratch runtime above, so that runtime's "cannot dispatch even by
 		// accident" property is untouched.
 		wouldRefuse := ""
-		if err := functions.ValidateReactorSpec(c.registry, spec); err != nil {
+		if err := functions.ValidateReactorSpec(s.Registry, spec); err != nil {
 			wouldRefuse = err.Error()
 			summary += " IT WOULD BE REFUSED AT RELOAD: " + wouldRefuse
 		}
@@ -538,7 +538,7 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 		return re.JSON(http.StatusOK, out)
 
 	case "projection":
-		spec, err := functions.LoadProjectionSource(rt, c.app, req.Name, req.Source)
+		spec, err := functions.LoadProjectionSource(rt, s.App, req.Name, req.Source)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
@@ -548,13 +548,13 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 				return apis.NewBadRequestError(
 					"diff compares a simulation against LIVE collections, which a fixture run deliberately knows nothing about; drop one of them", nil)
 			}
-			fixture, ferr := c.fixtureEvents(req.Fixture)
+			fixture, ferr := s.fixtureEvents(req.Fixture)
 			if ferr != nil {
 				return apis.NewBadRequestError(ferr.Error(), ferr)
 			}
 			res, err = functions.DryRunProjectionOver(spec, fixture)
 		} else {
-			res, err = functions.DryRunProjection(c.store, spec)
+			res, err = functions.DryRunProjection(s.Store, spec)
 		}
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
@@ -577,7 +577,7 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 			"summary":       summary,
 		}
 		if req.Diff {
-			diffs, err := c.diffProjection(spec, res)
+			diffs, err := s.diffProjection(spec, res)
 			if err != nil {
 				return apis.NewBadRequestError(err.Error(), err)
 			}
@@ -595,10 +595,10 @@ func (c *components) handleDryRun(re *core.RequestEvent) error {
 // collection. Note the M7 caveat: read-modify-write projections read live
 // state during simulation, so only absolute-recompute projections are
 // expected to come back clean.
-func (c *components) diffProjection(spec *functions.ProjectionSpec, res *functions.ProjectionDryRun) (map[string][]string, error) {
+func (s *State) diffProjection(spec *functions.ProjectionSpec, res *functions.ProjectionDryRun) (map[string][]string, error) {
 	out := map[string][]string{}
-	for _, s := range spec.Schemas {
-		live, err := c.app.FindRecordsByFilter(s.Collection, "", "", -1, 0)
+	for _, sc := range spec.Schemas {
+		live, err := s.App.FindRecordsByFilter(sc.Collection, "", "", -1, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -606,7 +606,7 @@ func (c *components) diffProjection(spec *functions.ProjectionSpec, res *functio
 		for _, rec := range live {
 			liveRows = append(liveRows, rec.PublicExport())
 		}
-		out[s.Collection] = functions.DiffRows(res.Rows[s.Collection], liveRows, s.Key)
+		out[sc.Collection] = functions.DiffRows(res.Rows[sc.Collection], liveRows, sc.Key)
 	}
 	return out, nil
 }
@@ -614,20 +614,20 @@ func (c *components) diffProjection(spec *functions.ProjectionSpec, res *functio
 // listFunctionFiles reports every .js file in dir with what it declares.
 // A file that does not parse is listed with its error rather than omitted —
 // it is exactly the file an operator needs to find, since it blocks reloads.
-func listFunctionFiles(dir string) ([]functionFile, error) {
+func listFunctionFiles(dir string) ([]FunctionFile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []functionFile{}, nil // functions are optional
+			return []FunctionFile{}, nil // functions are optional
 		}
 		return nil, err
 	}
-	files := make([]functionFile, 0, len(entries))
+	files := make([]FunctionFile, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".js") {
 			continue
 		}
-		f := functionFile{Name: entry.Name()}
+		f := FunctionFile{Name: entry.Name()}
 		if info, err := entry.Info(); err == nil {
 			f.Size = info.Size()
 			f.Modified = info.ModTime().UTC().Format("2006-01-02 15:04:05.000Z")

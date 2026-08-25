@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jamestryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/adminapi"
 )
 
 // newDeadletterCommand builds the `deadletter` CLI command group:
@@ -25,7 +25,7 @@ func newDeadletterCommand(c *components) *cobra.Command {
 		Short: "List pending dead letters (--all to include resolved)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			includeResolved, _ := cmd.Flags().GetBool("all")
-			letters, err := c.store.DeadLetters(context.Background(), includeResolved)
+			letters, err := c.Store.DeadLetters(context.Background(), includeResolved)
 			if err != nil {
 				return err
 			}
@@ -54,7 +54,7 @@ func newDeadletterCommand(c *components) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			letters, err := c.store.DeadLetters(ctx, false)
+			letters, err := c.Store.DeadLetters(ctx, false)
 			if err != nil {
 				return err
 			}
@@ -63,7 +63,7 @@ func newDeadletterCommand(c *components) *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("invalid id %q (or use \"all\")", args[0])
 				}
-				letters = filterLetters(letters, id)
+				letters = adminapi.FilterLetters(letters, id)
 				if len(letters) == 0 {
 					return fmt.Errorf("no pending dead letter with id %d", id)
 				}
@@ -75,7 +75,7 @@ func newDeadletterCommand(c *components) *cobra.Command {
 
 			// same adjudication as POST /api/cqrs/deadletters/{id}/retry —
 			// shared so the CLI and the dashboard can never diverge
-			results, err := c.retryDeadLetters(ctx, letters)
+			results, err := c.RetryDeadLetters(ctx, letters)
 			if err != nil {
 				return err
 			}
@@ -100,7 +100,7 @@ func newDeadletterCommand(c *components) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("invalid id %q", args[0])
 			}
-			if err := c.store.ResolveDeadLetter(context.Background(), id); err != nil {
+			if err := c.Store.ResolveDeadLetter(context.Background(), id); err != nil {
 				return fmt.Errorf("no dead letter with id %d", id)
 			}
 			cmd.Printf("#%d dismissed.\n", id)
@@ -109,14 +109,4 @@ func newDeadletterCommand(c *components) *cobra.Command {
 	})
 
 	return cmd
-}
-
-func filterLetters(letters []events.DeadLetter, id int64) []events.DeadLetter {
-	var out []events.DeadLetter
-	for _, dl := range letters {
-		if dl.ID == id {
-			out = append(out, dl)
-		}
-	}
-	return out
 }

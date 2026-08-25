@@ -163,7 +163,7 @@ func newSchemaCommand(c *components) *cobra.Command {
 		Short: "Render the running platform's catalog as an EventModeling document",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cat, err := c.buildCatalog(cmd.Context())
+			cat, err := c.BuildCatalog(cmd.Context())
 			if err != nil {
 				return err
 			}

@@ -28,12 +28,12 @@ func newPackCommand(c *components, functionsDir *string) *cobra.Command {
 			fns, _ := cmd.Flags().GetStringSlice("functions")
 			cols, _ := cmd.Flags().GetStringSlice("collections")
 
-			guarded := projections.GuardedCollections(c.allProjections(c.app)...)
-			for _, p := range c.jsProjs {
+			guarded := projections.GuardedCollections(c.allProjections(c.App)...)
+			for _, p := range c.JSProjs {
 				guarded = append(guarded, p.Collections()...)
 			}
 
-			manifest, err := packs.Export(c.app, *functionsDir, args[0], packs.ExportOptions{
+			manifest, err := packs.Export(c.App, *functionsDir, args[0], packs.ExportOptions{
 				Name:               name,
 				Version:            version,
 				Description:        description,
@@ -63,7 +63,7 @@ func newPackCommand(c *components, functionsDir *string) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			force, _ := cmd.Flags().GetBool("force")
-			result, err := packs.Import(c.app, *functionsDir, args[0], force)
+			result, err := packs.Import(c.App, *functionsDir, args[0], force)
 			if err != nil {
 				return err
 			}

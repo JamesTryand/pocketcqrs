@@ -1,4 +1,4 @@
-package main
+package adminapi
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
-// reloadReport summarizes one hot reload (POST /api/cqrs/admin/reload).
-type reloadReport struct {
+// ReloadReport summarizes one hot reload (POST /api/cqrs/admin/reload).
+type ReloadReport struct {
 	Mode               string   `json:"mode"`
 	EffectsReloaded    []string `json:"effectsReloaded"`
 	HTTPReloaded       []string `json:"httpReloaded"`
@@ -31,7 +31,7 @@ type reloadReport struct {
 	DecidersRefused    []string `json:"decidersRefused,omitempty"`
 }
 
-// registerReloadRoute binds the superuser-only hot-reload endpoint:
+// RegisterReloadRoute binds the superuser-only hot-reload endpoint:
 //
 //	POST /api/cqrs/admin/reload
 //
@@ -40,14 +40,14 @@ type reloadReport struct {
 // projection schemas, JS deciders) reload only in maintenance mode, behind
 // the barrier that rejects domain commands; deciders are re-validated
 // (ValidateDeciderSpec) before their swap.
-func registerReloadRoute(e *core.ServeEvent, c *components, functionsDir string) {
+func RegisterReloadRoute(e *core.ServeEvent, s *State, functionsDir string) {
 	e.Router.POST("/api/cqrs/admin/reload", func(re *core.RequestEvent) error {
-		report, err := c.reloadFunctions(re.Request.Context(), functionsDir)
+		report, err := s.reloadFunctions(re.Request.Context(), functionsDir)
 		if err != nil {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, report)
-	}).Bind(authverify.RequireSuperuser(c.verifier))
+	}).Bind(authverify.RequireSuperuser(s.Verifier))
 }
 
 // reloadFunctions reloads the functions directory into the running system.
@@ -55,7 +55,7 @@ func registerReloadRoute(e *core.ServeEvent, c *components, functionsDir string)
 // touched: a broken file aborts the reload, leaving the previous code
 // serving. Checkpoints carry over by consumer name, so swapped consumers
 // resume where the old code left off.
-// carryCapabilities copies every capability the live runtime holds onto a
+// CarryCapabilities copies every capability the live runtime holds onto a
 // freshly built one.
 //
 // A hot reload swaps the runtime wholesale, so ANY capability that is not
@@ -69,16 +69,16 @@ func registerReloadRoute(e *core.ServeEvent, c *components, functionsDir string)
 // *outbound.Client stored in an interface is NOT a nil interface, so an
 // unconditional call would install the binding on an instance that never
 // enabled outbound, and it would panic on first use.
-func (c *components) carryCapabilities(fresh *functions.GojaRuntime) {
-	fresh.SetReader(functions.NewAppReader(c.app))
-	fresh.SetStore(c.store)
-	fresh.SetWarn(func(msg string, args ...any) { c.app.Logger().Warn(msg, args...) })
-	if c.outbound != nil {
-		fresh.SetOutbound(c.outbound)
+func (s *State) CarryCapabilities(fresh *functions.GojaRuntime) {
+	fresh.SetReader(functions.NewAppReader(s.App))
+	fresh.SetStore(s.Store)
+	fresh.SetWarn(func(msg string, args ...any) { s.App.Logger().Warn(msg, args...) })
+	if s.Outbound != nil {
+		fresh.SetOutbound(s.Outbound)
 	}
 }
 
-// prospectiveCommands answers "which aggregates will accept which commands
+// ProspectiveCommands answers "which aggregates will accept which commands
 // once this reload finishes", which is what the //@dispatches gate has to
 // check against — not the live registry.
 //
@@ -95,14 +95,14 @@ func (c *components) carryCapabilities(fresh *functions.GojaRuntime) {
 // maintenance mode and a decider shipped together with the reactor that
 // dispatches to it is refused, which would make the gate worse than the fault
 // it fixes.
-func (c *components) prospectiveCommands(mode string, loaded *functions.LoadResult) functions.CommandTarget {
+func (s *State) ProspectiveCommands(mode string, loaded *functions.LoadResult) functions.CommandTarget {
 	if mode != events.ModeMaintenance {
-		return c.registry
+		return s.Registry
 	}
-	p := &prospectiveSet{live: c.registry, adds: map[string][]string{}, removes: map[string]bool{}}
+	p := &ProspectiveSet{live: s.Registry, adds: map[string][]string{}, removes: map[string]bool{}}
 	// every JS decider currently live is a candidate for removal; anything
 	// this load still carries is put back below
-	for aggregate := range c.jsDeciders {
+	for aggregate := range s.JSDeciders {
 		p.removes[aggregate] = true
 	}
 	for _, spec := range loaded.Deciders {
@@ -112,16 +112,16 @@ func (c *components) prospectiveCommands(mode string, loaded *functions.LoadResu
 	return p
 }
 
-// prospectiveSet overlays a pending reload's decider changes onto the live
+// ProspectiveSet overlays a pending reload's decider changes onto the live
 // registry. Built-in Go aggregates are never in adds/removes — they cannot
 // change without a rebuild — so they fall through to the live registry.
-type prospectiveSet struct {
+type ProspectiveSet struct {
 	live    functions.CommandTarget
 	adds    map[string][]string
 	removes map[string]bool
 }
 
-func (p *prospectiveSet) Has(aggregate string) bool {
+func (p *ProspectiveSet) Has(aggregate string) bool {
 	if _, ok := p.adds[aggregate]; ok {
 		return true
 	}
@@ -131,7 +131,7 @@ func (p *prospectiveSet) Has(aggregate string) bool {
 	return p.live.Has(aggregate)
 }
 
-func (p *prospectiveSet) Commands(aggregate string) []string {
+func (p *ProspectiveSet) Commands(aggregate string) []string {
 	if cmds, ok := p.adds[aggregate]; ok {
 		// nil here means the incoming decider declares no //@commands, which
 		// ValidateReactorSpec reads as "unverifiable" — the same answer the
@@ -144,21 +144,21 @@ func (p *prospectiveSet) Commands(aggregate string) []string {
 	return p.live.Commands(aggregate)
 }
 
-func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (*reloadReport, error) {
-	c.reloadMu.Lock()
-	defer c.reloadMu.Unlock()
+func (s *State) reloadFunctions(ctx context.Context, functionsDir string) (*ReloadReport, error) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
 
-	mode, err := c.store.Mode(ctx)
+	mode, err := s.Store.Mode(ctx)
 	if err != nil {
 		return nil, err
 	}
-	report := &reloadReport{Mode: mode}
+	report := &ReloadReport{Mode: mode}
 
 	// load into a fresh runtime with the same dependencies; on any error
 	// the old runtime and every live registration stay untouched
-	fresh := functions.NewGojaRuntime(func(msg string, args ...any) { c.app.Logger().Info(msg, args...) })
-	c.carryCapabilities(fresh)
-	loaded, err := functions.LoadDir(fresh, c.app, functionsDir)
+	fresh := functions.NewGojaRuntime(func(msg string, args ...any) { s.App.Logger().Info(msg, args...) })
+	s.CarryCapabilities(fresh)
+	loaded, err := functions.LoadDir(fresh, s.App, functionsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -166,11 +166,11 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	// -----------------------------------------------------------------
 	// effects tier: safe to swap in any mode
 	// -----------------------------------------------------------------
-	for _, consumer := range c.fnRuntime.Consumers() {
-		c.engine.Unregister(consumer.Name())
+	for _, consumer := range s.FnRuntime.Consumers() {
+		s.Engine.Unregister(consumer.Name())
 	}
 	for _, consumer := range fresh.Consumers() {
-		c.engine.Register(consumer)
+		s.Engine.Register(consumer)
 		report.EffectsReloaded = append(report.EffectsReloaded, consumer.Name())
 	}
 
@@ -179,9 +179,9 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	// need the maintenance barrier), and it is what makes the tier usable
 	// for ordinary saga edits. They dispatch through the registry, so the
 	// fresh runtime needs it before any delivery happens.
-	fresh.SetRegistry(c.registry)
-	for _, spec := range c.jsReactors {
-		c.engine.Unregister(spec.Name())
+	fresh.SetRegistry(s.Registry)
+	for _, spec := range s.JSReactors {
+		s.Engine.Unregister(spec.Name())
 	}
 	// //@dispatches gate (F-2). Validated against a PROSPECTIVE command set,
 	// not the live registry: deciders swap further down this function, so at
@@ -190,7 +190,7 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	// reload. Moving reactors after deciders is not the fix — it would break
 	// the behavioural claim above, since in running mode deciders do not
 	// reload at all and reactors must still be able to.
-	prospective := c.prospectiveCommands(mode, loaded)
+	prospective := s.ProspectiveCommands(mode, loaded)
 	var keptReactors []*functions.ReactorSpec
 	for _, spec := range loaded.Reactors {
 		if err := functions.ValidateReactorSpec(prospective, spec); err != nil {
@@ -204,34 +204,34 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 		}
 		keptReactors = append(keptReactors, spec)
 	}
-	c.jsReactors = keptReactors
+	s.JSReactors = keptReactors
 	for _, spec := range keptReactors {
-		c.engine.Register(spec)
+		s.Engine.Register(spec)
 		report.ReactorsReloaded = append(report.ReactorsReloaded, spec.Reactor)
 	}
 	sort.Strings(report.ReactorsReloaded)
 	sort.Strings(report.ReactorsRefused)
 
-	c.httpFns.ReplaceFrom(loaded.HTTP)
+	s.HTTPFns.ReplaceFrom(loaded.HTTP)
 	report.HTTPReloaded = loaded.HTTP.Names()
 	sort.Strings(report.HTTPReloaded)
 	sort.Strings(report.EffectsReloaded)
 
-	for _, id := range c.cronJobs {
-		c.app.Cron().Remove(id)
+	for _, id := range s.CronJobs {
+		s.App.Cron().Remove(id)
 	}
-	c.cronJobs = nil
+	s.CronJobs = nil
 	for _, job := range fresh.CronJobs() {
 		id := "fn:" + job.Name
-		if err := c.app.Cron().Add(id, job.Schedule, job.Fire); err != nil {
+		if err := s.App.Cron().Add(id, job.Schedule, job.Fire); err != nil {
 			return nil, fmt.Errorf("reload: cron function %s: %w", job.Name, err)
 		}
-		c.cronJobs = append(c.cronJobs, id)
+		s.CronJobs = append(s.CronJobs, id)
 		report.CronReloaded = append(report.CronReloaded, job.Name)
 	}
 	sort.Strings(report.CronReloaded)
 
-	c.fnRuntime = fresh
+	s.FnRuntime = fresh
 
 	// -----------------------------------------------------------------
 	// schema-bearing tier: behind the maintenance barrier
@@ -242,7 +242,7 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	}
 	report.SchemaTier = "reloaded"
 
-	if err := functions.ReconcileSchemas(c.app, loaded.Projections, c.schemaDefaultRule); err != nil {
+	if err := functions.ReconcileSchemas(s.App, loaded.Projections, s.SchemaDefaultRule); err != nil {
 		return nil, fmt.Errorf("reload: schema reconcile: %w", err)
 	}
 
@@ -262,7 +262,7 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	// replicating the original conditions, all served the new collection
 	// immediately without this call. Defensive hardening, not a fix for a
 	// characterised bug. Do not infer a defect that was never demonstrated.
-	if err := c.app.ReloadCachedCollections(); err != nil {
+	if err := s.App.ReloadCachedCollections(); err != nil {
 		return nil, fmt.Errorf("reload: refresh collection cache: %w", err)
 	}
 
@@ -271,52 +271,52 @@ func (c *components) reloadFunctions(ctx context.Context, functionsDir string) (
 	newManaged := map[string]*functions.DeciderSpec{}
 	var validated []*functions.DeciderSpec
 	for _, spec := range loaded.Deciders {
-		if c.registry.Has(spec.Aggregate) {
-			if _, isJS := c.jsDeciders[spec.Aggregate]; !isJS {
+		if s.Registry.Has(spec.Aggregate) {
+			if _, isJS := s.JSDeciders[spec.Aggregate]; !isJS {
 				report.DecidersRefused = append(report.DecidersRefused,
 					spec.Aggregate+" (collides with a built-in decider)")
 				continue
 			}
 		}
-		if err := functions.ValidateDeciderSpec(c.store, spec); err != nil {
+		if err := functions.ValidateDeciderSpec(s.Store, spec); err != nil {
 			report.DecidersRefused = append(report.DecidersRefused,
 				fmt.Sprintf("%s (%v)", spec.Aggregate, err))
 			// keep the previously registered code serving, if any
-			if old, ok := c.jsDeciders[spec.Aggregate]; ok {
+			if old, ok := s.JSDeciders[spec.Aggregate]; ok {
 				newManaged[spec.Aggregate] = old
 				validated = append(validated, old)
 			}
 			continue
 		}
-		c.registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
+		s.Registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
 		newManaged[spec.Aggregate] = spec
 		validated = append(validated, spec)
 		report.DecidersReloaded = append(report.DecidersReloaded, spec.Aggregate)
 	}
-	for agg := range c.jsDeciders {
+	for agg := range s.JSDeciders {
 		if _, ok := newManaged[agg]; !ok {
-			c.registry.Unregister(agg)
+			s.Registry.Unregister(agg)
 			report.DecidersRemoved = append(report.DecidersRemoved, agg)
 		}
 	}
-	c.jsDeciders = newManaged
-	c.store.SetUpcaster(functions.BuildUpcaster(validated))
+	s.JSDeciders = newManaged
+	s.Store.SetUpcaster(functions.BuildUpcaster(validated))
 
 	// JS projections: swap consumers by checkpoint name
-	for _, p := range c.jsProjs {
-		c.engine.Unregister(p.Name())
+	for _, p := range s.JSProjs {
+		s.Engine.Unregister(p.Name())
 	}
-	c.jsProjs = nil
+	s.JSProjs = nil
 	for _, spec := range loaded.Projections {
 		p := spec.Consumer()
-		c.engine.Register(p)
-		c.jsProjs = append(c.jsProjs, p)
+		s.Engine.Register(p)
+		s.JSProjs = append(s.JSProjs, p)
 		report.Projections = append(report.Projections, spec.Name)
 	}
 
 	// newly declared collections must be write-guarded too (binding again
 	// for an already-guarded collection is harmless: deny is idempotent)
-	writeguard.Register(c.app, projectionCollections(c.jsProjs)...)
+	writeguard.Register(s.App, projectionCollections(s.JSProjs)...)
 
 	sort.Strings(report.Projections)
 	sort.Strings(report.DecidersReloaded)

@@ -1,4 +1,4 @@
-package main
+package adminapi
 
 import (
 	"path/filepath"
@@ -18,11 +18,11 @@ func (l liveTarget) Has(aggregate string) bool  { _, ok := l[aggregate]; return 
 func (l liveTarget) Commands(a string) []string { return l[a] }
 
 // prospectiveFor builds the overlay the way reloadFunctions does, without
-// standing up an app. c.registry is an interface field here only in the test's
-// imagination — so the maintenance branch is exercised through prospectiveSet
-// directly, which is the part with the logic in it.
+// standing up an app. State.Registry is an interface field here only in the
+// test's imagination — so the maintenance branch is exercised through
+// ProspectiveSet directly, which is the part with the logic in it.
 func prospectiveFor(live functions.CommandTarget, loaded []*functions.DeciderSpec, liveJS map[string]bool) functions.CommandTarget {
-	p := &prospectiveSet{live: live, adds: map[string][]string{}, removes: map[string]bool{}}
+	p := &ProspectiveSet{live: live, adds: map[string][]string{}, removes: map[string]bool{}}
 	for aggregate := range liveJS {
 		p.removes[aggregate] = true
 	}
@@ -93,11 +93,11 @@ func TestProspectiveSetFallsThroughToBuiltIns(t *testing.T) {
 // future edit that applies the maintenance overlay unconditionally and starts
 // refusing reactors against deciders that were never going to change.
 func TestRunningModeValidatesAgainstTheLiveRegistry(t *testing.T) {
-	c := &components{}
-	got := c.prospectiveCommands(events.ModeRunning, &functions.LoadResult{
+	s := &State{}
+	got := s.ProspectiveCommands(events.ModeRunning, &functions.LoadResult{
 		Deciders: []*functions.DeciderSpec{{Aggregate: "ignored", Commands: []string{"Nope"}}},
 	})
-	if _, overlaid := got.(*prospectiveSet); overlaid {
+	if _, overlaid := got.(*ProspectiveSet); overlaid {
 		t.Fatal("running mode must validate against the live registry: deciders are not reloading")
 	}
 }

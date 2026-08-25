@@ -1,4 +1,4 @@
-package main
+package adminapi
 
 import (
 	"os"
@@ -95,7 +95,7 @@ func TestListFunctionFilesClassifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byName := map[string]functionFile{}
+	byName := map[string]FunctionFile{}
 	for _, f := range files {
 		byName[f.Name] = f
 	}
@@ -161,14 +161,14 @@ func TestListFunctionFilesClassifies(t *testing.T) {
 // it does so after the effect tier has already been swapped, so a bad one
 // used to leave a reload half-applied as well.
 func TestCheckFunctionSourceRefusesBadCron(t *testing.T) {
-	c := &components{} // the effect tier needs no app and no store
+	s := &State{} // the effect tier needs no app and no store
 
 	for _, src := range []string{
 		"//@trigger cron 99 99 99 99 99\nconsole.log('tick');\n",
 		"//@trigger cron not a schedule at all\nconsole.log('tick');\n",
 		"//@trigger cron * * *\nconsole.log('tick');\n", // too few segments
 	} {
-		if _, err := c.checkFunctionSource("badcron.js", src); err == nil {
+		if _, err := s.CheckFunctionSource("badcron.js", src); err == nil {
 			t.Errorf("an unusable cron schedule was accepted: %q", strings.SplitN(src, "\n", 2)[0])
 		}
 	}
@@ -179,7 +179,7 @@ func TestCheckFunctionSourceRefusesBadCron(t *testing.T) {
 		"//@trigger cron 0 3 * * 1\nconsole.log('weekly');\n",
 		"//@trigger cron @daily\nconsole.log('macro');\n",
 	} {
-		if _, err := c.checkFunctionSource("goodcron.js", src); err != nil {
+		if _, err := s.CheckFunctionSource("goodcron.js", src); err != nil {
 			t.Errorf("a valid schedule was refused: %q: %v", strings.SplitN(src, "\n", 2)[0], err)
 		}
 	}
