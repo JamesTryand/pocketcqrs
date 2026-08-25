@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -615,5 +616,223 @@ func TestStoreMigratesPreVersioningDB(t *testing.T) {
 	}
 	if appended[0].Version != 2 {
 		t.Fatalf("expected version 2, got %d", appended[0].Version)
+	}
+}
+
+// TestLoadStreamRawBypassesUpcaster is the test that would catch export
+// silently going through LoadStream instead of LoadStreamRaw: with an
+// upcaster installed, LoadStream must see the upcast shape and
+// LoadStreamRaw must still see the original, stored shape.
+func TestLoadStreamRawBypassesUpcaster(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	if _, err := s.Append(ctx, "note", "n1", 0, []NewEvent{
+		{Type: "NoteCreated", Data: json.RawMessage(`{"text":"old"}`), Version: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.SetUpcaster(func(ev Event) (Event, error) {
+		if ev.Type == "NoteCreated" && ev.Version == 1 {
+			ev.Data = json.RawMessage(`{"text":"old","priority":0}`)
+			ev.Version = 2
+		}
+		return ev, nil
+	})
+
+	upcast, err := s.LoadStream(ctx, "note", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upcast[0].Version != 2 {
+		t.Fatalf("LoadStream: expected upcast version 2, got %+v", upcast[0])
+	}
+
+	raw, err := s.LoadStreamRaw(ctx, "note", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw[0].Version != 1 || string(raw[0].Data) != `{"text":"old"}` {
+		t.Fatalf("LoadStreamRaw: expected untouched stored row, got %+v", raw[0])
+	}
+
+	// a FAILING upcaster must not affect LoadStreamRaw at all — it never
+	// calls the installed upcaster in the first place.
+	s.SetUpcaster(func(ev Event) (Event, error) {
+		return ev, errors.New("boom")
+	})
+	if _, err := s.LoadStreamRaw(ctx, "note", "n1"); err != nil {
+		t.Fatalf("LoadStreamRaw must not go through the upcaster: %v", err)
+	}
+}
+
+func TestImportEventsOnCleanTarget(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	// a pre-existing, unrelated stream that must be left untouched
+	if _, err := s.Append(ctx, "order", "o1", 0, []NewEvent{
+		{Type: "OrderPlaced", Data: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	batch := []Event{
+		{ID: "imported-1", Aggregate: "task", AggregateID: "t1", Sequence: 1,
+			Type: "TaskCreated", Data: json.RawMessage(`{"title":"a"}`), Version: 1, Created: "2020-01-01 00:00:00.000Z"},
+		{ID: "imported-2", Aggregate: "task", AggregateID: "t1", Sequence: 2,
+			Type: "TaskCompleted", Data: json.RawMessage(`{}`), Version: 1, Created: "2020-01-01 00:00:01.000Z"},
+	}
+	imported, err := s.ImportEvents(ctx, batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(imported) != 2 {
+		t.Fatalf("expected 2 imported events, got %d", len(imported))
+	}
+	if imported[0].ID != "imported-1" || imported[0].Sequence != 1 || imported[0].Created != "2020-01-01 00:00:00.000Z" {
+		t.Fatalf("id/sequence/created not preserved: %+v", imported[0])
+	}
+	if imported[0].Position == 0 || imported[1].Position <= imported[0].Position {
+		t.Fatalf("expected fresh, increasing positions, got %+v / %+v", imported[0], imported[1])
+	}
+
+	stream, err := s.LoadStreamRaw(ctx, "task", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stream) != 2 {
+		t.Fatalf("expected 2 events in the imported stream, got %d", len(stream))
+	}
+
+	// the pre-existing, unrelated stream is untouched
+	orders, err := s.LoadStreamRaw(ctx, "order", "o1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != 1 {
+		t.Fatalf("expected the pre-existing order stream untouched, got %d events", len(orders))
+	}
+}
+
+func TestImportEventsRefusesOnStreamKeyCollision(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	if _, err := s.Append(ctx, "task", "t1", 0, []NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a batch with one colliding stream (task/t1) and one clean one
+	// (widget/w1, an aggregate name the target has never seen) — the
+	// refusal must be all-or-nothing: the clean stream must NOT be
+	// partially inserted, and the error must name the collision.
+	batch := []Event{
+		{ID: "x1", Aggregate: "task", AggregateID: "t1", Sequence: 1,
+			Type: "TaskRenamed", Data: json.RawMessage(`{}`), Version: 1, Created: "2020-01-01 00:00:00.000Z"},
+		{ID: "x2", Aggregate: "widget", AggregateID: "w1", Sequence: 1,
+			Type: "WidgetCreated", Data: json.RawMessage(`{}`), Version: 1, Created: "2020-01-01 00:00:00.000Z"},
+	}
+	_, err := s.ImportEvents(ctx, batch)
+	if err == nil {
+		t.Fatal("expected a collision refusal")
+	}
+	if !strings.Contains(err.Error(), "task/t1") {
+		t.Fatalf("expected the error to name the colliding stream, got: %v", err)
+	}
+
+	widgets, lerr := s.LoadStreamRaw(ctx, "widget", "w1")
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	if len(widgets) != 0 {
+		t.Fatalf("expected the clean stream NOT partially inserted, got %d events", len(widgets))
+	}
+}
+
+func TestImportEventsRefusesOnAggregateNameCollision(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	// target already has a "task" stream under a DIFFERENT id than the
+	// one being imported — the name-level check must still refuse.
+	if _, err := s.Append(ctx, "task", "t1", 0, []NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	batch := []Event{
+		{ID: "y1", Aggregate: "task", AggregateID: "t2", Sequence: 1,
+			Type: "TaskCreated", Data: json.RawMessage(`{}`), Version: 1, Created: "2020-01-01 00:00:00.000Z"},
+	}
+	_, err := s.ImportEvents(ctx, batch)
+	if err == nil {
+		t.Fatal("expected an aggregate-name-level collision refusal even though the id (t2) differs")
+	}
+	if !strings.Contains(err.Error(), `"task"`) {
+		t.Fatalf("expected the error to name the colliding aggregate, got: %v", err)
+	}
+}
+
+func TestImportEventsOnReadOnlyStore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.db")
+	writer, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+
+	ro, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ro.Close() })
+
+	batch := []Event{
+		{ID: "z1", Aggregate: "task", AggregateID: "t1", Sequence: 1,
+			Type: "TaskCreated", Data: json.RawMessage(`{}`), Version: 1, Created: "2020-01-01 00:00:00.000Z"},
+	}
+	if _, err := ro.ImportEvents(context.Background(), batch); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("expected ErrReadOnly, got %v", err)
+	}
+}
+
+// TestImportEventsIDCollisionRollsBackAtomically is the practically-never
+// case (80 bits of randomness, newID()) where two independently exported
+// logs share an event id — the store's own UNIQUE(id) constraint must
+// still fail the whole transaction, not partially write.
+func TestImportEventsIDCollisionRollsBackAtomically(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	appended, err := s.Append(ctx, "task", "t1", 0, []NewEvent{
+		{Type: "TaskCreated", Data: json.RawMessage(`{}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	existingID := appended[0].ID
+
+	// a distinct, non-colliding stream key (so the pre-write collision
+	// checks pass) whose id nonetheless reuses an existing one
+	batch := []Event{
+		{ID: existingID, Aggregate: "widget", AggregateID: "w1", Sequence: 1,
+			Type: "WidgetCreated", Data: json.RawMessage(`{}`), Version: 1, Created: "2020-01-01 00:00:00.000Z"},
+	}
+	if _, err := s.ImportEvents(ctx, batch); err == nil {
+		t.Fatal("expected the UNIQUE(id) constraint to fail the import")
+	}
+
+	widgets, err := s.LoadStreamRaw(ctx, "widget", "w1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(widgets) != 0 {
+		t.Fatalf("expected nothing written after the id-collision rollback, got %+v", widgets)
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
 	_ "modernc.org/sqlite"
@@ -327,8 +329,142 @@ func (s *Store) Append(ctx context.Context, aggregate, aggregateID string, expec
 	return appended, nil
 }
 
+// ImportEvents bulk-inserts previously-committed events (as produced by
+// LoadStreamRaw / a pack's event-data export), preserving each event's own
+// id/aggregate/aggregateId/sequence/type/data/metadata/version/created.
+// Positions are freshly assigned by AUTOINCREMENT in the order given, so the
+// batch lands at the tail of this store's own position sequence — never
+// interleaved by original wall-clock time, which is not portable across
+// stores.
+//
+// Refuses the WHOLE batch, before writing anything, on either kind of
+// collision against this store's EXISTING data (not against other events in
+// the same batch): an exact (aggregate, aggregateId) match — a real
+// overwrite risk — or the batch naming any aggregate this store already has
+// ANY stream of, even under a different id. The second check is taken
+// literally from pack-portability-scope.md's "hard refusal... on any
+// aggregate-name or aggregate+id collision" and is deliberately stricter
+// than it may look: two merging systems sharing ordinary vocabulary (both
+// have a "task" aggregate) hit it even with disjoint ids. See
+// events-db-slice-merge-scope.md for the full rationale and the named rough
+// edge (a future opt-out is the likely relief valve, not implemented here).
+//
+// Read-only stores refuse with ErrReadOnly, same as Append. An empty evts
+// is a no-op, matching Append.
+func (s *Store) ImportEvents(ctx context.Context, evts []Event) ([]Event, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	if len(evts) == 0 {
+		return nil, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	type streamKey struct{ aggregate, id string }
+	streamKeys := map[streamKey]bool{}
+	aggNames := map[string]bool{}
+	for _, ev := range evts {
+		streamKeys[streamKey{ev.Aggregate, ev.AggregateID}] = true
+		aggNames[ev.Aggregate] = true
+	}
+
+	var collisions []string
+	for k := range streamKeys {
+		var n int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM events WHERE aggregate = ? AND aggregate_id = ?`,
+			k.aggregate, k.id,
+		).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			collisions = append(collisions, fmt.Sprintf("%s/%s: this store already has that exact stream", k.aggregate, k.id))
+		}
+	}
+	for name := range aggNames {
+		var n int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM events WHERE aggregate = ?`, name,
+		).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			collisions = append(collisions, fmt.Sprintf("aggregate %q: this store already has stream(s) under this name", name))
+		}
+	}
+	if len(collisions) > 0 {
+		sort.Strings(collisions)
+		return nil, fmt.Errorf("events: import refused, %d collision(s):\n  %s",
+			len(collisions), strings.Join(collisions, "\n  "))
+	}
+
+	imported := make([]Event, 0, len(evts))
+	for _, ev := range evts {
+		out := ev
+		if len(out.Metadata) == 0 {
+			out.Metadata = json.RawMessage(`{}`)
+		}
+		if out.Version <= 0 {
+			out.Version = 1
+		}
+		err = tx.QueryRowContext(ctx,
+			`INSERT INTO events (id, aggregate, aggregate_id, sequence, type, data, metadata, version, created)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING position`,
+			out.ID, out.Aggregate, out.AggregateID, out.Sequence, out.Type,
+			string(out.Data), string(out.Metadata), out.Version, out.Created,
+		).Scan(&out.Position)
+		if err != nil {
+			return nil, fmt.Errorf("events: import %s/%s#%d: %w", out.Aggregate, out.AggregateID, out.Sequence, err)
+		}
+		imported = append(imported, out)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	for _, ev := range imported {
+		s.publish(ev)
+	}
+	return imported, nil
+}
+
 // LoadStream returns all events of one stream in sequence order.
 func (s *Store) LoadStream(ctx context.Context, aggregate, aggregateID string) ([]Event, error) {
+	evs, err := s.loadStreamRows(ctx, aggregate, aggregateID)
+	if err != nil {
+		return nil, err
+	}
+	return s.upcastEvents(evs)
+}
+
+// LoadStreamRaw is LoadStream without the read-path upcaster: the stored
+// rows exactly as committed, at whatever version they were written.
+//
+// Only export-for-portability (pack event-data export) should use this.
+// Every in-process consumer — deciders, projections, functions, reactors —
+// must keep going through the upcasted path (LoadStream/Poll/QueryEvents),
+// so a running decider or projection never has to fold more than one schema
+// shape. Exporting through the upcasted path instead would (a) break
+// packs.md's "stored rows never rewritten" guarantee at the export boundary,
+// since the exported file would hold upcast, not stored, data, and (b) on
+// merge — where the target is an independently-built system with no
+// guarantee of holding the source's transform chain — silently ship rows at
+// a version nothing there can fold, discovered only on the next read of
+// that stream.
+func (s *Store) LoadStreamRaw(ctx context.Context, aggregate, aggregateID string) ([]Event, error) {
+	return s.loadStreamRows(ctx, aggregate, aggregateID)
+}
+
+func (s *Store) loadStreamRows(ctx context.Context, aggregate, aggregateID string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT position, id, aggregate, aggregate_id, sequence, type, data, metadata, version, created
 		 FROM events WHERE aggregate = ? AND aggregate_id = ? ORDER BY sequence`,
@@ -338,11 +474,7 @@ func (s *Store) LoadStream(ctx context.Context, aggregate, aggregateID string) (
 		return nil, err
 	}
 	defer rows.Close()
-	evs, err := scanEvents(rows)
-	if err != nil {
-		return nil, err
-	}
-	return s.upcastEvents(evs)
+	return scanEvents(rows)
 }
 
 // ListStreams returns the ids of all streams of an aggregate

@@ -27,6 +27,7 @@ func newPackCommand(c *components, functionsDir *string) *cobra.Command {
 			description, _ := cmd.Flags().GetString("description")
 			fns, _ := cmd.Flags().GetStringSlice("functions")
 			cols, _ := cmd.Flags().GetStringSlice("collections")
+			aggs, _ := cmd.Flags().GetStringSlice("aggregates")
 
 			guarded := projections.GuardedCollections(c.allProjections(c.App)...)
 			for _, p := range c.JSProjs {
@@ -40,6 +41,7 @@ func newPackCommand(c *components, functionsDir *string) *cobra.Command {
 				Functions:          fns,
 				Collections:        cols,
 				GuardedCollections: guarded,
+				Aggregates:         aggs,
 			})
 			if err != nil {
 				return err
@@ -54,6 +56,7 @@ func newPackCommand(c *components, functionsDir *string) *cobra.Command {
 	export.Flags().String("description", "", "pack description")
 	export.Flags().StringSlice("functions", nil, "function files to include (default: all .js in the functions dir)")
 	export.Flags().StringSlice("collections", nil, "plain collections to include (projection-owned are refused)")
+	export.Flags().StringSlice("aggregates", nil, "aggregate names this pack claims (selection boundary for `events export`)")
 	_ = export.MarkFlagRequired("name")
 	cmd.AddCommand(export)
 

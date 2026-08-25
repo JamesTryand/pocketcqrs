@@ -34,6 +34,13 @@ type Manifest struct {
 	// Collections lists plain (non-projection-owned) collections whose
 	// schemas ship in collections.json (PocketBase's native import format).
 	Collections []string `json:"collections,omitempty"`
+	// Aggregates lists the aggregate names this pack claims — the selection
+	// boundary for the separate `events export`/`events import` commands
+	// (event history is never included in an ordinary pack export/import;
+	// see events-db-slice-merge-scope.md). Absent on a pack with no
+	// declared aggregates; existing packs without this field import
+	// unchanged.
+	Aggregates []string `json:"aggregates,omitempty"`
 }
 
 const (
@@ -52,6 +59,9 @@ type ExportOptions struct {
 	// GuardedCollections are projection-owned collections — they are
 	// refused (they are recreated from //@schema on import).
 	GuardedCollections []string
+	// Aggregates are the aggregate names this pack claims (see
+	// Manifest.Aggregates). Optional; omitted entirely when empty.
+	Aggregates []string
 }
 
 // Export writes a pack directory at outDir: manifest.json, pb_functions/
@@ -139,6 +149,7 @@ func Export(app core.App, functionsDir, outDir string, opts ExportOptions) (*Man
 		GeneratedAt: time.Now().UTC().Format("2006-01-02 15:04:05.000Z"),
 		Functions:   fnames,
 		Collections: opts.Collections,
+		Aggregates:  opts.Aggregates,
 	}
 	if err := os.MkdirAll(filepath.Join(outDir, functionsDirName), 0o755); err != nil {
 		return nil, err

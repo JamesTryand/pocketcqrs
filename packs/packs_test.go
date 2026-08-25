@@ -53,12 +53,16 @@ func TestExportImportRoundTrip(t *testing.T) {
 		Functions:          []string{"note.js", "notes.js"},
 		Collections:        []string{"labels"},
 		GuardedCollections: []string{"notes"},
+		Aggregates:         []string{"note"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if manifest.Name != "notes-domain" || manifest.Version != "1.2.0" || len(manifest.Functions) != 2 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
+	}
+	if len(manifest.Aggregates) != 1 || manifest.Aggregates[0] != "note" {
+		t.Fatalf("expected Aggregates to round-trip into the manifest, got %+v", manifest.Aggregates)
 	}
 	for _, name := range []string{"manifest.json", "collections.json", "pb_functions/note.js", "pb_functions/notes.js"} {
 		if _, err := os.Stat(filepath.Join(packDir, name)); err != nil {
@@ -80,6 +84,9 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 	if len(result.FunctionsCopied) != 2 || result.CollectionsImported != 1 {
 		t.Fatalf("unexpected import result: %+v", result)
+	}
+	if len(result.Manifest.Aggregates) != 1 || result.Manifest.Aggregates[0] != "note" {
+		t.Fatalf("expected Aggregates to survive Import, got %+v", result.Manifest.Aggregates)
 	}
 	if _, err := dstApp.FindCollectionByNameOrId("labels"); err != nil {
 		t.Fatalf("labels collection not imported: %v", err)
@@ -126,6 +133,33 @@ func TestExportRejections(t *testing.T) {
 	_, err = Export(app, fns, filepath.Join(t.TempDir(), "p"), ExportOptions{Name: "x"})
 	if err == nil {
 		t.Fatal("expected load-validation rejection")
+	}
+}
+
+// TestImportOldManifestWithoutAggregates proves a pack directory written
+// before the Aggregates field existed still imports unchanged (Manifest.
+// Aggregates is nil, not an error) — the "optional and ignored, no behavior
+// change" claim for pre-existing packs, checked rather than assumed.
+func TestImportOldManifestWithoutAggregates(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	dir := t.TempDir()
+	writeFn(t, dir, "manifest.json", `{"name":"x","functions":["a.js"]}`)
+	if err := os.MkdirAll(filepath.Join(dir, "pb_functions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFn(t, filepath.Join(dir, "pb_functions"), "a.js", noteDeciderSrc)
+
+	result, err := Import(app, t.TempDir(), dir, false)
+	if err != nil {
+		t.Fatalf("old-style manifest without aggregates should still import: %v", err)
+	}
+	if result.Manifest.Aggregates != nil {
+		t.Fatalf("expected nil Aggregates for a manifest that never declared them, got %+v", result.Manifest.Aggregates)
 	}
 }
 
