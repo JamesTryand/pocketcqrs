@@ -368,42 +368,8 @@ func (s *Store) ImportEvents(ctx context.Context, evts []Event) ([]Event, error)
 	}
 	defer tx.Rollback()
 
-	type streamKey struct{ aggregate, id string }
-	streamKeys := map[streamKey]bool{}
-	aggNames := map[string]bool{}
-	for _, ev := range evts {
-		streamKeys[streamKey{ev.Aggregate, ev.AggregateID}] = true
-		aggNames[ev.Aggregate] = true
-	}
-
-	var collisions []string
-	for k := range streamKeys {
-		var n int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM events WHERE aggregate = ? AND aggregate_id = ?`,
-			k.aggregate, k.id,
-		).Scan(&n); err != nil {
-			return nil, err
-		}
-		if n > 0 {
-			collisions = append(collisions, fmt.Sprintf("%s/%s: this store already has that exact stream", k.aggregate, k.id))
-		}
-	}
-	for name := range aggNames {
-		var n int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM events WHERE aggregate = ?`, name,
-		).Scan(&n); err != nil {
-			return nil, err
-		}
-		if n > 0 {
-			collisions = append(collisions, fmt.Sprintf("aggregate %q: this store already has stream(s) under this name", name))
-		}
-	}
-	if len(collisions) > 0 {
-		sort.Strings(collisions)
-		return nil, fmt.Errorf("events: import refused, %d collision(s):\n  %s",
-			len(collisions), strings.Join(collisions, "\n  "))
+	if err := checkImportCollisions(ctx, tx, evts); err != nil {
+		return nil, err
 	}
 
 	imported := make([]Event, 0, len(evts))
@@ -435,6 +401,79 @@ func (s *Store) ImportEvents(ctx context.Context, evts []Event) ([]Event, error)
 		s.publish(ev)
 	}
 	return imported, nil
+}
+
+// CheckImportCollisions reports the same refusal ImportEvents(ctx, evts)
+// would produce, without writing anything — for an "events import
+// --dry-run" preview that needs to report a real collision outcome, not
+// merely echo the input back. Runs the identical check ImportEvents itself
+// uses (checkImportCollisions), just against s.db directly instead of an
+// open transaction, since a preview takes no write lock. As with any
+// preview, a write landing between this call and a real import can change
+// the answer; the guarantee is on ImportEvents' own atomicity, not on this
+// method never going stale.
+func (s *Store) CheckImportCollisions(ctx context.Context, evts []Event) error {
+	return checkImportCollisions(ctx, s.db, evts)
+}
+
+// queryRower is satisfied by both *sql.DB and *sql.Tx, so
+// checkImportCollisions can run identically inside ImportEvents' own
+// transaction (atomic with the insert) and standalone from
+// CheckImportCollisions (a preview, no transaction needed).
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// checkImportCollisions refuses on either kind of collision against q's
+// existing data (not against other events in the same batch): an exact
+// (aggregate, aggregateId) match — a real overwrite risk — or the batch
+// naming any aggregate q already has ANY stream of, even under a different
+// id. The second check is taken literally from pack-portability-scope.md's
+// "hard refusal... on any aggregate-name or aggregate+id collision" and is
+// deliberately stricter than it may look: two merging systems sharing
+// ordinary vocabulary (both have a "task" aggregate) hit it even with
+// disjoint ids. See events-db-slice-merge-scope.md for the full rationale
+// and the named rough edge (a future opt-out is the likely relief valve,
+// not implemented here).
+func checkImportCollisions(ctx context.Context, q queryRower, evts []Event) error {
+	type streamKey struct{ aggregate, id string }
+	streamKeys := map[streamKey]bool{}
+	aggNames := map[string]bool{}
+	for _, ev := range evts {
+		streamKeys[streamKey{ev.Aggregate, ev.AggregateID}] = true
+		aggNames[ev.Aggregate] = true
+	}
+
+	var collisions []string
+	for k := range streamKeys {
+		var n int
+		if err := q.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM events WHERE aggregate = ? AND aggregate_id = ?`,
+			k.aggregate, k.id,
+		).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			collisions = append(collisions, fmt.Sprintf("%s/%s: this store already has that exact stream", k.aggregate, k.id))
+		}
+	}
+	for name := range aggNames {
+		var n int
+		if err := q.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM events WHERE aggregate = ?`, name,
+		).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			collisions = append(collisions, fmt.Sprintf("aggregate %q: this store already has stream(s) under this name", name))
+		}
+	}
+	if len(collisions) > 0 {
+		sort.Strings(collisions)
+		return fmt.Errorf("events: import refused, %d collision(s):\n  %s",
+			len(collisions), strings.Join(collisions, "\n  "))
+	}
+	return nil
 }
 
 // LoadStream returns all events of one stream in sequence order.
