@@ -62,6 +62,75 @@ pocketcqrs system maintenance off
 (or just restart). Deciders are dry-run validated during the reload; a
 failing decider is refused and reported in the reload response.
 
+## Event data (slice/merge)
+
+`pack export`/`pack import` move a domain's **code**. `events export`/
+`events import` are a separate, deliberately opt-in pair of commands that
+move a domain's **committed event history** — for two specific use cases
+only:
+
+- **Slicing** one pack out of a running deployment into its own instance.
+- **Merging** two independently-built deployments into one.
+
+**Never** for the ordinary dev→production promotion workflow above — that
+should never move production's actual event data, which is exactly why this
+is a separate verb instead of a flag on `pack export`/`pack import`: a
+promotion habit can't carry `--with-events` by muscle memory into a run that
+should never touch it.
+
+First, declare which aggregate names the pack claims — the selection
+boundary for what gets exported:
+
+```sh
+pocketcqrs pack export ./notes-pack --name notes-domain --aggregates note
+pocketcqrs events export ./notes-pack
+# writes ./notes-pack/events.ndjson
+```
+
+At the target, **import the pack's code first, activate it, and only then**
+import its event data:
+
+```sh
+pocketcqrs pack import ./notes-pack
+# ... reload behind the maintenance barrier, as above ...
+pocketcqrs events import ./notes-pack --dry-run   # preview first
+pocketcqrs events import ./notes-pack
+```
+
+`events import` refuses outright — before reading `events.ndjson` at all —
+if the pack's own function files aren't already present in
+`--functionsDir`. This ordering matters for a reason specific to this
+mechanism, not just tidiness: importing event data fast-forwards every
+currently-registered **effect-tier** consumer's checkpoint (reactors and
+event-triggered effect functions — never pure projections) past the
+imported batch, so nothing with a real side effect re-fires against history
+that already happened at the source deployment. A reactor belonging to the
+pack being imported has to already be registered for that fast-forward to
+cover it; import the data first and that reactor would start from
+checkpoint 0 and dispatch against the entire imported history instead.
+
+Two collision checks, both **before any write**, matching `pack import`'s
+own refuse-on-file-collision stance rather than silently renaming anything:
+
+- an exact `(aggregate, aggregateId)` match against an existing stream, and
+- the batch naming any aggregate **name** the target already has ANY stream
+  of, even under a different id.
+
+The second check is intentionally strict: two systems merging almost always
+share ordinary vocabulary (both track a `task` aggregate), so it refuses
+even when the ids are disjoint. There's no override today — decide the
+naming collision deliberately before merging, rather than importing past it.
+
+Pure projections (Go and JS) are **not** fast-forwarded — they replay the
+imported history normally (the same mechanism `projection rebuild` already
+proves safe) so the merged or sliced data actually materializes in your
+read models.
+
+Never route event data through git — `manifest.json`/`pb_functions/`/
+`collections.json` are text and diffable; `events.ndjson` can be large and,
+for a real deployment, sensitive. Move it directly between systems (or via
+a private file transfer), never as a repo commit.
+
 ## Extending a pack over time
 
 The rules that make a pack safely evolvable are the platform's two

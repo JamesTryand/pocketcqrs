@@ -493,7 +493,7 @@ skipped unless `--force`.
 
 ```sh
 pocketcqrs pack export <outdir> --name <name> [--version v] [--description d]
-    [--functions a.js,b.js] [--collections c1,c2]
+    [--functions a.js,b.js] [--collections c1,c2] [--aggregates agg1,agg2]
 pocketcqrs pack import <packdir> [--force]
 ```
 
@@ -502,12 +502,37 @@ optionally plain (non-projection-owned) collection schemas into a domain
 pack directory (`manifest.json`, `pb_functions/`, `collections.json`).
 Projection-owned collections are refused on export — they're recreated from
 `//@schema` on import. Both directions load-validate the function files
-first.
+first. `--aggregates` records which aggregate names the pack claims — the
+selection boundary `events export` (below) uses; it has no effect on the
+code/collections export itself.
 
 Import copies the function files into `--functionsDir` (skipping existing
 unless `--force`) and applies `collections.json` via PocketBase's native
 collection import. Activate with a restart or a maintenance-mode reload.
 See [domain packs](../packs.md).
+
+## events
+
+```sh
+pocketcqrs events export <packdir>
+pocketcqrs events import <packdir> [--dry-run]
+```
+
+Moves a pack's **committed event history** — a separate, opt-in layer from
+`pack export`/`pack import`'s code, for slice/merge only, never the
+ordinary dev→production promotion workflow. `export` reads the pack's
+`manifest.json` (`--aggregates` from `pack export`, above) and writes
+`events.ndjson` into the same directory. `import` bulk-inserts it, refusing
+on any exact stream collision or on the target already having any stream
+under a colliding aggregate *name*, and fast-forwards every currently
+registered effect-tier consumer's checkpoint (reactors, event-triggered
+effect functions — never projections) past the imported batch, so nothing
+with a real side effect re-fires against history that already happened at
+the source. Refuses before reading `events.ndjson` at all if the pack's own
+code isn't already imported and active — import and activate the pack's
+code first. `--dry-run` previews the collision outcome and the would-be
+checkpoint advances without writing anything. See [domain
+packs](../packs.md#event-data-slicemerge).
 
 ## skill
 
