@@ -374,6 +374,7 @@ func main() {
 	app.RootCmd.AddCommand(newSystemCommand(c))
 	app.RootCmd.AddCommand(newCatalogCommand(c))
 	app.RootCmd.AddCommand(newPackCommand(c, &functionsDir))
+	app.RootCmd.AddCommand(newEventsCommand(c, &functionsDir))
 	app.RootCmd.AddCommand(newSchemaCommand(c))
 	app.RootCmd.AddCommand(newSkillCommand())
 	app.RootCmd.ParseFlags(os.Args[1:])

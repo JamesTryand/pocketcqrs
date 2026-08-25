@@ -186,13 +186,12 @@ type ImportResult struct {
 	CollectionsImported int
 }
 
-// Import installs a pack: function files are copied into functionsDir
-// (existing files are skipped unless force) and collections.json is applied
-// via PocketBase's native collection import (never deleting missing ones).
-// Function files are load-validated BEFORE anything is copied. The event
-// store is untouched; decider validation and schema reconcile happen on the
-// next boot or maintenance reload.
-func Import(app core.App, functionsDir, packDir string, force bool) (*ImportResult, error) {
+// ReadManifest reads and parses manifest.json from packDir (the same file
+// Export writes and Import consumes) without touching pb_functions/ or
+// collections.json. Used standalone by the `events export`/`events import`
+// CLI commands, which need the manifest's Name/Functions/Aggregates without
+// performing a full pack import; also used internally by Import.
+func ReadManifest(packDir string) (*Manifest, error) {
 	mraw, err := os.ReadFile(filepath.Join(packDir, manifestFile))
 	if err != nil {
 		return nil, fmt.Errorf("packs: %s: %w", manifestFile, err)
@@ -201,8 +200,26 @@ func Import(app core.App, functionsDir, packDir string, force bool) (*ImportResu
 	if err := json.Unmarshal(mraw, &manifest); err != nil {
 		return nil, fmt.Errorf("packs: invalid manifest: %w", err)
 	}
-	if manifest.Name == "" || len(manifest.Functions) == 0 {
-		return nil, fmt.Errorf("packs: manifest needs a name and at least one function file")
+	if manifest.Name == "" {
+		return nil, fmt.Errorf("packs: manifest needs a name")
+	}
+	return &manifest, nil
+}
+
+// Import installs a pack: function files are copied into functionsDir
+// (existing files are skipped unless force) and collections.json is applied
+// via PocketBase's native collection import (never deleting missing ones).
+// Function files are load-validated BEFORE anything is copied. The event
+// store is untouched; decider validation and schema reconcile happen on the
+// next boot or maintenance reload.
+func Import(app core.App, functionsDir, packDir string, force bool) (*ImportResult, error) {
+	m, err := ReadManifest(packDir)
+	if err != nil {
+		return nil, err
+	}
+	manifest := *m
+	if len(manifest.Functions) == 0 {
+		return nil, fmt.Errorf("packs: manifest needs at least one function file")
 	}
 
 	// load-validate the pack's functions before touching the target dir

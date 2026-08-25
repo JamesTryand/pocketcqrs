@@ -163,6 +163,29 @@ func TestImportOldManifestWithoutAggregates(t *testing.T) {
 	}
 }
 
+func TestReadManifest(t *testing.T) {
+	dir := t.TempDir()
+	writeFn(t, dir, "manifest.json", `{"name":"x","functions":["a.js"],"aggregates":["task"]}`)
+
+	m, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Name != "x" || len(m.Aggregates) != 1 || m.Aggregates[0] != "task" {
+		t.Fatalf("unexpected manifest: %+v", m)
+	}
+
+	if _, err := ReadManifest(t.TempDir()); err == nil {
+		t.Fatal("expected an error for a missing manifest.json")
+	}
+
+	badDir := t.TempDir()
+	writeFn(t, badDir, "manifest.json", `{"functions":["a.js"]}`)
+	if _, err := ReadManifest(badDir); err == nil {
+		t.Fatal("expected an error for a manifest without a name")
+	}
+}
+
 func TestImportRejectsBrokenManifest(t *testing.T) {
 	app, err := tests.NewTestApp()
 	if err != nil {
