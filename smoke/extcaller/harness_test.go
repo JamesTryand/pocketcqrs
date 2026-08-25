@@ -1,19 +1,25 @@
 //go:build smoke
 
-// Package smoke drives a real pocketcqrs backend and a real extcaller
-// Consumer together over HTTP and a real events.db, exactly as they would
-// run in production. It exists for PLAN.md Phase 2's explicit test: a burst
-// of events while the target third party is down, recovering within the
-// retry budget with no lost or duplicated dispatch — behavior that lives in
-// the wiring between three real components (the gateway, the checkpointed
-// engine, and the idempotency store) and cannot be exercised by a unit test
-// against any one of them alone.
+// Package extcallersmoke drives a real pocketcqrs backend and a real
+// extcaller Consumer together over HTTP and a real events.db, exactly as
+// they would run in production. It exists for PLAN.md Phase 2's explicit
+// test: a burst of events while the target third party is down, recovering
+// within the retry budget with no lost or duplicated dispatch — behavior
+// that lives in the wiring between three real components (the gateway, the
+// checkpointed engine, and the idempotency store) and cannot be exercised
+// by a unit test against any one of them alone.
+//
+// It is its own package, separate from smoke's own harness_test.go, because
+// both independently build a "harness" type with the same helper method
+// names (startBackend, waitFor, eventually, ...) — same shape, unrelated
+// implementations, and Go packages can't have two declarations of the same
+// name.
 //
 // Run it explicitly (it builds a binary and opens ports, so it is not part
 // of the default suite):
 //
-//	go test -tags=smoke ./smoke/ -v -timeout 5m
-package smoke
+//	go test -tags=smoke ./smoke/extcaller/ -v -timeout 5m
+package extcallersmoke
 
 import (
 	"bytes"

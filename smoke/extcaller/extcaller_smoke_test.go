@@ -1,6 +1,6 @@
 //go:build smoke
 
-package smoke
+package extcallersmoke
 
 import (
 	"context"
