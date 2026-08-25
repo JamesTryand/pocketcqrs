@@ -16,7 +16,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/outbound"
 
-	"github.com/jamestryand/pocketcqrs-extensions/extcaller"
+	"github.com/jamestryand/pocketcqrs/extcaller"
 )
 
 // echoRule builds a Rule that, on TaskCreated, GETs thirdPartyURL and

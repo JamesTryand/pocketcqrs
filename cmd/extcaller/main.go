@@ -23,8 +23,8 @@ import (
 
 	"github.com/jamestryand/pocketcqrs/outbound"
 
-	"github.com/jamestryand/pocketcqrs-extensions/extcaller"
-	"github.com/jamestryand/pocketcqrs-extensions/internal/localstore"
+	"github.com/jamestryand/pocketcqrs/extcaller"
+	"github.com/jamestryand/pocketcqrs/internal/localstore"
 )
 
 func main() {

@@ -24,8 +24,8 @@ func TestExternalModuleCanConsumeExtcaller(t *testing.T) {
 
 	dir := t.TempDir()
 	goMod := "module extconsumer-smoke\n\ngo 1.25.0\n\n" +
-		"require github.com/jamestryand/pocketcqrs-extensions v0.0.0\n\n" +
-		"replace github.com/jamestryand/pocketcqrs-extensions => " + repoRoot + "\n"
+		"require github.com/jamestryand/pocketcqrs v0.0.0\n\n" +
+		"replace github.com/jamestryand/pocketcqrs => " + repoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/outbound"
 
-	"github.com/jamestryand/pocketcqrs-extensions/extcaller"
+	"github.com/jamestryand/pocketcqrs/extcaller"
 )
 
 type myGateway struct{}

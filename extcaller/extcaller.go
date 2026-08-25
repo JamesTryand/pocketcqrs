@@ -31,7 +31,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/outbound"
 
-	"github.com/jamestryand/pocketcqrs-extensions/internal/gatewayclient"
+	"github.com/jamestryand/pocketcqrs/internal/gatewayclient"
 )
 
 // Command is one follow-up command to dispatch to a pocketcqrs gateway —
