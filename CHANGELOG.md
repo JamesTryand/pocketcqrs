@@ -3,6 +3,29 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.10.0 — extcaller moves in from pocketcqrs-extensions
+
+### Added
+
+- **`extcaller` (package + `cmd/extcaller`)**, moved here from `pocketcqrs-extensions` (its own
+  `v0.1.1` there), history preserved via `git subtree`. A deliberate, named exception to "core stays
+  small and reviewable": general-purpose enough to be expected by any consumer of this project,
+  unlike the more opinionated/proprietary components that stay in `pocketcqrs-extensions`. Still
+  never reachable from `Decide`/`Evolve` — a plain `consumers.Consumer`, same tier as a reactor, out
+  of process. See the README's "extcaller — the external-service-caller" section.
+- **`internal/gatewayclient`, `internal/localstore`** — moved with `extcaller`, kept `internal/`
+  (this repo's first use of that convention) since nothing outside `extcaller`/`cmd/extcaller`
+  currently needs them; revisit if a future component does.
+- **`smoke/extcaller/`** — the `extcaller` smoke suite, moved and kept in its own subpackage: both
+  it and this repo's own `smoke/harness_test.go` independently define a `harness` type with the
+  same helper method names, so they can't share one package. CI now runs `go test -tags=smoke
+  ./smoke/...` to cover both.
+
+### Changed
+
+- **`pocketcqrs-extensions` dropped its dependency on this module entirely** (`v0.2.0`) — nothing
+  left there (`service_accounts`/`cmd/serviceaccount`) ever imported it directly.
+
 ## v0.9.0 — end-user auth, capability-scoped ops access, and Go-native schema codegen
 
 Core ships its own end-user auth primitive and a Microsoft/Entra sign-in path for it, ops routes
