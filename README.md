@@ -11,9 +11,50 @@ A CQRS + functions-as-a-service backend built on [PocketBase](https://pocketbase
 - **Calling out**: a hard-bounded `$http` for event/cron functions and reactors, off unless `--cqrsAllowOutboundHTTP`, restricted to a deployment-wide host allow-list, with the resolved IP re-checked at dial time, no redirects, no retry, a concurrency cap and a body cap. Deciders and projections can never reach the network.
 - **Multi-node**: single writer, multiple readers. A `--cqrsRole=secondary` node polls a replicated `events.db` read-only, runs its own projections, forwards commands and auth traffic to the master (`--cqrsMasterAddr`), and — with `--cqrsVerifyAuth` — verifies bearer tokens against the master with a bounded local cache, so authenticated reads work on a secondary without any secret ever leaving the master. See the [CLI reference](docs/reference/cli.md#multi-node-single-writer-multiple-readers).
 
+## extcaller — the external-service-caller
+
+`extcaller` (package `extcaller` + `cmd/extcaller`) is an optional, separately-run component: a
+`consumers.Consumer` that matches committed events against configured `Rule`s, calls a third party
+through a bounded `outbound.Client` (the same allow-list/timeout/concurrency-cap guardrails as this
+repo's own `$http`), and maps the response to follow-up commands dispatched back through the
+gateway — never appends a raw event, so the decider keeps authority to accept or reject the result.
+It runs as its own process, reading `events.db` **read-only**; it never opens it for writing and
+never hosts a `decider.Registry`, so it can never become a second writer.
+
+**This is a deliberate exception to "core stays small and reviewable."** Everything else
+non-core — message-bus adapters, out-of-process read-model adapters, alternate transports, GitOps
+deploy tooling — lives in the separate, private `pocketcqrs-extensions` repo, kept out of here for
+exactly that reason. `extcaller` is the one exception because it's general-purpose enough to be
+expected by any consumer of this project, not specific to one deployment's opinionated choices —
+the same reasoning that already put the bounded outbound-HTTP primitive above (`$http` /
+`outbound.Client`) in core rather than in extensions; `extcaller` is the layer built directly on top
+of it. Like every non-core component, it is never reachable from a `Decide`/`Evolve` call — it's a
+plain `consumers.Consumer`, same tier as a reactor, just out-of-process.
+
+```sh
+go run ./cmd/extcaller \
+  -sourceEventsDB /path/to/target/pb_data/events.db \
+  -localStore ./extcaller-local.db \
+  -gatewayURL http://localhost:8090 \
+  -allowedHosts api.example.com
+```
+
+`EXTCALLER_GATEWAY_TOKEN` must be set (an environment variable, never a flag). `extcaller.Config.Gateway`
+is a small interface (just the `Dispatch` method), not the concrete HTTP client under
+`internal/gatewayclient` — that package is unreachable from outside this module by Go's own
+internal-package rule. Use `extcaller.NewGatewayClient(baseURL, token, timeout)` for a working
+`extcaller.Gateway`, or supply your own implementation. `cmd/extcaller/main.go`'s `rules()` function
+is the extension point — it returns `nil` by default; a real deployment adds its own
+`[]extcaller.Rule` there, or copies the file as a starting point for its own binary.
+
+Pair it with `gateway.Config.ExternalCallerCollection` (`--cqrsExternalCallerCollection`) and a
+service-account record (see `pocketcqrs-extensions`' `service_accounts`/`cmd/serviceaccount`) so its
+dispatches get a recognizable `"extcall:<name>"` actor stamp and carry `Causation-Id`/`Correlation-Id`
+headers, instead of a raw, unlabeled record id.
+
 ## Status
 
-**`v0.9.0`.** Usable and dogfooded; the API is not frozen. Not affiliated with PocketBase; upstream (`pocketbase/pocketbase`) is an unmodified dependency pinned in `go.mod`.
+**`v0.10.0`.** Usable and dogfooded; the API is not frozen. Not affiliated with PocketBase; upstream (`pocketbase/pocketbase`) is an unmodified dependency pinned in `go.mod`.
 
 **It ships empty on purpose.** No aggregates, no collections, nothing you did not write — `--tutorial` opts into the example domains this repo uses to teach and to test itself.
 
