@@ -172,6 +172,8 @@ go run . dryrun projection pb_functions/notes.js --diff
 
 ## Where next
 
+- [Concepts](concepts.md) — the "why" behind what you just ran, for anyone
+  coming from CRUD
 - [Tutorial](tutorial.md) — go from a design document to a running slice
   with `pocketcqrs schema import`, instead of hand-writing files
 - [JS guide](js-guide.md) — directives, tiers, bindings, determinism, workflows

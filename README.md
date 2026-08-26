@@ -70,6 +70,7 @@ pocketcqrs skill install
 
 ## Docs
 
+- [Concepts](docs/concepts.md) — coming from CRUD: commands vs events, deciders, projections, write-guard, reactors
 - [Getting started](docs/getting-started.md) — run it, first command, first function, hot reload
 - [Tutorial](docs/tutorial.md) — a design document to a running slice, with real output including a real collision and how it's handled
 - [JS guide](docs/js-guide.md) — directives, tiers, bindings, determinism, dry-run/dead-letter workflows
