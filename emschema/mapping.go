@@ -118,17 +118,22 @@ func (m *mapper) aggregateFor(kind, id, tagged string) (string, bool) {
 
 func (m *mapper) mapSlices() {
 	m.eventAggregate = map[string]string{}
+	// stateChange slices first: an automation's dispatched command is only a
+	// create when its target aggregate has no other beginning (see
+	// mapAutomation), so every stateChange-derived create must already be
+	// registered before the automation pass runs.
 	for _, s := range m.doc.Slices {
-		switch s.Pattern {
-		case PatternStateChange:
+		if s.Pattern == PatternStateChange {
 			m.mapStateChange(s)
-		case PatternAutomation:
-			m.mapAutomation(s)
-		case PatternStateView:
-			// the read model itself is mapped separately; the slice adds
-			// only a screen, which has no runtime concept here
 		}
 	}
+	for _, s := range m.doc.Slices {
+		if s.Pattern == PatternAutomation {
+			m.mapAutomation(s)
+		}
+	}
+	// PatternStateView: the read model itself is mapped separately; the slice
+	// adds only a screen, which has no runtime concept here.
 }
 
 func (m *mapper) mapStateChange(s Slice) {
@@ -160,17 +165,20 @@ func (m *mapper) mapAutomation(s Slice) {
 		}
 	}
 
-	// An automation that dispatches ACROSS aggregates opens a new stream
-	// every time it fires — the reactor derives the target id from the
-	// source event, so there is one target instance per trigger. That makes
-	// the dispatched command a create. An automation whose target is its own
-	// trigger's aggregate (auto-ship an order) is the opposite: the stream
-	// already exists. Getting this wrong makes the command's own scenario
-	// fail with "does not exist", which is how it was found.
+	// An automation that dispatches ACROSS aggregates derives the target id
+	// from the source event, so it opens a new target stream per fire — but
+	// only when nothing else ever creates that aggregate (a notification
+	// raised per event). When the target IS created elsewhere (log an entry,
+	// then an invoice reaction locks it), the reaction fans out over streams
+	// that already exist, so the dispatched command is NOT a create. An
+	// automation whose target is its own trigger's aggregate (auto-ship an
+	// order) is never a create either. Getting this wrong makes the command's
+	// own scenario fail with "does not exist", which is how it was found.
 	crossAggregate := source != agg
 	target := m.domain(agg)
+	isCreate := crossAggregate && !domainHasCreate(target)
 	target.Commands = append(target.Commands,
-		m.command(agg, s.CommandID, cmd, s.ResultEventIDs, crossAggregate))
+		m.command(agg, s.CommandID, cmd, s.ResultEventIDs, isCreate))
 	triggers := make([]string, 0, len(s.TriggerEventIDs))
 	for _, id := range s.TriggerEventIDs {
 		triggers = append(triggers, m.eventType(id))
@@ -329,6 +337,18 @@ func collectionName(name, id string) string {
 func isCreate(s Slice) bool {
 	for _, sc := range s.Scenarios {
 		if sc.Kind == KindStateChange && len(sc.Given) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// domainHasCreate reports whether any command already mapped onto d is the
+// aggregate's beginning. Used to decide whether a cross-aggregate automation
+// opens a new stream or fans out over existing ones.
+func domainHasCreate(d *scaffold.Domain) bool {
+	for _, c := range d.Commands {
+		if c.Once {
 			return true
 		}
 	}
