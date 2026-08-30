@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// fixtures live in the repo, copied from eventmodelschema@1b4a01c, so these
+// fixtures live in the repo, copied from eventmodelschema@v2.1.0, so these
 // tests run against the REAL format rather than against a shape this
 // package invented for itself.
 func fixture(t *testing.T, rel string) string {

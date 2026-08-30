@@ -187,10 +187,11 @@ lower-camel convention (`Order` → `order`).
 
 ## Schema version
 
-This project targets **schema 2.0.0**, and an export declares it.
+This project targets **schema 2.1.0**, and an export declares it.
 
 Upstream bumped to `2.0.0` on 2026-08-06 for the removal of the `translation`
-pattern, and now keeps a `CHANGELOG.md`. **Import reports a document's
+pattern, then `2.1.0` on 2026-08-30 (additive: a new `sliceStatus` value,
+`accepted`), and keeps a `CHANGELOG.md`. **Import reports a document's
 declared version but does not branch on it**, which is deliberate rather than
 left over: the bump fixes the signal going forward, but a document authored
 between the v2 schema changes and the bump declares `1.x` while being a v2

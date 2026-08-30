@@ -3,6 +3,22 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 2.1.0
+
+**Additive (non-breaking):**
+- `sliceStatus` gains `"accepted"` — the notation-layer value for a slice that has
+  been reviewed and signed off for build, distinct from `"review"` (under review,
+  not yet agreed) and `"done"` (built). Authoring workflows that move a slice
+  `planned → accepted` on committing to build it were producing documents no
+  `sliceStatus` value fit, which surfaced as a confusing cascade: an out-of-enum
+  `status` fails the `sliceBase` `$ref` inside `slice`'s `allOf`, so its evaluated
+  properties are dropped and the sibling `unevaluatedProperties: false` then flags
+  `id`/`name`/`swimlaneId`/`chapterId`/`businessCapability`/`status` on every
+  slice. The `slice` shape itself was never at fault. See design-notes.md
+  ("Slice status has a conventional default...").
+
+A 2.0.0 document validates unchanged against 2.1.0.
+
 ## 2.0.0
 
 **Breaking:**

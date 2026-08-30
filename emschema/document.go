@@ -2,10 +2,10 @@
 // github.com/jamestryand/eventmodelschema — and maps them onto this
 // project's intermediate domain model.
 //
-// The types below mirror eventmodeling.schema.json as read at commit
-// 1b4a01c ("Bump eventModelingSchemaVersion to 2.0.0", 2026-08-06). A vendored
-// copy of that schema and its worked examples lives in
-// testdata/eventmodelschema/, with the hash recorded in PROVENANCE.md.
+// The types below mirror eventmodeling.schema.json as read at tag v2.1.0
+// (commit a9f0d8e, "added accepted status", 2026-08-30). A vendored copy of
+// that schema and its worked examples lives in testdata/eventmodelschema/,
+// with the tag recorded in PROVENANCE.md.
 //
 // Two things about the source format shape everything here:
 //
@@ -206,9 +206,10 @@ type Hotspot struct {
 }
 
 // SchemaVersion is the generation this package targets, and what an export
-// declares. Upstream bumped to 2.0.0 on 2026-08-06; the breaking change that
-// warranted it is the removal of the `translation` pattern.
-const SchemaVersion = "2.0.0"
+// declares. 2.0.0 (2026-08-06) was the last breaking bump — removal of the
+// `translation` pattern; 2.1.0 (2026-08-30) is additive only, a new
+// `sliceStatus` value (`accepted`).
+const SchemaVersion = "2.1.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

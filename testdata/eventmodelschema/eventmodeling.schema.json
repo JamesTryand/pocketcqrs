@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "2.0.0"
+      "default": "2.1.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -44,7 +44,7 @@
     "swimlaneKind": { "enum": ["team", "system"] },
 
     "sliceStatus": {
-      "enum": ["created", "done", "assigned", "inProgress", "review", "blocked", "planned", "informational"]
+      "enum": ["created", "done", "assigned", "inProgress", "review", "accepted", "blocked", "planned", "informational"]
     },
 
     "slicePattern": {

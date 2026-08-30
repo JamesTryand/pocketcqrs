@@ -3,10 +3,11 @@
 Fixtures for M14 (eventmodelschema import/export). Copied verbatim, unmodified.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
-- **Commit**: `1b4a01c54d5c1df77c1575fca83de2c644bb5762` — *"Bump
-  eventModelingSchemaVersion to 2.0.0"*, 2026-08-06
-- **Copied**: 2026-08-06 (previously `852989a`, "v2 M3: multi-file
-  composition layer")
+- **Tag**: `v2.1.0` — commit `a9f0d8e7887d01715620d6b11e5e4078650426ca`
+  (*"added accepted status"*), 2026-08-30
+- **Copied**: 2026-08-30 (previously `v2.0.0` / `1b4a01c`, "Bump
+  eventModelingSchemaVersion to 2.0.0", 2026-08-06; before that `852989a`,
+  "v2 M3: multi-file composition layer")
 - Same author as this repository; no separate licence file exists upstream.
 
 ## Contents
@@ -29,15 +30,17 @@ The round-trip loss test needs a real, known-good document that does not change
 under it. Upstream is explicitly a moving target ("v2 in progress"), so a test
 that fetched `main` would fail for reasons unrelated to this repository.
 
-**Refreshing**: re-copy from a newer upstream commit, update the hash above, and
-expect the round-trip expectations to move with it.
+**Refreshing**: re-copy from a newer upstream release tag, update the **Tag** and
+**Copied** lines above, and expect the round-trip expectations to move with it.
+Upstream started carrying git tags at `v2.0.0`/`v2.1.0` (2026-08-30); older
+refreshes pinned a bare commit hash.
 
-## The version string, as of 2.0.0
+## The version string, as of 2.1.0
 
-Upstream has now bumped: the schema's `default` and all three examples declare
-`"2.0.0"`, and a `CHANGELOG.md` records what changed at each version. The
-breaking change that warranted the major bump is the removal of the
-`translation` pattern.
+The schema's `default` and all three examples declare `"2.1.0"`, and
+`UPSTREAM-CHANGELOG.md` records what changed at each version. The last breaking
+change was the removal of the `translation` pattern in `2.0.0`; `2.1.0` is
+additive only — a new `sliceStatus` value, `"accepted"`.
 
 **This project still branches on document SHAPE rather than on that field**,
 and deliberately so. The bump fixes the signal going forward but cannot fix
