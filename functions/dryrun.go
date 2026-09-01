@@ -190,7 +190,7 @@ type ProjectionDryRun struct {
 	IgnoredValues int
 	// Rows is the final simulated row set per collection
 	// (collection -> key -> fields), mirroring applyOp semantics
-	// (upsert merges, delete removes).
+	// (upsert merges, increment adds to the running value, delete removes).
 	Rows map[string]map[string]map[string]any
 }
 
@@ -266,12 +266,23 @@ func runProjectionOver(spec *ProjectionSpec, log []events.Event, isolated bool) 
 				delete(rows, key)
 				continue
 			}
-			out.Upserts++
 			row := rows[key]
 			if row == nil {
 				row = map[string]any{s.Key: op.key}
 				rows[key] = row
 			}
+
+			if op.increment {
+				out.Upserts++
+				var current float64
+				if row[op.incField] != nil {
+					current, _ = toFloat(row[op.incField])
+				}
+				row[op.incField] = current + op.delta
+				continue
+			}
+
+			out.Upserts++
 			for name, value := range op.fields {
 				if reservedRowFields[name] || name == s.Key {
 					continue

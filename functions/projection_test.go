@@ -133,3 +133,54 @@ function project(event) { return { upsert: { key: event.data.customerRef, fields
 		t.Fatalf("unexpected row: n=%d", rec.GetInt("n"))
 	}
 }
+
+// TestIncrementOpAccumulatesLive is Finding 3's count derivation against a
+// real app: two increments and one decrement, delivered as three separate
+// Apply calls (the live shape — each event its own call, not one fixture
+// batch), must net to 1 on the real saved record, and a fresh row starts
+// from zero with no explicit seeding.
+func TestIncrementOpAccumulatesLive(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	rt := NewGojaRuntime(nil)
+	spec, err := LoadProjectionFile(rt, app, writeTempFn(t, "projects.js", `//@trigger projection projects on StaffAssignedToProject StaffUnassignedFromProject
+//@schema projects projectId:text staffCount:number
+//@key projectId
+function project(event) {
+	switch (event.type) {
+	case 'StaffAssignedToProject':
+		return { increment: { key: event.data.projectId, field: 'staffCount', delta: 1 } };
+	case 'StaffUnassignedFromProject':
+		return { increment: { key: event.data.projectId, field: 'staffCount', delta: -1 } };
+	}
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ReconcileSchemas(app, []*ProjectionSpec{spec}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ev := range []events.Event{
+		{Position: 1, Type: "StaffAssignedToProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
+		{Position: 2, Type: "StaffAssignedToProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
+		{Position: 3, Type: "StaffUnassignedFromProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
+	} {
+		if err := spec.Consumer().Apply(context.Background(), ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec, err := app.FindFirstRecordByData("projects", "projectId", "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.GetInt("staffCount") != 1 {
+		t.Fatalf("unexpected row: staffCount=%d", rec.GetInt("staffCount"))
+	}
+}

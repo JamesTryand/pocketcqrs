@@ -405,6 +405,48 @@ function project(event) {
 	}
 }
 
+// TestDryRunProjectionOverFixtureAccumulatesIncrements is Finding 3's count/
+// sum case, verified over an ISOLATED fixture: a count-derivation projection
+// must never need to read its own running total back through `pb` (that
+// reads nothing over a fixture, per the M7 invariant above) — the host
+// itself accumulates an increment op's delta across the fixture, the same
+// way it accumulates a plain upsert's fields. Two increments and one
+// decrement on the same row must net to 1, entirely from op deltas, with no
+// reader installed at all.
+func TestDryRunProjectionOverFixtureAccumulatesIncrements(t *testing.T) {
+	rt := NewGojaRuntime(nil)
+	spec, err := LoadProjectionSource(rt, nil, "projects.js", `//@trigger projection projects on StaffAssignedToProject StaffUnassignedFromProject
+//@schema projects projectId:text staffCount:number
+//@key projectId
+function project(event) {
+  switch (event.type) {
+    case 'StaffAssignedToProject':
+      return { increment: { key: event.data.projectId, field: 'staffCount', delta: 1 } };
+    case 'StaffUnassignedFromProject':
+      return { increment: { key: event.data.projectId, field: 'staffCount', delta: -1 } };
+    default:
+      return;
+  }
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := []events.Event{
+		{Position: 1, AggregateID: "a1", Type: "StaffAssignedToProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
+		{Position: 2, AggregateID: "a2", Type: "StaffAssignedToProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
+		{Position: 3, AggregateID: "a1", Type: "StaffUnassignedFromProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
+	}
+	res, err := DryRunProjectionOver(spec, fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Rows["projects"]["p1"]["staffCount"]; got != float64(1) {
+		t.Fatalf("expected staffCount to net to 1 across the fixture with no reads, got %v (rows: %v)", got, res.Rows)
+	}
+}
+
 // stubReader stands in for live collections.
 type stubReader struct{}
 

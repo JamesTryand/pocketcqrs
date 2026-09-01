@@ -537,7 +537,15 @@ func (d Domain) decider() string {
 	b.WriteString("  switch (event.type) {\n")
 	for _, name := range events {
 		fmt.Fprintf(&b, "    case '%s':\n", name)
-		b.WriteString("      return Object.assign({}, state, event.data, { exists: true });\n")
+		// endsStream events (an unassign, a removal) reset exists instead of
+		// setting it -- otherwise the generic fold only ever sets state and
+		// never retracts it, permanently blocking a later create-shaped
+		// command on the same stream once it has ever fired once (Finding 3).
+		existsAfter := "true"
+		if d.eventEndsStream(name) {
+			existsAfter = "false"
+		}
+		fmt.Fprintf(&b, "      return Object.assign({}, state, event.data, { exists: %s });\n", existsAfter)
 	}
 	b.WriteString("    default:\n      return state;\n")
 	b.WriteString("  }\n}\n")
@@ -568,21 +576,139 @@ func (d Domain) projection(rm ReadModel) string {
 	fmt.Fprintf(&b, "//@schema %s %s\n", rm.Collection, strings.Join(columns, " "))
 	fmt.Fprintf(&b, "//@key %s\n", rm.Key)
 	b.WriteString("//\n")
-	fmt.Fprintf(&b, "// One row per %s stream, keyed by the aggregate id.\n", d.Aggregate)
-	b.WriteString("//\n")
-	b.WriteString("// project() returns ROW OPS — {upsert: {key, fields}} or {delete: key}.\n")
-	b.WriteString("// A plain object is not an op and is discarded, so a projection that\n")
-	b.WriteString("// returns rows directly writes nothing. Upserts merge, so each event\n")
-	b.WriteString("// contributes the fields it knows about.\n\n")
+
+	derived, order := collectDerivedActions(rm.Fields, rm.Key)
+	if len(derived) == 0 {
+		// kept byte-for-byte unchanged from before Finding 3, so a read
+		// model with no derived fields regenerates identically.
+		fmt.Fprintf(&b, "// One row per %s stream, keyed by the aggregate id.\n", d.Aggregate)
+		b.WriteString("//\n")
+		b.WriteString("// project() returns ROW OPS — {upsert: {key, fields}} or {delete: key}.\n")
+		b.WriteString("// A plain object is not an op and is discarded, so a projection that\n")
+		b.WriteString("// returns rows directly writes nothing. Upserts merge, so each event\n")
+		b.WriteString("// contributes the fields it knows about.\n\n")
+
+		b.WriteString("function project(event) {\n")
+		fmt.Fprintf(&b, "  const fields = { %s: event.aggregateId };\n", rm.Key)
+		b.WriteString("  for (const name of Object.keys(event.data || {})) {\n")
+		fmt.Fprintf(&b, "    if (%s.includes(name)) { fields[name] = event.data[name]; }\n", columnNamesLiteral(fields, rm.Key))
+		b.WriteString("  }\n")
+		fmt.Fprintf(&b, "  return [{ upsert: { key: event.aggregateId, fields: fields } }];\n")
+		b.WriteString("}\n")
+		writeJSProjectionScopes(&b, rm)
+		return b.String()
+	}
+
+	// Finding 3: at least one field is a fold over named events (a toggle, a
+	// count or a sum) rather than a same-named payload copy. Those trigger
+	// events are pulled OUT of the generic merge entirely and routed to
+	// their own op instead — an event that feeds a derived field is treated
+	// as a derivation trigger only, never also merged generically, the same
+	// simplification scaffold_go.go's projectionGo makes.
+	mergeEvents := subtractStrings(on, derived)
+	plainFields := make([]Field, 0, len(fields))
+	for _, f := range fields {
+		if f.Derivation == nil {
+			plainFields = append(plainFields, f)
+		}
+	}
+
+	b.WriteString("// project() returns ROW OPS — {upsert: {key, fields}}, {delete: key} or\n")
+	b.WriteString("// {increment: {key, field, delta}}. A plain object is not an op and is\n")
+	b.WriteString("// discarded, so a projection that returns rows directly writes nothing.\n")
+	b.WriteString("// Upserts merge; increment adds delta to the field's running value — the\n")
+	b.WriteString("// host does that accumulation, so this file never reads its own row back\n")
+	b.WriteString("// (which a fixture verify run could not answer honestly anyway).\n\n")
 
 	b.WriteString("function project(event) {\n")
-	fmt.Fprintf(&b, "  const fields = { %s: event.aggregateId };\n", rm.Key)
-	b.WriteString("  for (const name of Object.keys(event.data || {})) {\n")
-	fmt.Fprintf(&b, "    if (%s.includes(name)) { fields[name] = event.data[name]; }\n", columnNamesLiteral(fields, rm.Key))
-	b.WriteString("  }\n")
-	fmt.Fprintf(&b, "  return [{ upsert: { key: event.aggregateId, fields: fields } }];\n")
-	b.WriteString("}\n")
+	b.WriteString("  switch (event.type) {\n")
+	if len(mergeEvents) > 0 {
+		for _, e := range mergeEvents {
+			fmt.Fprintf(&b, "    case '%s':\n", e)
+		}
+		b.WriteString("      return applyMerge(event);\n")
+	}
+	for _, evName := range order {
+		acts := derived[evName]
+		fmt.Fprintf(&b, "    case '%s':\n", evName)
+		if len(acts) == 1 {
+			fmt.Fprintf(&b, "      return %s;\n", jsDerivedOp(acts[0]))
+		} else {
+			b.WriteString("      return [\n")
+			for _, a := range acts {
+				fmt.Fprintf(&b, "        %s,\n", jsDerivedOp(a))
+			}
+			b.WriteString("      ];\n")
+		}
+	}
+	b.WriteString("    default:\n      return;\n")
+	b.WriteString("  }\n}\n\n")
+
+	if len(mergeEvents) > 0 {
+		b.WriteString("function applyMerge(event) {\n")
+		fmt.Fprintf(&b, "  const fields = { %s: event.aggregateId };\n", rm.Key)
+		b.WriteString("  for (const name of Object.keys(event.data || {})) {\n")
+		fmt.Fprintf(&b, "    if (%s.includes(name)) { fields[name] = event.data[name]; }\n", columnNamesLiteral(plainFields, rm.Key))
+		b.WriteString("  }\n")
+		b.WriteString("  return { upsert: { key: event.aggregateId, fields: fields } };\n")
+		b.WriteString("}\n\n")
+	}
+
+	writeJSProjectionScopes(&b, rm)
 	return b.String()
+}
+
+// jsDerivedOp renders one derivedAction (scaffold_go.go's shared, kind-
+// resolved event effect) as the JS op literal project()'s switch returns.
+// Toggle events are always on the read model's own stream (the eventmodel-
+// schema fieldDerivation shape), so they key off event.aggregateId; count
+// and sum trigger events are usually on a DIFFERENT stream (an assignment
+// rolling up onto its project), so they key off the payload field
+// rowKeyField names instead — mirroring derivedAction.call()'s Go rendering.
+func jsDerivedOp(a derivedAction) string {
+	switch a.kind {
+	case DerivationToggle:
+		return fmt.Sprintf("{ upsert: { key: event.aggregateId, fields: { %s: %t } } }", a.field, a.boolValue)
+	case DerivationCount:
+		return fmt.Sprintf("{ increment: { key: (event.data || {}).%s, field: %q, delta: %d } }",
+			a.rowKeyField, a.field, a.delta)
+	case DerivationSum:
+		sign := "1"
+		if a.sign < 0 {
+			sign = "-1"
+		}
+		return fmt.Sprintf("{ increment: { key: (event.data || {}).%s, field: %q, delta: ((event.data || {}).%s || 0) * %s } }",
+			a.rowKeyField, a.field, a.amountField, sign)
+	default:
+		return "null" // unreachable: Validate rejects any other kind before generation runs
+	}
+}
+
+// writeJSProjectionScopes appends one resolve<Param> helper per declared
+// scope, independent of whether the read model has any derived fields —
+// the JS analogue of scaffold_go.go's writeProjectionScopes. There is no
+// generated query API in this stack either (reads go through pb.query's
+// PocketBase filter strings, see docs/js-guide.md and the precedent in
+// examples/pb_functions/orders_by_customer.js): this resolves the
+// resolution half of the semi-join — the set of via-model values in scope —
+// and leaves building the actual local IN-filter to the caller.
+func writeJSProjectionScopes(b *strings.Builder, rm ReadModel) {
+	for _, sc := range rm.Scopes {
+		fmt.Fprintf(b, "// resolve%s resolves the %q scope: %s on %q selects which\n",
+			ExportName(sc.Param), sc.Param, sc.Via.MatchParamTo, sc.Via.Collection)
+		fmt.Fprintf(b, "// %s values are in scope for a given %s. Build your own %q-IN-(...)\n",
+			sc.Via.SelectField, sc.Param, sc.Via.FilterLocalField)
+		b.WriteString("// filter from the returned values.\n")
+		fmt.Fprintf(b, "function resolve%s(value) {\n", ExportName(sc.Param))
+		fmt.Fprintf(b, "  var rows = pb.query(%q, %q + value + %q, 500) || [];\n",
+			sc.Via.Collection, sc.Via.MatchParamTo+" = '", "'")
+		b.WriteString("  var out = [];\n")
+		b.WriteString("  for (var i = 0; i < rows.length; i++) {\n")
+		fmt.Fprintf(b, "    out.push(rows[i].%s);\n", sc.Via.SelectField)
+		b.WriteString("  }\n")
+		b.WriteString("  return out;\n")
+		b.WriteString("}\n\n")
+	}
 }
 
 func (d Domain) reactor(r Reactor) string {

@@ -79,7 +79,7 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 	if ignored > 0 {
 		p.spec.runtime.logger("projection returned values that are not row ops, ignored",
 			"projection", p.spec.Name, "event", ev.Type, "position", ev.Position, "ignored", ignored,
-			"hint", "project(event) must return {upsert:{key,fields}} or {delete:key}")
+			"hint", "project(event) must return {upsert:{key,fields}}, {delete:key} or {increment:{key,field,delta}}")
 	}
 
 	ctx = writeguard.MarkInternal(ctx)
@@ -184,11 +184,28 @@ type rowOp struct {
 	delete     bool
 	key        any
 	fields     map[string]any
+	// increment marks a count/sum-derivation op (Finding 3): add delta to
+	// incField rather than set fields verbatim. It exists as its own op
+	// shape, not a fields entry, because a derived count/sum must ACCUMULATE
+	// across events, and neither this project's own read binding (`pb`, a
+	// query-side stub over an isolated fixture — see M7 in dryrun.go) nor a
+	// plain upsert's field-merge can do that: an upsert always sets the
+	// value the caller computed, so a projection that wanted to accumulate
+	// via upsert would need to read the running total back first, which a
+	// fixture verify run must not do (see runProjectionWith's isolation
+	// doc). Increment sidesteps the read entirely — the host adds the
+	// delta, live or in a fixture simulation alike (dryrun.go's
+	// runProjectionOver), so a generated toggle/count/sum projection
+	// verifies against a scenario exactly like a plain merge does.
+	increment bool
+	incField  string
+	delta     float64
 }
 
 // normalizeOps converts the project() return value into row ops:
-// undefined/null -> none; {upsert:{key,fields}} / {delete:key} -> one;
-// an array of those -> many. Each op may carry a "collection" attribute.
+// undefined/null -> none; {upsert:{key,fields}} / {delete:key} /
+// {increment:{key,field,delta}} -> one; an array of those -> many. Each op
+// may carry a "collection" attribute.
 //
 // It also reports how many returned values were objects but not ops, so the
 // caller can say so — silently dropping them is how a projection ends up
@@ -245,7 +262,42 @@ func normalizeOp(v any) (rowOp, bool, error) {
 		fields, _ := um["fields"].(map[string]any)
 		return rowOp{collection: collection, key: um["key"], fields: fields}, true, nil
 	}
+	if inc, ok := m["increment"]; ok {
+		im, ok := inc.(map[string]any)
+		if !ok {
+			return rowOp{}, false, fmt.Errorf("increment must be {key, field, delta}, got %T", inc)
+		}
+		field, _ := im["field"].(string)
+		if field == "" {
+			return rowOp{}, false, fmt.Errorf("increment op is missing its field name")
+		}
+		rawDelta, hasDelta := im["delta"]
+		if !hasDelta {
+			return rowOp{}, false, fmt.Errorf("increment op %q is missing its delta", field)
+		}
+		delta, ok := toFloat(rawDelta)
+		if !ok {
+			return rowOp{}, false, fmt.Errorf("increment op %q delta must be a number, got %T", field, rawDelta)
+		}
+		return rowOp{collection: collection, increment: true, key: im["key"], incField: field, delta: delta}, true, nil
+	}
 	return rowOp{}, false, nil
+}
+
+// toFloat coerces a value decoded from JS (goja numbers export as float64,
+// but a Go-built fixture or a JSON round-trip may hand back other numeric
+// kinds) into a float64. false means v is not a number at all.
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
 }
 
 // resolveSchema determines which declared schema an op targets: an explicit
@@ -296,6 +348,17 @@ func (spec *ProjectionSpec) applyOp(ctx context.Context, s *SchemaSpec, op rowOp
 		rec = core.NewRecord(col)
 		rec.Set(keyField, op.key)
 	}
+
+	if op.increment {
+		if reservedRowFields[op.incField] || op.incField == keyField {
+			spec.runtime.logger("projection op field ignored (reserved)",
+				"projection", spec.Name, "field", op.incField)
+			return nil
+		}
+		rec.Set(op.incField, rec.GetFloat(op.incField)+op.delta)
+		return app.SaveWithContext(ctx, rec)
+	}
+
 	for name, value := range op.fields {
 		if reservedRowFields[name] || name == keyField {
 			spec.runtime.logger("projection op field ignored (reserved)",
