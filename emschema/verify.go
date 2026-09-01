@@ -309,20 +309,14 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		res.Detail = "the generated projection did not load: " + err.Error()
 		return
 	}
-	viewStream := v.streamID(sc.Given)
-	fixture := make([]events.Event, 0, len(sc.Given))
-	for i, g := range sc.Given {
-		data := g.Data
-		if len(data) == 0 {
-			data = json.RawMessage(`{}`)
-		}
-		fixture = append(fixture, events.Event{
-			Position: int64(i + 1), ID: fmt.Sprintf("scenario-%d", i+1),
-			Aggregate: v.doc.Events[g.EventID].Aggregate, AggregateID: viewStream,
-			Sequence: int64(i + 1), Type: v.eventType(g.EventID), Data: data,
-			Created: "1970-01-01 00:00:00.000Z",
-		})
-	}
+	// Each given event needs its OWN row key for THIS projection, not one key
+	// shared by the whole scenario (the pre-Finding-3 design): an unscoped
+	// "manager sees every flagged entry" scenario deliberately seeds two
+	// DIFFERENT entries and expects two DIFFERENT rows out, which one shared
+	// synthesized id can never produce (every given event would collapse onto
+	// the same row). See rowKey's doc comment for the resolution rule.
+	sharedDefault := v.streamID(sc.Given)
+	fixture := v.buildFixture(sc.Given, idAttributeField(rm), sharedDefault)
 	run, err := functions.DryRunProjectionOver(spec, fixture)
 	if err != nil {
 		res.Detail = "the projection failed over the fixture: " + err.Error()
@@ -335,23 +329,104 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 	}
 
 	rows := run.Rows[collection]
-	scopedRows, remainingParams, scopeErr := v.filterByScopes(rm, rows, q.QueryParams, fixture)
+	scopedRows, remainingParams, scopeErr := v.filterByScopes(rm, rows, q.QueryParams, sc.Given, sharedDefault)
 	if scopeErr != "" {
 		res.Detail = scopeErr
 		return
 	}
-	match := selectRow(scopedRows, remainingParams)
-	if match == nil {
-		res.Detail = fmt.Sprintf("no row matched the query; the projection produced %d row(s)", len(rows))
+	matches := selectRows(scopedRows, remainingParams)
+
+	// Two `then.result` shapes are supported. A single-property object whose
+	// value is a JSON array (e.g. `{"entries": [...]}`) is a NAMED-LIST
+	// result: the query may return any number of rows, and each element of
+	// the array must match exactly one of them, with none left over on either
+	// side -- this is the shape every real scenario in practice uses (a view
+	// is a list of rows, even when there's only one). Anything else is a flat
+	// single-row result (the original, pre-Finding-3 shape, still used by
+	// this package's own order-fulfillment.json regression test): the query
+	// must match EXACTLY one row, compared directly.
+	if expectedRows, isList := tryUnwrapExpectedList(then.Result); isList {
+		if diff := listDiff(expectedRows, matches); diff != "" {
+			res.Detail = "result: " + diff
+			return
+		}
+		res.Passed = true
+		res.Detail = fmt.Sprintf("the projected rows match (%d)", len(matches))
 		return
 	}
-	encoded, _ := json.Marshal(match)
+
+	if len(matches) != 1 {
+		if len(matches) == 0 {
+			res.Detail = fmt.Sprintf("no row matched the query; the projection produced %d row(s)", len(rows))
+		} else {
+			res.Detail = fmt.Sprintf("the query is ambiguous: %d rows matched", len(matches))
+		}
+		return
+	}
+	encoded, _ := json.Marshal(matches[0])
 	if diff := subsetDiff(then.Result, encoded); diff != "" {
 		res.Detail = "result: " + diff
 		return
 	}
 	res.Passed = true
 	res.Detail = "the projected row matches"
+}
+
+// idAttributeField returns the field a read model itself declares
+// `idAttribute: true` on — its own key/id column, as opposed to streamID's
+// EVENT-level idAttribute (only present on an aggregate's own creation
+// event).
+func idAttributeField(rm ReadModel) string {
+	for _, f := range rm.Fields {
+		if f.IDAttribute {
+			return f.Name
+		}
+	}
+	return ""
+}
+
+// rowKey resolves one given event's row key for one target projection: if
+// the event's own payload names that read model's own id field, use that
+// value (lets two given events about two different entities land on two
+// different rows); otherwise fall back to the scenario-wide default (keeps
+// every given event on the SAME row when the scenario doesn't distinguish
+// them — the common case, and the pre-Finding-3 behaviour every existing
+// flat-result scenario already relies on).
+func rowKey(idField string, data json.RawMessage, fallback string) string {
+	if idField == "" || len(data) == 0 {
+		return fallback
+	}
+	var m map[string]any
+	if json.Unmarshal(data, &m) != nil {
+		return fallback
+	}
+	if val, ok := m[idField]; ok {
+		if str, isStr := val.(string); isStr && str != "" {
+			return str
+		}
+	}
+	return fallback
+}
+
+// buildFixture folds a scenario's given events into event fixtures for ONE
+// target projection, resolving each event's own AggregateID from that
+// projection's read model's own id field where present (see rowKey) instead
+// of one id shared by the whole scenario.
+func (v *verifier) buildFixture(given []EventRef, idField, fallback string) []events.Event {
+	fixture := make([]events.Event, 0, len(given))
+	for i, g := range given {
+		data := g.Data
+		if len(data) == 0 {
+			data = json.RawMessage(`{}`)
+		}
+		fixture = append(fixture, events.Event{
+			Position: int64(i + 1), ID: fmt.Sprintf("scenario-%d", i+1),
+			Aggregate: v.doc.Events[g.EventID].Aggregate, AggregateID: rowKey(idField, data, fallback),
+			Sequence: int64(i + 1), Type: v.eventType(g.EventID), Data: data,
+			Created: "1970-01-01 00:00:00.000Z",
+		})
+	}
+	return fixture
 }
 
 // filterByScopes applies a read model's declared `scopes` (Finding 3,
@@ -363,15 +438,14 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 // remaining params would make selectRow fail to find it and reject every
 // row.
 //
-// The via read model is folded over the SAME fixture as the target: a
-// stateView scenario already collapses every given event onto one synthetic
-// stream (see streamID/viewStream above), so the via projection's own row
-// for that stream carries whatever `matchParamTo`/`selectField` values the
-// fixture's events gave it. This mirrors the real semi-join
-// (`WHERE filterLocalField IN (SELECT selectField FROM via WHERE
-// matchParamTo = :param)`) at verify-scenario grain: one candidate via row,
-// checked against one candidate target row set.
-func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage, fixture []events.Event) (map[string]map[string]any, json.RawMessage, string) {
+// The via read model is folded over the SAME given events as the target,
+// through its own buildFixture call (so it gets its OWN row keys, per its
+// own idAttribute field — see rowKey), and its rows carry whatever
+// `matchParamTo`/`selectField` values the fixture's events gave them. This
+// mirrors the real semi-join (`WHERE filterLocalField IN (SELECT selectField
+// FROM via WHERE matchParamTo = :param)`) at verify-scenario grain: one via
+// row set, checked against one candidate target row set.
+func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage, given []EventRef, sharedDefault string) (map[string]map[string]any, json.RawMessage, string) {
 	if len(rm.Scopes) == 0 || len(queryParams) == 0 {
 		return rows, queryParams, ""
 	}
@@ -407,7 +481,8 @@ func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, 
 		if err != nil {
 			return nil, nil, "the scope's via projection did not load: " + err.Error()
 		}
-		run, err := functions.DryRunProjectionOver(spec, fixture)
+		viaFixture := v.buildFixture(given, idAttributeField(via), sharedDefault)
+		run, err := functions.DryRunProjectionOver(spec, viaFixture)
 		if err != nil {
 			return nil, nil, "the scope's via projection failed over the fixture: " + err.Error()
 		}
@@ -492,20 +567,28 @@ func (v *verifier) commandName(id string) string {
 	return TypeName(c.Name, id)
 }
 
-// selectRow finds the row a query names.
+// selectRows finds every row a query names.
 //
 // queryParams is a free-form object in the schema, so it is treated as a
-// field match: the row whose fields equal every parameter. With no params,
-// the only row is returned — and an ambiguous query returns nothing rather
-// than an arbitrary row, because picking one would make the assertion depend
-// on map iteration order.
-func selectRow(rows map[string]map[string]any, params json.RawMessage) map[string]any {
+// field match: every row whose fields equal every (filterable) parameter.
+// With no params, every row is returned. A queryParam whose value is a JSON
+// object or array (e.g. a date-range param) names filtering logic no
+// generator emits — there's no column it could match — so it's skipped here
+// rather than forced through a string/number comparison that could only ever
+// fail; the ROW CONTENT comparison the caller does afterwards still reports
+// the real gap the scenario is describing.
+func selectRows(rows map[string]map[string]any, params json.RawMessage) []map[string]any {
 	var want map[string]any
 	if len(params) > 0 {
 		_ = json.Unmarshal(params, &want)
 	}
-	var found map[string]any
-	matches := 0
+	for k, v := range want {
+		switch v.(type) {
+		case map[string]any, []any:
+			delete(want, k)
+		}
+	}
+	var found []map[string]any
 	for _, row := range rows {
 		ok := true
 		for k, v := range want {
@@ -515,14 +598,60 @@ func selectRow(rows map[string]map[string]any, params json.RawMessage) map[strin
 			}
 		}
 		if ok {
-			matches++
-			found = row
+			found = append(found, row)
 		}
 	}
-	if matches != 1 {
-		return nil
-	}
 	return found
+}
+
+// tryUnwrapExpectedList detects the named-list `then.result` shape: an
+// object with exactly one property whose value is a JSON array. Every real
+// scenario in the model uses this shape (a view is a list of rows); this
+// package's own flat-object regression test (order-fulfillment.json) predates
+// it and must keep working unchanged, which is why this is a narrow
+// structural check rather than a required convention.
+func tryUnwrapExpectedList(want json.RawMessage) ([]json.RawMessage, bool) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(want, &obj); err != nil || len(obj) != 1 {
+		return nil, false
+	}
+	for _, raw := range obj {
+		var arr []json.RawMessage
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, false
+		}
+		return arr, true
+	}
+	return nil, false
+}
+
+// listDiff is a multiset comparison for a named-list result: every expected
+// row must subset-match a distinct actual row (order-independent), and no
+// actual row may be left over — an extra row would mean an unscoped/scoped
+// query returned something the scenario didn't ask for, which is as real a
+// bug as a missing one.
+func listDiff(expectedRows []json.RawMessage, actualRows []map[string]any) string {
+	unmatched := append([]map[string]any(nil), actualRows...)
+	var problems []string
+	for _, want := range expectedRows {
+		idx := -1
+		for i, a := range unmatched {
+			encoded, _ := json.Marshal(a)
+			if subsetDiff(want, encoded) == "" {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			problems = append(problems, fmt.Sprintf("no row matched %s", string(want)))
+			continue
+		}
+		unmatched = append(unmatched[:idx], unmatched[idx+1:]...)
+	}
+	if len(unmatched) > 0 {
+		problems = append(problems, fmt.Sprintf("%d extra row(s) not expected by any element of the result list", len(unmatched)))
+	}
+	return strings.Join(problems, "; ")
 }
 
 // subsetDiff reports how `actual` fails to contain every field of `want`,
