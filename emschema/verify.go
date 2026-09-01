@@ -335,7 +335,12 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 	}
 
 	rows := run.Rows[collection]
-	match := selectRow(rows, q.QueryParams)
+	scopedRows, remainingParams, scopeErr := v.filterByScopes(rm, rows, q.QueryParams, fixture)
+	if scopeErr != "" {
+		res.Detail = scopeErr
+		return
+	}
+	match := selectRow(scopedRows, remainingParams)
 	if match == nil {
 		res.Detail = fmt.Sprintf("no row matched the query; the projection produced %d row(s)", len(rows))
 		return
@@ -347,6 +352,90 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 	}
 	res.Passed = true
 	res.Detail = "the projected row matches"
+}
+
+// filterByScopes applies a read model's declared `scopes` (Finding 3,
+// Addition C) to a stateView scenario's rows: a scoped query param resolves
+// through another read model's own row (a semi-join) rather than matching a
+// plain column, so it must be handled BEFORE selectRow's plain field-match
+// runs — a param scopes declares has no matching column on this read model
+// at all (e.g. `pmStaffId` on `flagged-entries`), so leaving it in the
+// remaining params would make selectRow fail to find it and reject every
+// row.
+//
+// The via read model is folded over the SAME fixture as the target: a
+// stateView scenario already collapses every given event onto one synthetic
+// stream (see streamID/viewStream above), so the via projection's own row
+// for that stream carries whatever `matchParamTo`/`selectField` values the
+// fixture's events gave it. This mirrors the real semi-join
+// (`WHERE filterLocalField IN (SELECT selectField FROM via WHERE
+// matchParamTo = :param)`) at verify-scenario grain: one candidate via row,
+// checked against one candidate target row set.
+func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage, fixture []events.Event) (map[string]map[string]any, json.RawMessage, string) {
+	if len(rm.Scopes) == 0 || len(queryParams) == 0 {
+		return rows, queryParams, ""
+	}
+	var params map[string]any
+	if err := json.Unmarshal(queryParams, &params); err != nil {
+		return rows, queryParams, ""
+	}
+	remaining := map[string]any{}
+	for k, val := range params {
+		remaining[k] = val
+	}
+
+	filtered := rows
+	for _, scope := range rm.Scopes {
+		paramVal, present := params[scope.Param]
+		if !present {
+			continue
+		}
+		delete(remaining, scope.Param)
+
+		via, ok := v.doc.ReadModels[scope.Via.ReadModelID]
+		if !ok {
+			return nil, nil, fmt.Sprintf("scope %q names via read model %q, which does not exist",
+				scope.Param, scope.Via.ReadModelID)
+		}
+		viaCollection := scaffold.SanitizeName(collectionName(via.Name, scope.Via.ReadModelID))
+		file, ok := v.sources[viaCollection+".js"]
+		if !ok {
+			return nil, nil, fmt.Sprintf("scope %q's via read model %q was not generated", scope.Param, viaCollection)
+		}
+		rt := functions.NewGojaRuntime(nil)
+		spec, err := functions.LoadProjectionSource(rt, nil, viaCollection+".js", file.Source)
+		if err != nil {
+			return nil, nil, "the scope's via projection did not load: " + err.Error()
+		}
+		run, err := functions.DryRunProjectionOver(spec, fixture)
+		if err != nil {
+			return nil, nil, "the scope's via projection failed over the fixture: " + err.Error()
+		}
+
+		matchTo := scaffold.SanitizeName(scope.Via.MatchParamTo)
+		selectField := scaffold.SanitizeName(scope.Via.SelectField)
+		var allowed []any
+		for _, viaRow := range run.Rows[viaCollection] {
+			if jsonEq(viaRow[matchTo], paramVal) {
+				allowed = append(allowed, viaRow[selectField])
+			}
+		}
+
+		localField := scaffold.SanitizeName(scope.Via.FilterLocalField)
+		next := map[string]map[string]any{}
+		for key, row := range filtered {
+			for _, av := range allowed {
+				if jsonEq(row[localField], av) {
+					next[key] = row
+					break
+				}
+			}
+		}
+		filtered = next
+	}
+
+	encoded, _ := json.Marshal(remaining)
+	return filtered, encoded, ""
 }
 
 // fixtureStore builds a scratch event store holding the scenario's `given`.

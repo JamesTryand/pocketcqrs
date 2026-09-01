@@ -2,10 +2,11 @@
 // github.com/jamestryand/eventmodelschema — and maps them onto this
 // project's intermediate domain model.
 //
-// The types below mirror eventmodeling.schema.json as read at tag v2.1.0
-// (commit a9f0d8e, "added accepted status", 2026-08-30). A vendored copy of
-// that schema and its worked examples lives in testdata/eventmodelschema/,
-// with the tag recorded in PROVENANCE.md.
+// The types below mirror eventmodeling.schema.json as read at tag v2.2.0
+// (commit ba04be0, "Schema 2.2.0: derived read-model fields, stream-ending
+// events, scoped queries", 2026-09-01). A vendored copy of that schema and
+// its worked examples lives in testdata/eventmodelschema/, with the tag
+// recorded in PROVENANCE.md.
 //
 // Two things about the source format shape everything here:
 //
@@ -73,6 +74,11 @@ type Event struct {
 	SwimlaneID  string  `json:"swimlaneId"`
 	Aggregate   string  `json:"aggregate,omitempty"`
 	Fields      []Field `json:"fields,omitempty"`
+	// EndsStream marks an event that closes its own aggregate's stream (an
+	// unassign, a removal): folded, it resets the synthesized `Exists` to
+	// false instead of true, so a later create-shaped command on the same
+	// stream is legal again. Added in schema 2.2.0 (Finding 3).
+	EndsStream bool `json:"endsStream,omitempty"`
 }
 
 // Command is a command definition. Reason is methodology prose with no
@@ -94,6 +100,31 @@ type ReadModel struct {
 	Question          string   `json:"question,omitempty"`
 	BuiltFromEventIDs []string `json:"builtFromEventIds,omitempty"`
 	Fields            []Field  `json:"fields,omitempty"`
+	// Scopes declares, per non-column query param, how it resolves through
+	// another read model (a semi-join) rather than a plain column filter.
+	// Added in schema 2.2.0 (Finding 3).
+	Scopes []ReadModelScope `json:"scopes,omitempty"`
+}
+
+// ReadModelScope declares how one query param resolves to a set of this
+// read model's own key values via another read model, e.g. `pmStaffId` on
+// `flagged-entries` resolves through `project-managers.staffId` to the
+// `projectId` values a PM may see.
+type ReadModelScope struct {
+	Param string            `json:"param"`
+	Via   ReadModelScopeVia `json:"via"`
+}
+
+// ReadModelScopeVia names the resolving read model and the fields the
+// semi-join joins on: `matchParamTo` filters the via-model by the param
+// value, `selectField` is what's collected from the matching rows, and
+// `filterLocalField` is this read model's own field that must be in that
+// collected set.
+type ReadModelScopeVia struct {
+	ReadModelID      string `json:"readModelId"`
+	MatchParamTo     string `json:"matchParamTo"`
+	SelectField      string `json:"selectField"`
+	FilterLocalField string `json:"filterLocalField"`
 }
 
 // Screen is design-time notation with no runtime concept here — but it is
@@ -116,6 +147,50 @@ type Field struct {
 	IDAttribute bool    `json:"idAttribute,omitempty"`
 	PII         bool    `json:"pii,omitempty"`
 	Subfields   []Field `json:"subfields,omitempty"`
+	// Derivation makes a read-model field a fold over named events instead
+	// of a same-named payload copy — a toggle, a count or a sum. Only
+	// meaningful on a readModel field. Added in schema 2.2.0 (Finding 3).
+	Derivation *FieldDerivation `json:"derivation,omitempty"`
+}
+
+// Derivation kinds, as the schema 2.2.0 discriminated union defines them.
+const (
+	DerivationToggle = "toggle"
+	DerivationCount  = "count"
+	DerivationSum    = "sum"
+)
+
+// FieldDerivation computes a read-model field as a fold over named events.
+// Exactly one of the three shapes applies, selected by Kind; the fields
+// belonging to the other two are left zero. This mirrors the source
+// schema's `oneOf` on `fieldDerivation` — kept flat here, as EventRef/
+// ReadModelQuery etc. already do for other kind-discriminated shapes in
+// this file, rather than as three separate Go types the mapper would have
+// to type-switch on.
+type FieldDerivation struct {
+	Kind string `json:"kind"`
+
+	// toggle: OnEventIds sets the field true, OffEventIds sets it false.
+	OnEventIDs  []string `json:"onEventIds,omitempty"`
+	OffEventIDs []string `json:"offEventIds,omitempty"`
+	Initial     bool     `json:"initial,omitempty"`
+
+	// count: IncrementOnEventIds add 1, DecrementOnEventIds subtract 1.
+	IncrementOnEventIDs []string `json:"incrementOnEventIds,omitempty"`
+	DecrementOnEventIDs []string `json:"decrementOnEventIds,omitempty"`
+
+	// sum: AddOnEventIds add AmountField's payload value,
+	// SubtractOnEventIds subtract it.
+	AddOnEventIDs      []string `json:"addOnEventIds,omitempty"`
+	SubtractOnEventIDs []string `json:"subtractOnEventIds,omitempty"`
+	AmountField        string   `json:"amountField,omitempty"`
+
+	// RowKeyField names the payload field on the triggering events that
+	// carries the target row's key (count/sum only — the events are
+	// usually on a different stream than the read model's own, e.g. an
+	// assignment event carrying the projectId it should roll up onto).
+	// Defaults to the read model's own key-field name when empty.
+	RowKeyField string `json:"rowKeyField,omitempty"`
 }
 
 // Slice is one vertical slice. The pattern-specific fields are flattened
@@ -208,8 +283,9 @@ type Hotspot struct {
 // SchemaVersion is the generation this package targets, and what an export
 // declares. 2.0.0 (2026-08-06) was the last breaking bump — removal of the
 // `translation` pattern; 2.1.0 (2026-08-30) is additive only, a new
-// `sliceStatus` value (`accepted`).
-const SchemaVersion = "2.1.0"
+// `sliceStatus` value (`accepted`); 2.2.0 (2026-09-01) is additive only,
+// `field.derivation`, `event.endsStream`, `readModel.scopes`.
+const SchemaVersion = "2.2.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

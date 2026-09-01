@@ -89,6 +89,11 @@ type Event struct {
 	// NoFields declares "this event genuinely carries no payload". Without
 	// it, an event with no fields is reported as UNSPECIFIED.
 	NoFields bool `json:"noFields,omitempty"`
+	// EndsStream marks an event that closes this aggregate's stream: folded,
+	// the generated decider resets Exists to false instead of true, so a
+	// later create-shaped command on the same stream is legal again (an
+	// assign/unassign/reassign lifecycle). Finding 3.
+	EndsStream bool `json:"endsStream,omitempty"`
 }
 
 // Field is one payload/schema field.
@@ -96,6 +101,45 @@ type Field struct {
 	Name string `json:"name"`
 	// Type is a //@schema type: text, number, bool, date or json.
 	Type string `json:"type"`
+	// Derivation makes a read-model field a fold over named events instead
+	// of a same-named payload copy. nil on every command/event field — only
+	// a ReadModel's own Fields entries use it. Finding 3.
+	Derivation *FieldDerivation `json:"derivation,omitempty"`
+}
+
+// Derivation kinds.
+const (
+	DerivationToggle = "toggle"
+	DerivationCount  = "count"
+	DerivationSum    = "sum"
+)
+
+// FieldDerivation computes a read-model field as a fold over named events —
+// a toggle, a count or a sum — instead of copying a same-named payload key.
+// Exactly one of the three shapes applies, selected by Kind; the mapper is
+// responsible for populating only the fields for its own kind.
+type FieldDerivation struct {
+	Kind string `json:"kind"`
+
+	// toggle
+	OnEventIDs  []string `json:"onEventIds,omitempty"`
+	OffEventIDs []string `json:"offEventIds,omitempty"`
+	Initial     bool     `json:"initial,omitempty"`
+
+	// count
+	IncrementOnEventIDs []string `json:"incrementOnEventIds,omitempty"`
+	DecrementOnEventIDs []string `json:"decrementOnEventIds,omitempty"`
+
+	// sum
+	AddOnEventIDs      []string `json:"addOnEventIds,omitempty"`
+	SubtractOnEventIDs []string `json:"subtractOnEventIds,omitempty"`
+	AmountField        string   `json:"amountField,omitempty"`
+
+	// count/sum: the payload field on the triggering events naming the
+	// target row's key. Defaults to the read model's own Key when empty —
+	// the mapper resolves the default; the generator treats empty here as
+	// "use Key" too, so a hand-built Domain need not repeat it.
+	RowKeyField string `json:"rowKeyField,omitempty"`
 }
 
 // ReadModel is a projection's target collection.
@@ -110,6 +154,28 @@ type ReadModel struct {
 	// On lists the events that update the row. Empty means every event the
 	// commands produce.
 	On []string `json:"on,omitempty"`
+	// Scopes declares, per non-column query param, how it resolves through
+	// another read model (a semi-join) rather than a plain column filter.
+	// Finding 3.
+	Scopes []ReadModelScope `json:"scopes,omitempty"`
+}
+
+// ReadModelScope declares how one query param resolves to a set of this
+// read model's own key values via another read model.
+type ReadModelScope struct {
+	Param string            `json:"param"`
+	Via   ReadModelScopeVia `json:"via"`
+}
+
+// ReadModelScopeVia names the resolving read model's GENERATED COLLECTION
+// (already resolved by the mapper — not the schema document's readModelId,
+// which this package's generators have no document to look up) and the
+// fields the semi-join joins on.
+type ReadModelScopeVia struct {
+	Collection       string `json:"collection"`
+	MatchParamTo     string `json:"matchParamTo"`
+	SelectField      string `json:"selectField"`
+	FilterLocalField string `json:"filterLocalField"`
 }
 
 // Reactor maps events to a command on another aggregate — the automation
@@ -233,6 +299,37 @@ func (d Domain) Validate() error {
 			}
 			if !schemaTypes[f.Type] {
 				add("read model %q: field %q has type %q; use text, number, bool, date or json", rm.Collection, f.Name, f.Type)
+			}
+			if dv := f.Derivation; dv != nil {
+				switch dv.Kind {
+				case DerivationToggle:
+					if len(dv.OnEventIDs) == 0 || len(dv.OffEventIDs) == 0 {
+						add("read model %q: field %q is a toggle derivation but is missing onEventIds/offEventIds",
+							rm.Collection, f.Name)
+					}
+				case DerivationCount:
+					if len(dv.IncrementOnEventIDs) == 0 {
+						add("read model %q: field %q is a count derivation but declares no incrementOnEventIds",
+							rm.Collection, f.Name)
+					}
+				case DerivationSum:
+					if len(dv.AddOnEventIDs) == 0 || dv.AmountField == "" {
+						add("read model %q: field %q is a sum derivation but is missing addOnEventIds/amountField",
+							rm.Collection, f.Name)
+					}
+				default:
+					add("read model %q: field %q has derivation kind %q; use toggle, count or sum",
+						rm.Collection, f.Name, dv.Kind)
+				}
+			}
+		}
+		for _, sc := range rm.Scopes {
+			if sc.Param == "" {
+				add("read model %q: a scope is missing its param name", rm.Collection)
+			}
+			if sc.Via.Collection == "" || sc.Via.MatchParamTo == "" || sc.Via.SelectField == "" || sc.Via.FilterLocalField == "" {
+				add("read model %q: scope %q is missing one of via.collection/matchParamTo/selectField/filterLocalField",
+					rm.Collection, sc.Param)
 			}
 		}
 		// NOTE: a read model listening for an event no command here produces

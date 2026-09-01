@@ -165,6 +165,19 @@ func (d Domain) eventFields(name string) []Field {
 	return nil
 }
 
+// eventEndsStream mirrors eventFields for the EndsStream flag: true when the
+// FIRST event named name is tagged as closing its aggregate's stream.
+func (d Domain) eventEndsStream(name string) bool {
+	for _, c := range d.Commands {
+		for _, e := range c.Events {
+			if e.Name == name {
+				return e.EndsStream
+			}
+		}
+	}
+	return false
+}
+
 // formatGo runs src through go/format, turning a codegen mistake into an
 // error the caller sees immediately rather than a .go file that fails to
 // build only once someone tries to compile it.
@@ -326,9 +339,17 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 	b.WriteString("\t\t\tswitch ev.Type {\n")
 	for _, name := range events {
 		ef := d.eventFields(name)
+		// endsStream events (an unassign, a removal) reset Exists instead of
+		// setting it -- otherwise the generic fold only ever sets state and
+		// never retracts it, permanently blocking a later create-shaped
+		// command on the same stream once it has ever fired once (Finding 3).
+		existsAfter := "true"
+		if d.eventEndsStream(name) {
+			existsAfter = "false"
+		}
 		fmt.Fprintf(&b, "\t\t\tcase %s:\n", name)
 		if len(ef) == 0 {
-			b.WriteString("\t\t\t\ts.Exists = true\n")
+			fmt.Fprintf(&b, "\t\t\t\ts.Exists = %s\n", existsAfter)
 			continue
 		}
 		b.WriteString("\t\t\t\tvar data struct {\n")
@@ -340,7 +361,7 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 		for _, f := range ef {
 			fmt.Fprintf(&b, "\t\t\t\ts.%s = data.%s\n", ExportName(f.Name), ExportName(f.Name))
 		}
-		b.WriteString("\t\t\t\ts.Exists = true\n")
+		fmt.Fprintf(&b, "\t\t\t\ts.Exists = %s\n", existsAfter)
 	}
 	b.WriteString("\t\t\t}\n")
 	b.WriteString("\t\t\treturn s, nil\n")
@@ -355,39 +376,48 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 		on = d.Events()
 	}
 
-	columns := make([]string, 0, len(rm.Fields))
-	for _, f := range rm.Fields {
-		if f.Name != rm.Key {
-			columns = append(columns, f.Name)
-		}
-	}
-	sort.Strings(columns)
+	derived, order := collectDerivedActions(rm.Fields, rm.Key)
 
 	typeName := ExportName(rm.Collection) + "Projection"
 	ctor := "New" + ExportName(rm.Collection)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "package %s\n\n", pkg)
-	b.WriteString("import (\n")
-	b.WriteString("\t\"context\"\n")
-	b.WriteString("\t\"database/sql\"\n")
-	b.WriteString("\t\"encoding/json\"\n")
-	b.WriteString("\t\"errors\"\n\n")
-	b.WriteString("\t\"github.com/pocketbase/pocketbase/core\"\n\n")
-	b.WriteString("\t\"github.com/jamestryand/pocketcqrs/events\"\n")
-	b.WriteString("\t\"github.com/jamestryand/pocketcqrs/writeguard\"\n")
-	b.WriteString(")\n\n")
 
-	fmt.Fprintf(&b, "// %s projects %s events into the %q collection, one row per %s\n", ctor, d.Aggregate, rm.Collection, d.Aggregate)
-	b.WriteString("// stream keyed by the aggregate id — a generic field-merge, the same shape\n")
-	b.WriteString("// the JS scaffolder's project() produces. Port your own per-event rules\n")
-	b.WriteString("// once they've settled; the collection itself becomes an ordinary\n")
-	b.WriteString("// PocketBase migration (see migrations/1754200000_tasks_collection.go for\n")
-	b.WriteString("// the shape) — this file does not create it.\n")
-	fmt.Fprintf(&b, "func %s(app core.App) *%s { return &%s{app: app} }\n\n", ctor, typeName, typeName)
-	fmt.Fprintf(&b, "type %s struct {\n\tapp core.App\n}\n\n", typeName)
-	fmt.Fprintf(&b, "func (p *%s) Name() string { return %q }\n", typeName, rm.Collection)
-	fmt.Fprintf(&b, "func (p *%s) Collections() []string { return []string{%q} }\n\n", typeName, rm.Collection)
+	if len(derived) == 0 {
+		writeProjectionImports(&b, true)
+		writeProjectionHeader(&b, d, rm, ctor, typeName)
+		writeProjectionPlainApply(&b, rm, on, typeName)
+		writeProjectionScopes(&b, rm, typeName)
+		return b.String()
+	}
+
+	// Finding 3: at least one field is a fold over named events (a toggle,
+	// a count or a sum) rather than a same-named payload copy. Those
+	// trigger events are pulled OUT of the generic merge entirely and
+	// routed to dedicated per-kind helpers instead — an event that feeds a
+	// derived field is treated as a derivation trigger only, never also
+	// merged generically, which is the one simplification this generator
+	// makes (see the codegen-handwrite-gaps write-up for the rationale).
+	mergeEvents := subtractStrings(on, derived)
+	plainColumns := plainColumnNames(rm.Fields, rm.Key)
+	usesToggle, usesCount, usesSum := false, false, false
+	for _, acts := range derived {
+		for _, a := range acts {
+			switch a.kind {
+			case DerivationToggle:
+				usesToggle = true
+			case DerivationCount:
+				usesCount = true
+			case DerivationSum:
+				usesSum = true
+			}
+		}
+	}
+	usesJSON := len(mergeEvents) > 0 || usesCount || usesSum
+
+	writeProjectionImports(&b, usesJSON)
+	writeProjectionHeader(&b, d, rm, ctor, typeName)
 
 	fmt.Fprintf(&b, "func (p *%s) Apply(ctx context.Context, ev events.Event) error {\n", typeName)
 	b.WriteString("\tswitch ev.Type {\n")
@@ -396,26 +426,317 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 	// are cross-cutting -- see Warnings' "intended if it folds another
 	// aggregate's events" note), which this package's decider.go would not
 	// have declared a constant for.
-	fmt.Fprintf(&b, "\tcase %s:\n", quotedList(on))
+	if len(mergeEvents) > 0 {
+		fmt.Fprintf(&b, "\tcase %s:\n", quotedList(mergeEvents))
+		b.WriteString("\t\treturn p.applyMerge(ctx, ev)\n")
+	}
+	for _, evName := range order {
+		fmt.Fprintf(&b, "\tcase %q:\n", evName)
+		acts := derived[evName]
+		for i, a := range acts {
+			call := a.call()
+			if i == len(acts)-1 {
+				fmt.Fprintf(&b, "\t\treturn %s\n", call)
+			} else {
+				fmt.Fprintf(&b, "\t\tif err := %s; err != nil {\n\t\t\treturn err\n\t\t}\n", call)
+			}
+		}
+	}
+	b.WriteString("\tdefault:\n\t\treturn nil\n\t}\n")
+	b.WriteString("}\n\n")
+
+	fmt.Fprintf(&b, "func (p *%s) getOrCreate(rowKey string) (*core.Record, error) {\n", typeName)
+	fmt.Fprintf(&b, "\trec, err := p.app.FindFirstRecordByData(%q, %q, rowKey)\n", rm.Collection, rm.Key)
+	b.WriteString("\tif err != nil && !errors.Is(err, sql.ErrNoRows) {\n\t\treturn nil, err\n\t}\n")
+	b.WriteString("\tif rec != nil {\n\t\treturn rec, nil\n\t}\n")
+	fmt.Fprintf(&b, "\tcol, err := p.app.FindCollectionByNameOrId(%q)\n", rm.Collection)
+	b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
+	b.WriteString("\trec = core.NewRecord(col)\n")
+	fmt.Fprintf(&b, "\trec.Set(%q, rowKey)\n", rm.Key)
+	for _, def := range derivedInitDefaults(rm.Fields) {
+		fmt.Fprintf(&b, "\trec.Set(%q, %s)\n", def.name, def.literal)
+	}
+	b.WriteString("\treturn rec, nil\n}\n\n")
+
+	if len(mergeEvents) > 0 {
+		fmt.Fprintf(&b, "func (p *%s) applyMerge(ctx context.Context, ev events.Event) error {\n", typeName)
+		b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n")
+		b.WriteString("\tvar data map[string]any\n")
+		b.WriteString("\tif err := json.Unmarshal(ev.Data, &data); err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\trec, err := p.getOrCreate(ev.AggregateID)\n\tif err != nil {\n\t\treturn err\n\t}\n")
+		if len(plainColumns) > 0 {
+			fmt.Fprintf(&b, "\tfor _, name := range []string{%s} {\n", quotedList(plainColumns))
+			b.WriteString("\t\tif v, ok := data[name]; ok {\n\t\t\trec.Set(name, v)\n\t\t}\n\t}\n")
+		}
+		b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n}\n\n")
+	}
+
+	if usesToggle {
+		b.WriteString("// setToggle sets a toggle-derivation field, keyed by the triggering\n")
+		b.WriteString("// event's own aggregate id (toggle events are always on the read model's\n")
+		b.WriteString("// own stream, per eventmodelschema's fieldDerivation shape).\n")
+		fmt.Fprintf(&b, "func (p *%s) setToggle(ctx context.Context, rowKey, field string, value bool) error {\n", typeName)
+		b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n")
+		b.WriteString("\trec, err := p.getOrCreate(rowKey)\n\tif err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\trec.Set(field, value)\n")
+		b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n}\n\n")
+	}
+
+	if usesCount {
+		b.WriteString("// bumpCount adjusts a count-derivation field. rowKeyField names the\n")
+		b.WriteString("// payload field on the triggering event carrying the TARGET row's key —\n")
+		b.WriteString("// the event is usually on a different stream than this read model's own\n")
+		b.WriteString("// (an assignment event rolling up onto its project), so the row can't be\n")
+		b.WriteString("// found by ev.AggregateID the way a same-aggregate field can.\n")
+		fmt.Fprintf(&b, "func (p *%s) bumpCount(ctx context.Context, ev events.Event, field, rowKeyField string, delta int) error {\n", typeName)
+		b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n")
+		b.WriteString("\tvar data map[string]any\n\tif err := json.Unmarshal(ev.Data, &data); err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\trowKey, _ := data[rowKeyField].(string)\n")
+		b.WriteString("\trec, err := p.getOrCreate(rowKey)\n\tif err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\trec.Set(field, rec.GetInt(field)+delta)\n")
+		b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n}\n\n")
+	}
+
+	if usesSum {
+		b.WriteString("// bumpSum is bumpCount's sibling for a running total: amountField names\n")
+		b.WriteString("// the numeric payload field to add or subtract, sign is +1/-1.\n")
+		fmt.Fprintf(&b, "func (p *%s) bumpSum(ctx context.Context, ev events.Event, field, amountField, rowKeyField string, sign float64) error {\n", typeName)
+		b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n")
+		b.WriteString("\tvar data map[string]any\n\tif err := json.Unmarshal(ev.Data, &data); err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\trowKey, _ := data[rowKeyField].(string)\n")
+		b.WriteString("\tamount, _ := data[amountField].(float64)\n")
+		b.WriteString("\trec, err := p.getOrCreate(rowKey)\n\tif err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\trec.Set(field, rec.GetFloat(field)+sign*amount)\n")
+		b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n}\n\n")
+	}
+
+	writeProjectionScopes(&b, rm, typeName)
+	return b.String()
+}
+
+// writeProjectionImports emits the import block every generated projection
+// shares. json is only used by the generic merge path and by count/sum
+// derivations — a read model with ONLY a toggle derivation and no plain
+// merge events needs it emitted conditionally, or the generated file fails
+// to compile with an unused import.
+func writeProjectionImports(b *strings.Builder, usesJSON bool) {
+	b.WriteString("import (\n")
+	b.WriteString("\t\"context\"\n")
+	b.WriteString("\t\"database/sql\"\n")
+	if usesJSON {
+		b.WriteString("\t\"encoding/json\"\n")
+	}
+	b.WriteString("\t\"errors\"\n\n")
+	b.WriteString("\t\"github.com/pocketbase/pocketbase/core\"\n\n")
+	b.WriteString("\t\"github.com/jamestryand/pocketcqrs/events\"\n")
+	b.WriteString("\t\"github.com/jamestryand/pocketcqrs/writeguard\"\n")
+	b.WriteString(")\n\n")
+}
+
+func writeProjectionHeader(b *strings.Builder, d Domain, rm ReadModel, ctor, typeName string) {
+	fmt.Fprintf(b, "// %s projects %s events into the %q collection, one row per %s\n", ctor, d.Aggregate, rm.Collection, d.Aggregate)
+	b.WriteString("// stream keyed by the aggregate id — a generic field-merge, the same shape\n")
+	b.WriteString("// the JS scaffolder's project() produces. Port your own per-event rules\n")
+	b.WriteString("// once they've settled; the collection itself becomes an ordinary\n")
+	b.WriteString("// PocketBase migration (see migrations/1754200000_tasks_collection.go for\n")
+	b.WriteString("// the shape) — this file does not create it.\n")
+	fmt.Fprintf(b, "func %s(app core.App) *%s { return &%s{app: app} }\n\n", ctor, typeName, typeName)
+	fmt.Fprintf(b, "type %s struct {\n\tapp core.App\n}\n\n", typeName)
+	fmt.Fprintf(b, "func (p *%s) Name() string { return %q }\n", typeName, rm.Collection)
+	fmt.Fprintf(b, "func (p *%s) Collections() []string { return []string{%q} }\n\n", typeName, rm.Collection)
+}
+
+// writeProjectionPlainApply is the original, pre-Finding-3 generic
+// field-merge Apply — kept byte-for-byte unchanged for a read model with no
+// derived fields, so an existing generated file only changes when the
+// model actually asks for a fold.
+func writeProjectionPlainApply(b *strings.Builder, rm ReadModel, on []string, typeName string) {
+	columns := make([]string, 0, len(rm.Fields))
+	for _, f := range rm.Fields {
+		if f.Name != rm.Key {
+			columns = append(columns, f.Name)
+		}
+	}
+	sort.Strings(columns)
+
+	fmt.Fprintf(b, "func (p *%s) Apply(ctx context.Context, ev events.Event) error {\n", typeName)
+	b.WriteString("\tswitch ev.Type {\n")
+	fmt.Fprintf(b, "\tcase %s:\n", quotedList(on))
 	b.WriteString("\tdefault:\n\t\treturn nil\n\t}\n")
 	b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n\n")
 	b.WriteString("\tvar data map[string]any\n")
 	b.WriteString("\tif err := json.Unmarshal(ev.Data, &data); err != nil {\n\t\treturn err\n\t}\n\n")
-	fmt.Fprintf(&b, "\trec, err := p.app.FindFirstRecordByData(%q, %q, ev.AggregateID)\n", rm.Collection, rm.Key)
+	fmt.Fprintf(b, "\trec, err := p.app.FindFirstRecordByData(%q, %q, ev.AggregateID)\n", rm.Collection, rm.Key)
 	b.WriteString("\tif err != nil && !errors.Is(err, sql.ErrNoRows) {\n\t\treturn err\n\t}\n")
 	b.WriteString("\tif rec == nil {\n")
-	fmt.Fprintf(&b, "\t\tcol, err := p.app.FindCollectionByNameOrId(%q)\n", rm.Collection)
+	fmt.Fprintf(b, "\t\tcol, err := p.app.FindCollectionByNameOrId(%q)\n", rm.Collection)
 	b.WriteString("\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n")
 	b.WriteString("\t\trec = core.NewRecord(col)\n")
-	fmt.Fprintf(&b, "\t\trec.Set(%q, ev.AggregateID)\n", rm.Key)
+	fmt.Fprintf(b, "\t\trec.Set(%q, ev.AggregateID)\n", rm.Key)
 	b.WriteString("\t}\n")
 	if len(columns) > 0 {
-		fmt.Fprintf(&b, "\tfor _, name := range []string{%s} {\n", quotedList(columns))
+		fmt.Fprintf(b, "\tfor _, name := range []string{%s} {\n", quotedList(columns))
 		b.WriteString("\t\tif v, ok := data[name]; ok {\n\t\t\trec.Set(name, v)\n\t\t}\n\t}\n")
 	}
 	b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n")
 	b.WriteString("}\n")
-	return b.String()
+}
+
+// writeProjectionScopes appends one Resolve<Param> helper per declared
+// scope, independent of whether the read model has any derived fields.
+// There is no generated query function anywhere in this package for a
+// stateView read (reads go straight through PocketBase's own API in
+// consumer code) — so a scoped query has nowhere existing to plug into.
+// This generates the resolution half of the semi-join instead: the set of
+// this read model's own key values the param allows, which the caller folds
+// into whatever filter they build (see the recomputeTotals-style
+// FindRecordsByFilter precedent in projections/orders.go).
+func writeProjectionScopes(b *strings.Builder, rm ReadModel, typeName string) {
+	for _, sc := range rm.Scopes {
+		fmt.Fprintf(b, "// Resolve%s resolves the %q scope: %s on %q selects which\n",
+			ExportName(sc.Param), sc.Param, sc.Via.MatchParamTo, sc.Via.Collection)
+		fmt.Fprintf(b, "// %s values are in scope for a given %s. Build your own %q-IN-(...)\n",
+			sc.Via.SelectField, sc.Param, sc.Via.FilterLocalField)
+		b.WriteString("// PocketBase filter from the returned values.\n")
+		fmt.Fprintf(b, "func (p *%s) Resolve%s(value string) ([]string, error) {\n", typeName, ExportName(sc.Param))
+		fmt.Fprintf(b, "\trows, err := p.app.FindRecordsByFilter(%q, %q, \"\", -1, 0, map[string]any{\"v\": value})\n",
+			sc.Via.Collection, sc.Via.MatchParamTo+" = {:v}")
+		b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
+		b.WriteString("\tids := make([]string, 0, len(rows))\n")
+		b.WriteString("\tfor _, r := range rows {\n")
+		fmt.Fprintf(b, "\t\tids = append(ids, r.GetString(%q))\n", sc.Via.SelectField)
+		b.WriteString("\t}\n\treturn ids, nil\n}\n\n")
+	}
+}
+
+// derivedAction is one event's effect on one derived field, resolved from a
+// FieldDerivation's split on/off/increment/decrement/add/subtract id lists
+// into a single per-event, per-field operation.
+type derivedAction struct {
+	field       string
+	kind        string
+	boolValue   bool
+	delta       int
+	sign        float64
+	amountField string
+	rowKeyField string // count/sum only; "" is unused by toggle
+}
+
+func (a derivedAction) call() string {
+	switch a.kind {
+	case DerivationToggle:
+		return fmt.Sprintf("p.setToggle(ctx, ev.AggregateID, %q, %t)", a.field, a.boolValue)
+	case DerivationCount:
+		return fmt.Sprintf("p.bumpCount(ctx, ev, %q, %q, %d)", a.field, a.rowKeyField, a.delta)
+	case DerivationSum:
+		return fmt.Sprintf("p.bumpSum(ctx, ev, %q, %q, %q, %g)", a.field, a.amountField, a.rowKeyField, a.sign)
+	default:
+		return "nil" // unreachable: Validate rejects any other kind before generation runs
+	}
+}
+
+// collectDerivedActions indexes every derived field's trigger events into
+// per-event action lists, plus the events in FIRST-SEEN order across fields
+// (declaration order) so the generated switch is deterministic across
+// regenerations of the same model — map iteration order is not.
+func collectDerivedActions(fields []Field, rmKey string) (map[string][]derivedAction, []string) {
+	actions := map[string][]derivedAction{}
+	var order []string
+	add := func(ev string, a derivedAction) {
+		if _, ok := actions[ev]; !ok {
+			order = append(order, ev)
+		}
+		actions[ev] = append(actions[ev], a)
+	}
+	for _, f := range fields {
+		dv := f.Derivation
+		if dv == nil {
+			continue
+		}
+		switch dv.Kind {
+		case DerivationToggle:
+			for _, ev := range dv.OnEventIDs {
+				add(ev, derivedAction{field: f.Name, kind: DerivationToggle, boolValue: true})
+			}
+			for _, ev := range dv.OffEventIDs {
+				add(ev, derivedAction{field: f.Name, kind: DerivationToggle, boolValue: false})
+			}
+		case DerivationCount:
+			rowKey := dv.RowKeyField
+			if rowKey == "" {
+				rowKey = rmKey
+			}
+			for _, ev := range dv.IncrementOnEventIDs {
+				add(ev, derivedAction{field: f.Name, kind: DerivationCount, delta: 1, rowKeyField: rowKey})
+			}
+			for _, ev := range dv.DecrementOnEventIDs {
+				add(ev, derivedAction{field: f.Name, kind: DerivationCount, delta: -1, rowKeyField: rowKey})
+			}
+		case DerivationSum:
+			rowKey := dv.RowKeyField
+			if rowKey == "" {
+				rowKey = rmKey
+			}
+			for _, ev := range dv.AddOnEventIDs {
+				add(ev, derivedAction{field: f.Name, kind: DerivationSum, sign: 1, amountField: dv.AmountField, rowKeyField: rowKey})
+			}
+			for _, ev := range dv.SubtractOnEventIDs {
+				add(ev, derivedAction{field: f.Name, kind: DerivationSum, sign: -1, amountField: dv.AmountField, rowKeyField: rowKey})
+			}
+		}
+	}
+	return actions, order
+}
+
+// plainColumnNames is columnNames restricted to fields with no derivation —
+// a derived field is never generically copied from a same-named payload
+// key, it is only ever set by its own dedicated helper.
+func plainColumnNames(fields []Field, key string) []string {
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f.Name != key && f.Derivation == nil {
+			out = append(out, f.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// derivedFieldDefault is one derived field's zero-state initializer, applied
+// when getOrCreate creates a brand new row so a field a fixture never
+// exercises still reads as its declared initial value rather than a bare
+// PocketBase zero-value gap.
+type derivedFieldDefault struct{ name, literal string }
+
+func derivedInitDefaults(fields []Field) []derivedFieldDefault {
+	var out []derivedFieldDefault
+	for _, f := range fields {
+		dv := f.Derivation
+		if dv == nil {
+			continue
+		}
+		switch dv.Kind {
+		case DerivationToggle:
+			out = append(out, derivedFieldDefault{f.Name, fmt.Sprintf("%t", dv.Initial)})
+		case DerivationCount:
+			out = append(out, derivedFieldDefault{f.Name, "0"})
+		case DerivationSum:
+			out = append(out, derivedFieldDefault{f.Name, "0.0"})
+		}
+	}
+	return out
+}
+
+// subtractStrings returns from's entries that are not a key of the derived
+// actions map, preserving from's own order.
+func subtractStrings(from []string, derived map[string][]derivedAction) []string {
+	out := make([]string, 0, len(from))
+	for _, s := range from {
+		if _, ok := derived[s]; !ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (d Domain) reactorGo(pkg string, r Reactor) string {

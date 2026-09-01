@@ -250,3 +250,192 @@ func TestGeneratedGoDomainCompiles(t *testing.T) {
 		t.Fatalf("generated domain failed to build:\n%s", out)
 	}
 }
+
+// finding3Domain exercises every Finding 3 shape in one aggregate: an
+// endsStream event resetting Exists, a toggle derivation, a count
+// derivation with an explicit rowKeyField (cross-stream events, the
+// staffCount case), a sum derivation, and a scoped read model with no
+// derivation at all (the flagged-entries case) -- proposal Examples 1-4.
+func finding3Domain() Domain {
+	return Domain{
+		Aggregate: "staff",
+		Commands: []Command{
+			{Name: "CreateStaff", Once: true,
+				Fields: []Field{{Name: "name", Type: "text"}},
+				Events: []Event{{Name: "StaffCreated", Fields: []Field{{Name: "name", Type: "text"}}}}},
+			{Name: "EnableSso", RequiresExisting: true,
+				Events: []Event{{Name: "StaffSsoEnabled", NoFields: true}}},
+			{Name: "DisableSso", RequiresExisting: true,
+				Events: []Event{{Name: "StaffSsoDisabled", NoFields: true}}},
+			{Name: "RemoveStaff", RequiresExisting: true,
+				Events: []Event{{Name: "StaffRemoved", NoFields: true, EndsStream: true}}},
+		},
+		ReadModels: []ReadModel{
+			{
+				Collection: "staffRoster",
+				Key:        "staffId",
+				Fields: []Field{
+					{Name: "name", Type: "text"},
+					{Name: "ssoEnabled", Type: "bool", Derivation: &FieldDerivation{
+						Kind: DerivationToggle, OnEventIDs: []string{"StaffSsoEnabled"}, OffEventIDs: []string{"StaffSsoDisabled"},
+					}},
+				},
+				On: []string{"StaffCreated", "StaffSsoEnabled", "StaffSsoDisabled"},
+			},
+			{
+				Collection: "projects",
+				Key:        "projectId",
+				Fields: []Field{
+					{Name: "staffCount", Type: "number", Derivation: &FieldDerivation{
+						Kind: DerivationCount, IncrementOnEventIDs: []string{"StaffAssignedToProject"},
+						DecrementOnEventIDs: []string{"StaffUnassignedFromProject"}, RowKeyField: "projectId",
+					}},
+					{Name: "totalHours", Type: "number", Derivation: &FieldDerivation{
+						Kind: DerivationSum, AddOnEventIDs: []string{"TimeLogged"}, SubtractOnEventIDs: []string{"TimeReversed"},
+						AmountField: "hours", RowKeyField: "projectId",
+					}},
+				},
+				On: []string{"StaffAssignedToProject", "StaffUnassignedFromProject", "TimeLogged", "TimeReversed"},
+			},
+			{
+				Collection: "flaggedEntries",
+				Key:        "entryId",
+				Fields:     []Field{{Name: "projectId", Type: "text"}},
+				On:         []string{"EntryFlagged"},
+				Scopes: []ReadModelScope{{
+					Param: "pmStaffId",
+					Via: ReadModelScopeVia{
+						Collection: "projectManagers", MatchParamTo: "staffId",
+						SelectField: "projectId", FilterLocalField: "projectId",
+					},
+				}},
+			},
+		},
+	}
+}
+
+// TestFinding3EndsStreamResetsExists: an endsStream event must emit
+// `s.Exists = false` in Evolve, not the unconditional `true` every other
+// event gets.
+func TestFinding3EndsStreamResetsExists(t *testing.T) {
+	files, err := finding3Domain().GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := files[0].Source
+	if !strings.Contains(dec, "case StaffRemoved:\n\t\t\t\ts.Exists = false") {
+		t.Errorf("expected StaffRemoved to reset Exists to false:\n%s", dec)
+	}
+	if !strings.Contains(dec, "case StaffCreated:") || strings.Contains(dec, "case StaffCreated:\n\t\t\t\ts.Exists = false") {
+		t.Errorf("a non-endsStream event must still set Exists true:\n%s", dec)
+	}
+}
+
+// TestFinding3ProjectionDerivations: the projection for a toggle + a
+// cross-stream count + a sum must route each trigger event to its own
+// dedicated helper, not the generic merge, and getOrCreate must seed every
+// derived field's initial value on a brand new row.
+func TestFinding3ProjectionDerivations(t *testing.T) {
+	files, err := finding3Domain().GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	roster := files[1].Source // staffRoster
+	for _, want := range []string{
+		`case "StaffSsoEnabled":`,
+		`return p.setToggle(ctx, ev.AggregateID, "ssoEnabled", true)`,
+		`case "StaffSsoDisabled":`,
+		`return p.setToggle(ctx, ev.AggregateID, "ssoEnabled", false)`,
+		`case "StaffCreated":`,
+		"return p.applyMerge(ctx, ev)",
+		`rec.Set("ssoEnabled", false)`, // Initial default seeded on create
+	} {
+		if !strings.Contains(roster, want) {
+			t.Errorf("staffRoster projection missing %q:\n%s", want, roster)
+		}
+	}
+
+	projects := files[2].Source // projects
+	for _, want := range []string{
+		`case "StaffAssignedToProject":`,
+		`return p.bumpCount(ctx, ev, "staffCount", "projectId", 1)`,
+		`case "StaffUnassignedFromProject":`,
+		`return p.bumpCount(ctx, ev, "staffCount", "projectId", -1)`,
+		`case "TimeLogged":`,
+		`return p.bumpSum(ctx, ev, "totalHours", "hours", "projectId", 1)`,
+		`case "TimeReversed":`,
+		`return p.bumpSum(ctx, ev, "totalHours", "hours", "projectId", -1)`,
+		`rec.Set("staffCount", 0)`,
+		`rec.Set("totalHours", 0.0)`,
+	} {
+		if !strings.Contains(projects, want) {
+			t.Errorf("projects projection missing %q:\n%s", want, projects)
+		}
+	}
+	if strings.Contains(projects, "applyMerge") {
+		t.Errorf("projects has no plain merge events; applyMerge must not be generated:\n%s", projects)
+	}
+}
+
+// TestFinding3ScopeResolver: a read model with a declared scope, even with
+// no derivation at all, gets a Resolve<Param> helper querying the via
+// collection.
+func TestFinding3ScopeResolver(t *testing.T) {
+	files, err := finding3Domain().GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagged := files[3].Source
+	for _, want := range []string{
+		"func (p *FlaggedEntriesProjection) ResolvePmStaffId(value string) ([]string, error) {",
+		`p.app.FindRecordsByFilter("projectManagers", "staffId = {:v}", "", -1, 0, map[string]any{"v": value})`,
+		`ids = append(ids, r.GetString("projectId"))`,
+	} {
+		if !strings.Contains(flagged, want) {
+			t.Errorf("flaggedEntries projection missing %q:\n%s", want, flagged)
+		}
+	}
+}
+
+// TestFinding3DomainCompiles proves the whole Finding 3 domain -- endsStream,
+// toggle, count, sum and a scope resolver together -- is not just
+// syntactically valid but actually compiles against the real pocketcqrs
+// packages, the same way TestGeneratedGoDomainCompiles proves the plain path.
+func TestFinding3DomainCompiles(t *testing.T) {
+	repoRoot, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := finding3Domain().GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	goMod := "module finding3-domain-smoke\n\ngo 1.25.0\n\n" +
+		"require github.com/jamestryand/pocketcqrs v0.0.0\n\n" +
+		"replace github.com/jamestryand/pocketcqrs => " + repoRoot + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, f.Name), []byte(f.Source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = dir
+	tidy.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
+	if out, err := tidy.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+
+	build := exec.Command("go", "build", "./...")
+	build.Dir = dir
+	build.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("Finding 3 domain failed to build:\n%s", out)
+	}
+}

@@ -80,8 +80,20 @@ type mapper struct {
 	rep         *Report
 	byAggregate map[string]*scaffold.Domain
 	// eventAggregate remembers where each event id landed, so a read model
-	// and a reactor can find the aggregate that owns their events.
+	// and a reactor can find the aggregate that owns their events. Built
+	// incrementally as commands are mapped.
 	eventAggregate map[string]string
+	// eventOwners resolves which aggregate's stream every produced event
+	// belongs to, statically from each slice's own command tag and
+	// independent of mapping order -- hasCreateEvidence / hasUpdateEvidence
+	// need it for every given event up front, including ones from slices
+	// later in document order.
+	eventOwners map[string]string
+	// eventEndsStream marks the ids of events tagged `endsStream: true` in
+	// the source document -- scenarioNetExists needs this to fold a
+	// scenario's `given` into a net "does the stream currently exist"
+	// verdict rather than just scanning for own-stream presence. Finding 3.
+	eventEndsStream map[string]bool
 }
 
 func (m *mapper) domain(name string) *scaffold.Domain {
@@ -118,10 +130,12 @@ func (m *mapper) aggregateFor(kind, id, tagged string) (string, bool) {
 
 func (m *mapper) mapSlices() {
 	m.eventAggregate = map[string]string{}
-	// stateChange slices first: an automation's dispatched command is only a
-	// create when its target aggregate has no other beginning (see
-	// mapAutomation), so every stateChange-derived create must already be
-	// registered before the automation pass runs.
+	m.eventOwners = m.buildEventOwners()
+	m.eventEndsStream = m.buildEventEndsStream()
+	// stateChange slices first, then automations: mapAutomation resolves a
+	// reactor's source aggregate from the incrementally-built eventAggregate
+	// map, and its trigger events are produced by stateChange slices, so
+	// those must map before the automation pass consults it.
 	for _, s := range m.doc.Slices {
 		if s.Pattern == PatternStateChange {
 			m.mapStateChange(s)
@@ -136,14 +150,82 @@ func (m *mapper) mapSlices() {
 	// adds only a screen, which has no runtime concept here.
 }
 
+// buildEventOwners resolves, for every event a stateChange or automation
+// slice produces, which aggregate's stream it belongs to -- statically, from
+// each slice's own command tag, independent of document order.
+// hasCreateEvidence needs this to tell a scenario's own-aggregate `given`
+// (real evidence the stream already exists) apart from a cross-aggregate
+// precondition (a different stream's event, which says nothing about this one).
+func (m *mapper) buildEventOwners() map[string]string {
+	owners := map[string]string{}
+	assign := func(agg string, eventIDs []string) {
+		for _, id := range eventIDs {
+			owners[id] = agg
+		}
+	}
+	// resolveAggregate is aggregateFor without the report side effects: this
+	// pre-pass only needs the name, and the real mapping pass reports every
+	// missing tag / applied override once, on its own call.
+	resolve := func(id, tagged string) string {
+		if tagged != "" {
+			return LowerFirst(scaffold.SanitizeName(tagged))
+		}
+		if override, ok := m.opts.AggregateOverrides[id]; ok && override != "" {
+			return LowerFirst(scaffold.SanitizeName(override))
+		}
+		return ""
+	}
+	for _, s := range m.doc.Slices {
+		if s.Pattern == PatternStateChange {
+			if agg := resolve(s.CommandID, m.doc.Commands[s.CommandID].Aggregate); agg != "" {
+				assign(agg, s.EventIDs)
+			}
+		}
+	}
+	for _, s := range m.doc.Slices {
+		if s.Pattern == PatternAutomation {
+			if agg := resolve(s.CommandID, m.doc.Commands[s.CommandID].Aggregate); agg != "" {
+				assign(agg, s.ResultEventIDs)
+			}
+		}
+	}
+	return owners
+}
+
+// buildEventEndsStream indexes every event the document tags
+// `endsStream: true`, by id. Cheap and total over m.doc.Events rather than
+// scoped to owned events the way buildEventOwners is -- scenarioNetExists
+// only ever looks an id up after already confirming it belongs to the
+// scenario's own aggregate, so an unscoped set costs nothing extra and
+// needs no ordering relative to the owners pass.
+func (m *mapper) buildEventEndsStream() map[string]bool {
+	ends := map[string]bool{}
+	for id, ev := range m.doc.Events {
+		if ev.EndsStream {
+			ends[id] = true
+		}
+	}
+	return ends
+}
+
 func (m *mapper) mapStateChange(s Slice) {
 	cmd := m.doc.Commands[s.CommandID]
 	agg, ok := m.aggregateFor("command", s.CommandID, cmd.Aggregate)
 	if !ok {
 		return
 	}
+	// A command with scenario evidence for BOTH a fresh stream
+	// (hasCreateEvidence) and an already-existing one (hasUpdateEvidence) is a
+	// genuine upsert: neither flag is set, so the decider template emits no
+	// existence check at all and the command always succeeds. With only
+	// create evidence it is the ordinary create-only rule; with neither, the
+	// pre-existing default (RequiresExisting) is unchanged.
+	hasCreate := m.hasCreateEvidence(s, agg)
+	hasUpdate := m.hasUpdateEvidence(s, agg)
+	once := hasCreate && !hasUpdate
+	requiresExisting := !hasCreate
 	d := m.domain(agg)
-	d.Commands = append(d.Commands, m.command(agg, s.CommandID, cmd, s.EventIDs, isCreate(s)))
+	d.Commands = append(d.Commands, m.command(agg, s.CommandID, cmd, s.EventIDs, once, requiresExisting))
 }
 
 // mapAutomation turns an automation slice into a reactor plus the command it
@@ -167,18 +249,23 @@ func (m *mapper) mapAutomation(s Slice) {
 
 	// An automation that dispatches ACROSS aggregates derives the target id
 	// from the source event, so it opens a new target stream per fire — but
-	// only when nothing else ever creates that aggregate (a notification
-	// raised per event). When the target IS created elsewhere (log an entry,
-	// then an invoice reaction locks it), the reaction fans out over streams
-	// that already exist, so the dispatched command is NOT a create. An
+	// only when this slice's own scenario evidence says so, the same rule
+	// hasCreateEvidence applies to a directly-invoked command: a `given`
+	// event on the TARGET aggregate's own stream is real evidence the stream
+	// already exists (the fan-out-lock case: log an entry, then an invoice
+	// reaction locks it), while a foreign-aggregate given (the trigger's own
+	// history) is not. This also lets two independent automations/commands
+	// each genuinely create the same aggregate TYPE (two triggers each
+	// raising a fresh notification) without one disqualifying the other,
+	// which the old "has this aggregate got a create yet" check could not. An
 	// automation whose target is its own trigger's aggregate (auto-ship an
 	// order) is never a create either. Getting this wrong makes the command's
 	// own scenario fail with "does not exist", which is how it was found.
 	crossAggregate := source != agg
 	target := m.domain(agg)
-	isCreate := crossAggregate && !domainHasCreate(target)
+	isCreate := crossAggregate && m.hasCreateEvidence(s, agg)
 	target.Commands = append(target.Commands,
-		m.command(agg, s.CommandID, cmd, s.ResultEventIDs, isCreate))
+		m.command(agg, s.CommandID, cmd, s.ResultEventIDs, isCreate, !isCreate))
 	triggers := make([]string, 0, len(s.TriggerEventIDs))
 	for _, id := range s.TriggerEventIDs {
 		triggers = append(triggers, m.eventType(id))
@@ -199,17 +286,17 @@ func (m *mapper) mapAutomation(s Slice) {
 
 // command builds one scaffold command and its events, folding field types
 // and reporting every fold that loses something.
-func (m *mapper) command(agg, id string, c Command, eventIDs []string, once bool) scaffold.Command {
+func (m *mapper) command(agg, id string, c Command, eventIDs []string, once, requiresExisting bool) scaffold.Command {
 	out := scaffold.Command{
 		Name:             m.commandName(id),
 		Fields:           m.fields("command "+id, c.Fields),
 		Once:             once,
-		RequiresExisting: !once,
+		RequiresExisting: requiresExisting,
 	}
 	for _, evID := range eventIDs {
 		ev := m.doc.Events[evID]
 		m.eventAggregate[evID] = agg
-		e := scaffold.Event{Name: m.eventType(evID)}
+		e := scaffold.Event{Name: m.eventType(evID), EndsStream: ev.EndsStream}
 		if len(ev.Fields) > 0 {
 			e.Fields = m.fields("event "+evID, ev.Fields)
 		} else {
@@ -232,11 +319,45 @@ func (m *mapper) fields(owner string, in []Field) []scaffold.Field {
 			m.rep.warnf("%s", note)
 		}
 		out = append(out, scaffold.Field{
-			Name: scaffold.SanitizeName(f.Name),
-			Type: FoldType(f),
+			Name:       scaffold.SanitizeName(f.Name),
+			Type:       FoldType(f),
+			Derivation: m.mapDerivation(f.Derivation),
 		})
 	}
 	return out
+}
+
+// mapDerivation carries a field's derivation through, resolving every event
+// id reference to the generated event TYPE name (m.eventType) rather than a
+// bare sanitized id — that's what the switch cases in deciderGo/
+// projectionGo actually match on, exactly as `On`/eventIDs are resolved
+// everywhere else in this file (see mapReadModels' `on` build).
+func (m *mapper) mapDerivation(in *FieldDerivation) *scaffold.FieldDerivation {
+	if in == nil {
+		return nil
+	}
+	types := func(ids []string) []string {
+		if len(ids) == 0 {
+			return nil
+		}
+		out := make([]string, len(ids))
+		for i, id := range ids {
+			out[i] = m.eventType(id)
+		}
+		return out
+	}
+	return &scaffold.FieldDerivation{
+		Kind:                in.Kind,
+		OnEventIDs:          types(in.OnEventIDs),
+		OffEventIDs:         types(in.OffEventIDs),
+		Initial:             in.Initial,
+		IncrementOnEventIDs: types(in.IncrementOnEventIDs),
+		DecrementOnEventIDs: types(in.DecrementOnEventIDs),
+		AddOnEventIDs:       types(in.AddOnEventIDs),
+		SubtractOnEventIDs:  types(in.SubtractOnEventIDs),
+		AmountField:         in.AmountField,
+		RowKeyField:         scaffold.SanitizeName(in.RowKeyField),
+	}
 }
 
 // mapReadModels attaches each read model to the aggregate owning the events
@@ -290,8 +411,40 @@ func (m *mapper) mapReadModels() {
 			Key:        key,
 			Fields:     m.fields("read model "+id, rm.Fields),
 			On:         on,
+			Scopes:     m.mapScopes(id, rm),
 		})
 	}
+}
+
+// mapScopes carries a read model's scopes through, resolving each
+// via.readModelId to its OWN generated collection name (see mapReadModels'
+// own `collectionName(rm.Name, id)` call) — the generator has no document to
+// look the id up in at codegen time, so the mapper is where this reference
+// must be resolved, exactly like eventType resolves an event id to its
+// generated type name.
+func (m *mapper) mapScopes(id string, rm ReadModel) []scaffold.ReadModelScope {
+	if len(rm.Scopes) == 0 {
+		return nil
+	}
+	out := make([]scaffold.ReadModelScope, 0, len(rm.Scopes))
+	for _, sc := range rm.Scopes {
+		via, ok := m.doc.ReadModels[sc.Via.ReadModelID]
+		if !ok {
+			m.rep.errorf("read model %q: scope %q names via read model %q, which does not exist",
+				id, sc.Param, sc.Via.ReadModelID)
+			continue
+		}
+		out = append(out, scaffold.ReadModelScope{
+			Param: sc.Param,
+			Via: scaffold.ReadModelScopeVia{
+				Collection:       scaffold.SanitizeName(collectionName(via.Name, sc.Via.ReadModelID)),
+				MatchParamTo:     scaffold.SanitizeName(sc.Via.MatchParamTo),
+				SelectField:      scaffold.SanitizeName(sc.Via.SelectField),
+				FilterLocalField: scaffold.SanitizeName(sc.Via.FilterLocalField),
+			},
+		})
+	}
+	return out
 }
 
 // readModelKey picks the row key. idAttribute is a gift here: it names the
@@ -328,27 +481,59 @@ func collectionName(name, id string) string {
 	return LowerFirst(TypeName(name, id))
 }
 
-// isCreate decides which command is the aggregate's "create".
-//
-// A scenario with an EMPTY `given` is a command applied to a stream that
-// does not exist yet — the document's own statement that this is the
-// beginning. That is a real signal rather than a guess, and where no
-// scenario says so the first command of the aggregate is used.
-func isCreate(s Slice) bool {
+// scenarioNetExists folds a scenario's `given` sequence into a net "does the
+// stream currently exist" verdict, tracking a synthesized `exists` exactly
+// as the generated decider's own Evolve will: a `given` event on the
+// slice's OWN aggregate stream sets `exists` true, unless it is tagged
+// `endsStream`, which resets it false; a foreign-aggregate given (an
+// ordinary cross-aggregate precondition, e.g. "the project exists") is not
+// evidence either way and is skipped. Order matters — this is a FOLD, not a
+// scan for presence — because a `given` that assigns then unassigns nets
+// back to "does not exist", which is create evidence, not update evidence
+// (Finding 3 / proposal Q5): scanning for "any own-stream event present"
+// would misclassify that reassignment case as update evidence and wrongly
+// turn off the create-only guard.
+func (m *mapper) scenarioNetExists(sc Scenario, agg string) bool {
+	exists := false
+	for _, g := range sc.Given {
+		if m.eventOwners[g.EventID] != agg {
+			continue
+		}
+		exists = !m.eventEndsStream[g.EventID]
+	}
+	return exists
+}
+
+// hasCreateEvidence reports whether a scenario proves this command opens a
+// fresh stream: its `given` nets to "does not exist" under scenarioNetExists.
+// An empty `given` is the obvious case (nets to false trivially); a `given`
+// ending on an `endsStream` event on the own stream is the reassign case —
+// also nets to false, also create evidence. Where no scenario qualifies
+// there is no create evidence. Shared by a directly-invoked command
+// (mapStateChange) and an automation's dispatched command (mapAutomation).
+func (m *mapper) hasCreateEvidence(s Slice, agg string) bool {
 	for _, sc := range s.Scenarios {
-		if sc.Kind == KindStateChange && len(sc.Given) == 0 {
+		if sc.Kind != KindStateChange {
+			continue
+		}
+		if !m.scenarioNetExists(sc, agg) {
 			return true
 		}
 	}
 	return false
 }
 
-// domainHasCreate reports whether any command already mapped onto d is the
-// aggregate's beginning. Used to decide whether a cross-aggregate automation
-// opens a new stream or fans out over existing ones.
-func domainHasCreate(d *scaffold.Domain) bool {
-	for _, c := range d.Commands {
-		if c.Once {
+// hasUpdateEvidence is the mirror of hasCreateEvidence: a scenario proves
+// this command can run against an ALREADY-existing stream when its `given`
+// nets to "exists" under scenarioNetExists. A command with BOTH kinds of
+// evidence is a genuine upsert (see mapStateChange) — neither strictly
+// create-only nor strictly requires-existing, so neither guard applies.
+func (m *mapper) hasUpdateEvidence(s Slice, agg string) bool {
+	for _, sc := range s.Scenarios {
+		if sc.Kind != KindStateChange {
+			continue
+		}
+		if m.scenarioNetExists(sc, agg) {
 			return true
 		}
 	}
