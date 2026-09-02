@@ -153,3 +153,82 @@ The dashboard's flow is the one to copy:
 For unattended consumers (a read-model sink, a batch job), authenticate the
 same way at startup and re-authenticate on the first `401`, rather than
 holding a token indefinitely.
+
+## Querying read models with declared `scopes`/`filters`
+
+An `eventmodelschema` document may declare a read model's `scopes` (a
+semi-join query param resolved through another read model) or `filters` (a
+`dateRange` param narrowing one of the read model's own fields, schema
+2.4.0). **Neither generates an HTTP route.** Every read model is already
+served generically at `GET /api/collections/{collection}/records`, and
+PocketBase's own `filter=` query syntax covers both shapes directly —
+confirmed against a real read-model collection carrying both a relation
+field and a date field (`functions.TestPocketBaseFilterCoversScopesAndDateRange`),
+not assumed from the plain unscoped example above.
+
+**A `scopes` semi-join is a relation-traversal filter.** If the read model's
+own column is a `relation(<target>)` field (`//@schema`; see
+[`js-guide.md`](js-guide.md) and [`reference/directives.md`](reference/directives.md)),
+PocketBase's dot-notation lets a filter traverse it directly — no separate
+lookup query, no local `IN (...)` set to build client-side:
+
+```
+GET /api/collections/time_entries/records
+    ?filter=projectId.managerId = "<pmRecordId>"
+```
+
+This does the same job `ReadModelScope`'s `via`/`matchParamTo`/`selectField`/
+`filterLocalField` shape describes (and the same job `emschema/verify.go`'s
+`filterByScopes` simulates for scenario checking) — but as one relation
+column and one filter clause, rather than a resolved id set. If the read
+model's own field is a plain column instead of a `relation(...)` (the shape
+`ReadModelScope` itself assumes — see `docs/schema.md`'s field-types table),
+resolve the id set with a separate request first, the same way any
+client-side join would.
+
+**A `dateRange` filter is a named preset translated to a literal date
+range.** `readModel.filters`' `presets` (`last7Days` / `lastCalendarMonth` /
+`custom`) name date math PocketBase's `filter=` has no concept of — the
+*translation* is this project's job, not PocketBase's:
+
+```js
+// client-side (or a small server-side helper with the same table) —
+// resolve a named preset to concrete bounds, then build an ordinary filter=
+function dateRangeBounds(preset, custom) {
+  const fmt = d => d.toISOString().slice(0, 10) + ' 00:00:00.000Z';
+  const today = new Date();
+  switch (preset) {
+    case 'last7Days': {
+      const from = new Date(today); from.setUTCDate(from.getUTCDate() - 6);
+      return { from: fmt(from), to: fmt(today) };
+    }
+    case 'lastCalendarMonth': {
+      const firstOfThisMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+      const lastMonthEnd = new Date(firstOfThisMonth - 1);
+      const from = new Date(Date.UTC(lastMonthEnd.getUTCFullYear(), lastMonthEnd.getUTCMonth(), 1));
+      return { from: fmt(from), to: fmt(lastMonthEnd) };
+    }
+    case 'custom':
+      return { from: custom.from, to: custom.to };
+  }
+}
+
+const { from, to } = dateRangeBounds('last7Days');
+const filter = `taskDate >= "${from} 00:00:00.000Z" && taskDate <= "${to} 23:59:59.999Z"`;
+fetch(`/api/collections/time_entries/records?filter=${encodeURIComponent(filter)}`);
+```
+
+This mirrors `emschema/verify.go`'s `resolveDateRangeFilter`, the Go-side
+equivalent used to check a `dateRange` scenario against the generated
+projection at import time — same preset math, same `{"kind": "last7Days"}` /
+`{"kind": "custom", "from": "...", "to": "..."}` runtime convention Stage 1
+of `eventmodelschema` 2.4.0 documented, just resolved against the wall
+clock on the query side instead of a scenario fixture.
+
+Both can combine in one request, exactly as a `pmStaffId`-scoped,
+`dateRange`-filtered `time-entries` query would need to:
+
+```
+GET /api/collections/time_entries/records
+    ?filter=projectId.managerId = "<pmId>" && taskDate >= "..." && taskDate <= "..."
+```

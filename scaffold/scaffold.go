@@ -182,6 +182,11 @@ type ReadModel struct {
 	// another read model (a semi-join) rather than a plain column filter.
 	// Finding 3.
 	Scopes []ReadModelScope `json:"scopes,omitempty"`
+	// Filters declares a single-field WHERE-range query filter against one
+	// of this read model's OWN columns (Field, already sanitized), with
+	// named presets rather than a raw date range — sibling to Scopes.
+	// Schema 2.4.0 / F-20's dateRange follow-up.
+	Filters []ReadModelFilter `json:"filters,omitempty"`
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
@@ -200,6 +205,31 @@ type ReadModelScopeVia struct {
 	MatchParamTo     string `json:"matchParamTo"`
 	SelectField      string `json:"selectField"`
 	FilterLocalField string `json:"filterLocalField"`
+}
+
+// Filter kinds. dateRange is the only one schema 2.4.0 defines; Kind stays
+// a string (not an enum type) so a future kind needs no Go API break, the
+// same reasoning FieldDerivation.Kind already uses.
+const FilterDateRange = "dateRange"
+
+// DateRangePreset values, per the schema's closed dateRangePreset enum.
+const (
+	DateRangePresetLast7Days         = "last7Days"
+	DateRangePresetLastCalendarMonth = "lastCalendarMonth"
+	DateRangePresetCustom            = "custom"
+)
+
+// ReadModelFilter declares one query param as a range filter over one of
+// this read model's own fields (Field, already the sanitized column name —
+// resolved by the mapper, the same treatment ReadModelScopeVia.Collection
+// gets). Kind is currently always FilterDateRange; Presets is the closed set
+// of named presets this filter accepts, required non-empty for a dateRange
+// filter.
+type ReadModelFilter struct {
+	Param   string   `json:"param"`
+	Field   string   `json:"field"`
+	Kind    string   `json:"kind"`
+	Presets []string `json:"presets,omitempty"`
 }
 
 // Reactor maps events to a command on another aggregate — the automation
@@ -394,6 +424,39 @@ func (d Domain) Validate() error {
 			if sc.Via.Collection == "" || sc.Via.MatchParamTo == "" || sc.Via.SelectField == "" || sc.Via.FilterLocalField == "" {
 				add("read model %q: scope %q is missing one of via.collection/matchParamTo/selectField/filterLocalField",
 					rm.Collection, sc.Param)
+			}
+		}
+		fieldNames := map[string]bool{}
+		for _, f := range rm.Fields {
+			fieldNames[f.Name] = true
+		}
+		for _, filt := range rm.Filters {
+			if filt.Param == "" {
+				add("read model %q: a filter is missing its param name", rm.Collection)
+			}
+			switch filt.Kind {
+			case FilterDateRange:
+				if filt.Field == "" {
+					add("read model %q: filter %q is missing its field name", rm.Collection, filt.Param)
+				} else if !fieldNames[filt.Field] {
+					add("read model %q: filter %q names field %q, which is not one of this read model's own fields",
+						rm.Collection, filt.Param, filt.Field)
+				}
+				if len(filt.Presets) == 0 {
+					add("read model %q: filter %q is a dateRange filter but declares no presets",
+						rm.Collection, filt.Param)
+				}
+				for _, p := range filt.Presets {
+					switch p {
+					case DateRangePresetLast7Days, DateRangePresetLastCalendarMonth, DateRangePresetCustom:
+					default:
+						add("read model %q: filter %q declares unknown preset %q; use last7Days, lastCalendarMonth or custom",
+							rm.Collection, filt.Param, p)
+					}
+				}
+			default:
+				add("read model %q: filter %q has kind %q; only dateRange is supported",
+					rm.Collection, filt.Param, filt.Kind)
 			}
 		}
 		// NOTE: a read model listening for an event no command here produces

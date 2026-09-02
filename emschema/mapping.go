@@ -450,6 +450,7 @@ func (m *mapper) mapReadModels() {
 			Fields:     m.fields("read model "+id, rm.Fields),
 			On:         on,
 			Scopes:     m.mapScopes(id, rm),
+			Filters:    m.mapFilters(id, rm),
 		})
 	}
 }
@@ -480,6 +481,49 @@ func (m *mapper) mapScopes(id string, rm ReadModel) []scaffold.ReadModelScope {
 				SelectField:      scaffold.SanitizeName(sc.Via.SelectField),
 				FilterLocalField: scaffold.SanitizeName(sc.Via.FilterLocalField),
 			},
+		})
+	}
+	return out
+}
+
+// mapFilters carries a read model's declared query filters through,
+// resolving each Field reference against the read model's own columns —
+// this mapper has the document's field list to hand; the generated code
+// does not, so the reference must be resolved here, the same reasoning
+// mapScopes uses for a via read model's id. Rejects a filter kind other than
+// "dateRange" (the only kind schema 2.4.0 defines), mirroring how a groupBy
+// toggle subfield is rejected here rather than left to fail deep inside
+// generation or verification.
+func (m *mapper) mapFilters(id string, rm ReadModel) []scaffold.ReadModelFilter {
+	if len(rm.Filters) == 0 {
+		return nil
+	}
+	fieldNames := map[string]bool{}
+	for _, f := range rm.Fields {
+		fieldNames[scaffold.SanitizeName(f.Name)] = true
+	}
+	out := make([]scaffold.ReadModelFilter, 0, len(rm.Filters))
+	for _, filt := range rm.Filters {
+		if filt.Kind != FilterDateRange {
+			m.rep.errorf("read model %q: filter %q has kind %q; only %q is supported",
+				id, filt.Param, filt.Kind, FilterDateRange)
+			continue
+		}
+		field := scaffold.SanitizeName(filt.Field)
+		if !fieldNames[field] {
+			m.rep.errorf("read model %q: filter %q names field %q, which is not one of this read model's own fields",
+				id, filt.Param, filt.Field)
+			continue
+		}
+		if len(filt.Presets) == 0 {
+			m.rep.errorf("read model %q: filter %q declares no presets", id, filt.Param)
+			continue
+		}
+		out = append(out, scaffold.ReadModelFilter{
+			Param:   filt.Param,
+			Field:   field,
+			Kind:    filt.Kind,
+			Presets: append([]string(nil), filt.Presets...),
 		})
 	}
 	return out

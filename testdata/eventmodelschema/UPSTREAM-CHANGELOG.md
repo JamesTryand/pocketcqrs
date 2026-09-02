@@ -3,6 +3,23 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 2.4.0
+
+**Additive (non-breaking):**
+- `readModel` gains an optional `filters` (new `$def` `readModelFilter`, array of
+  `{ param, field, kind, presets }`): declares a single-field WHERE-range query filter
+  against one of the read model's own columns, with named presets (`last7Days`/
+  `lastCalendarMonth`/`custom`, new `$def` `dateRangePreset`) rather than a raw date
+  range. `kind` is currently always `"dateRange"` (new `$def` `filterKind`), shaped as a
+  discriminator for a possible future second kind.
+
+See `docs/design-notes.md` ("v2.4.0: `readModel.filters`...") for why presets are a
+closed enum, the documented (not schema-enforced) runtime `queryParams` value
+convention, and why this deliberately does not solve `staffTotals`-style cross-row
+correlation.
+
+A 2.3.0 document validates unchanged against 2.4.0.
+
 ## 2.3.0
 
 **Additive (non-breaking):**

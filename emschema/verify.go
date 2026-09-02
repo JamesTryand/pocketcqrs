@@ -7,12 +7,17 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/scaffold"
 )
+
+// nowFunc is time.Now, overridable in tests so last7Days/lastCalendarMonth
+// resolve against a fixed reference instant instead of the real clock.
+var nowFunc = time.Now
 
 // scenarioStream is the aggregate id every scenario runs against.
 //
@@ -334,7 +339,12 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		res.Detail = scopeErr
 		return
 	}
-	matches := selectRows(scopedRows, remainingParams)
+	filteredRows, remainingParams, filterErr := filterByFilters(rm, scopedRows, remainingParams)
+	if filterErr != "" {
+		res.Detail = filterErr
+		return
+	}
+	matches := selectRows(filteredRows, remainingParams)
 
 	// Two `then.result` shapes are supported. A single-property object whose
 	// value is a JSON array (e.g. `{"entries": [...]}`) is a NAMED-LIST
@@ -513,6 +523,157 @@ func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, 
 	return filtered, encoded, ""
 }
 
+// filterByFilters applies a read model's declared `filters` (schema 2.4.0,
+// F-20's dateRange follow-up) to a stateView scenario's rows, mirroring
+// filterByScopes' shape: a declared filter param has no matching column on
+// this read model (its param name, e.g. `dateRange`, is not itself a field —
+// the range applies to a DIFFERENT field, named by filt.Field), so it must
+// be resolved and removed from queryParams BEFORE selectRows' plain
+// field-equality match runs, exactly like a scope param.
+//
+// This is the direct Go-side fix for the gap Findings 1-3 confirmed in both
+// the .NET harness and this one: a queryParams value that is a JSON object
+// (a dateRange param's own {"kind": ...} shape) was previously deleted by
+// selectRows rather than turned into a predicate, because there was no
+// column or declared filter for it to become one against. A read model that
+// declares the param in Filters now gets a real range predicate instead.
+func filterByFilters(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage) (map[string]map[string]any, json.RawMessage, string) {
+	if len(rm.Filters) == 0 || len(queryParams) == 0 {
+		return rows, queryParams, ""
+	}
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(queryParams, &params); err != nil {
+		return rows, queryParams, ""
+	}
+	remaining := map[string]json.RawMessage{}
+	for k, v := range params {
+		remaining[k] = v
+	}
+
+	filtered := rows
+	for _, filt := range rm.Filters {
+		raw, present := params[filt.Param]
+		if !present {
+			continue
+		}
+		delete(remaining, filt.Param)
+
+		if filt.Kind != FilterDateRange {
+			return nil, nil, fmt.Sprintf("filter %q has kind %q, which this verifier does not know how to apply",
+				filt.Param, filt.Kind)
+		}
+		var val map[string]any
+		if err := json.Unmarshal(raw, &val); err != nil {
+			return nil, nil, fmt.Sprintf(
+				"filter %q's queryParams value must be an object like {\"kind\": \"last7Days\"}, got %s", filt.Param, raw)
+		}
+		preset, _ := val["kind"].(string)
+		allowed := false
+		for _, p := range filt.Presets {
+			if p == preset {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, nil, fmt.Sprintf("filter %q: preset %q is not one of this filter's declared presets %v",
+				filt.Param, preset, filt.Presets)
+		}
+		from, to, err := resolveDateRangeFilter(preset, val, nowFunc())
+		if err != nil {
+			return nil, nil, fmt.Sprintf("filter %q: %v", filt.Param, err)
+		}
+
+		next := map[string]map[string]any{}
+		for key, row := range filtered {
+			t, ok := parseFilterDate(row[filt.Field])
+			if ok && !t.Before(from) && !t.After(to) {
+				next[key] = row
+			}
+		}
+		filtered = next
+	}
+
+	encoded, err := json.Marshal(remaining)
+	if err != nil {
+		return nil, nil, "encoding the remaining query params: " + err.Error()
+	}
+	return filtered, encoded, ""
+}
+
+// resolveDateRangeFilter resolves a dateRange filter's runtime queryParams
+// value to concrete, inclusive [from, to] bounds in UTC.
+//
+// last7Days and lastCalendarMonth are computed relative to ref (nowFunc()
+// at call time, a fixed instant in tests); custom uses the caller-supplied
+// from/to literally. This is the documented (not schema-enforced) runtime
+// convention Stage 1 recorded: {"kind": "last7Days"} or
+// {"kind": "custom", "from": "2026-08-01", "to": "2026-08-31"}.
+func resolveDateRangeFilter(preset string, val map[string]any, ref time.Time) (from, to time.Time, err error) {
+	ref = ref.UTC()
+	switch preset {
+	case DateRangePresetLast7Days:
+		to = startOfDay(ref)
+		from = to.AddDate(0, 0, -6)
+	case DateRangePresetLastCalendarMonth:
+		firstOfThisMonth := time.Date(ref.Year(), ref.Month(), 1, 0, 0, 0, 0, time.UTC)
+		lastMonthEnd := firstOfThisMonth.AddDate(0, 0, -1)
+		from = time.Date(lastMonthEnd.Year(), lastMonthEnd.Month(), 1, 0, 0, 0, 0, time.UTC)
+		to = startOfDay(lastMonthEnd)
+	case DateRangePresetCustom:
+		fromStr, _ := val["from"].(string)
+		toStr, _ := val["to"].(string)
+		if fromStr == "" || toStr == "" {
+			return time.Time{}, time.Time{}, fmt.Errorf("a custom dateRange needs both \"from\" and \"to\"")
+		}
+		from, err = parseFilterDateString(fromStr)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("\"from\" %q: %w", fromStr, err)
+		}
+		to, err = parseFilterDateString(toStr)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("\"to\" %q: %w", toStr, err)
+		}
+	default:
+		return time.Time{}, time.Time{}, fmt.Errorf("unsupported dateRange preset %q", preset)
+	}
+	return from, to, nil
+}
+
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// dateFilterLayouts are the formats a fixture's date field or a custom
+// bound may use. "2006-01-02" is what every real scenario in this repo's
+// own testdata uses; RFC3339 is accepted too since a real PocketBase "date"
+// column round-trips through that format.
+var dateFilterLayouts = []string{"2006-01-02", time.RFC3339, "2006-01-02 15:04:05.000Z"}
+
+func parseFilterDateString(s string) (time.Time, error) {
+	for _, layout := range dateFilterLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("not a recognized date (want YYYY-MM-DD or RFC3339)")
+}
+
+// parseFilterDate reads a row's field value as a date. A row whose value
+// isn't a string, or doesn't parse, is excluded rather than guessed at —
+// same "no vacuous pass" posture the rest of this verifier takes.
+func parseFilterDate(v any) (time.Time, bool) {
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return time.Time{}, false
+	}
+	t, err := parseFilterDateString(s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
 // fixtureStore builds a scratch event store holding the scenario's `given`.
 func (v *verifier) fixtureStore(id, aggregate, stream string, given []EventRef) (*events.Store, error) {
 	path := filepath.Join(v.dir, scaffold.SanitizeName(id)+".db")
@@ -571,12 +732,15 @@ func (v *verifier) commandName(id string) string {
 //
 // queryParams is a free-form object in the schema, so it is treated as a
 // field match: every row whose fields equal every (filterable) parameter.
-// With no params, every row is returned. A queryParam whose value is a JSON
-// object or array (e.g. a date-range param) names filtering logic no
-// generator emits — there's no column it could match — so it's skipped here
-// rather than forced through a string/number comparison that could only ever
-// fail; the ROW CONTENT comparison the caller does afterwards still reports
-// the real gap the scenario is describing.
+// With no params, every row is returned. By the time this runs, a scope
+// param (filterByScopes) or a declared dateRange filter param
+// (filterByFilters) has already been resolved and removed from params by
+// the caller. A queryParam whose value is STILL a JSON object or array here
+// names filtering logic no read model declared — there's no column and no
+// Filters/Scopes entry it could match — so it's skipped rather than forced
+// through a string/number comparison that could only ever fail; the ROW
+// CONTENT comparison the caller does afterwards still reports the real gap
+// the scenario is describing.
 func selectRows(rows map[string]map[string]any, params json.RawMessage) []map[string]any {
 	var want map[string]any
 	if len(params) > 0 {

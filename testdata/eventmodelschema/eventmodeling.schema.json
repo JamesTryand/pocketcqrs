@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "2.3.0"
+      "default": "2.4.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -251,6 +251,38 @@
       "additionalProperties": false
     },
 
+    "filterKind": { "enum": ["dateRange"] },
+
+    "dateRangePreset": { "enum": ["last7Days", "lastCalendarMonth", "custom"] },
+
+    "readModelFilter": {
+      "type": "object",
+      "required": ["param", "field", "kind"],
+      "properties": {
+        "param": { "type": "string", "minLength": 1 },
+        "field": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/filterKind" }
+      },
+      "allOf": [
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "dateRange" } } },
+          "then": {
+            "type": "object",
+            "required": ["presets"],
+            "properties": {
+              "presets": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/dateRangePreset" },
+                "minItems": 1,
+                "uniqueItems": true
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
     "readModel": {
       "type": "object",
       "required": ["name"],
@@ -269,6 +301,10 @@
         "scopes": {
           "type": "array",
           "items": { "$ref": "#/$defs/readModelScope" }
+        },
+        "filters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/readModelFilter" }
         }
       },
       "additionalProperties": false

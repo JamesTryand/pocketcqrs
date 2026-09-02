@@ -3,10 +3,10 @@
 // project's intermediate domain model.
 //
 // The types below mirror eventmodeling.schema.json as read at commit
-// bb4a060, "Schema 2.3.0: groupBy derivation for nested rollups",
-// 2026-09-02. A vendored copy of that schema and its worked examples lives
-// in testdata/eventmodelschema/, with the source commit recorded in
-// PROVENANCE.md.
+// 0acc987, "Schema 2.4.0: readModel.filters for single-field date-range
+// query filtering", 2026-09-02. A vendored copy of that schema and its
+// worked examples lives in testdata/eventmodelschema/, with the source
+// commit recorded in PROVENANCE.md.
 //
 // Two things about the source format shape everything here:
 //
@@ -104,6 +104,10 @@ type ReadModel struct {
 	// another read model (a semi-join) rather than a plain column filter.
 	// Added in schema 2.2.0 (Finding 3).
 	Scopes []ReadModelScope `json:"scopes,omitempty"`
+	// Filters declares a single-field WHERE-range query filter against one
+	// of this read model's own columns, with named presets rather than a
+	// raw date range. Sibling to Scopes, added in schema 2.4.0.
+	Filters []ReadModelFilter `json:"filters,omitempty"`
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
@@ -126,6 +130,34 @@ type ReadModelScopeVia struct {
 	SelectField      string `json:"selectField"`
 	FilterLocalField string `json:"filterLocalField"`
 }
+
+// ReadModelFilter declares one query param as a range filter over one of
+// this read model's own fields — e.g. `dateRange` narrows `taskDate` between
+// two bounds resolved from a named preset. Kind is discriminated the same
+// way as FieldDerivation.Kind and Slice.Pattern: currently always
+// "dateRange", shaped to admit a future second kind. Presets is required and
+// non-empty whenever Kind is "dateRange" (schema-enforced upstream).
+//
+// The runtime queryParams value shape ({"kind": "last7Days"} or
+// {"kind": "custom", "from": "...", "to": "..."}) is a documented
+// convention, not part of the schema — see resolveDateRangeFilter.
+type ReadModelFilter struct {
+	Param   string   `json:"param"`
+	Field   string   `json:"field"`
+	Kind    string   `json:"kind"`
+	Presets []string `json:"presets,omitempty"`
+}
+
+// FilterDateRange is the one ReadModelFilter.Kind value the schema defines
+// as of 2.4.0.
+const FilterDateRange = "dateRange"
+
+// DateRangePreset values, per the schema's closed dateRangePreset enum.
+const (
+	DateRangePresetLast7Days         = "last7Days"
+	DateRangePresetLastCalendarMonth = "lastCalendarMonth"
+	DateRangePresetCustom            = "custom"
+)
 
 // Screen is design-time notation with no runtime concept here — but it is
 // REQUIRED on stateChange and stateView slices, so an export has to
@@ -302,8 +334,9 @@ type Hotspot struct {
 // `translation` pattern; 2.1.0 (2026-08-30) is additive only, a new
 // `sliceStatus` value (`accepted`); 2.2.0 (2026-09-01) is additive only,
 // `field.derivation`, `event.endsStream`, `readModel.scopes`; 2.3.0
-// (2026-09-02) is additive only, `field.derivation` gains kind `groupBy`.
-const SchemaVersion = "2.3.0"
+// (2026-09-02) is additive only, `field.derivation` gains kind `groupBy`;
+// 2.4.0 (2026-09-02) is additive only, `readModel` gains `filters`.
+const SchemaVersion = "2.4.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (
