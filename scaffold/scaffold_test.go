@@ -242,6 +242,65 @@ func TestEventFieldsAreNotInheritedFromTheCommand(t *testing.T) {
 	}
 }
 
+// TestGroupByValidate covers F-20/schema 2.3.0's groupBy derivation: a
+// missing groupByField, a missing/empty subfields list, and a toggle
+// subfield (rejected — see FieldDerivation.GroupByField's own doc comment
+// and mapping.go's groupBySubfields, whose reasoning this mirrors as a
+// Go-level backstop for a hand-built Domain that never went through the
+// importer) must each be refused with a message naming the actual problem;
+// a well-formed groupBy field with a valid count subfield must validate.
+func TestGroupByValidate(t *testing.T) {
+	base := func(dv *FieldDerivation, subfields []Field) Domain {
+		return Domain{
+			Aggregate: "payrollPeriod",
+			Commands:  []Command{{Name: "LogTime", Events: []Event{{Name: "TimeLogged", NoFields: true}}}},
+			ReadModels: []ReadModel{{
+				Collection: "payrollPeriods", Key: "periodId",
+				Fields: []Field{{Name: "staffTotals", Type: "json", Derivation: dv, Subfields: subfields}},
+			}},
+		}
+	}
+	validSubfields := []Field{
+		{Name: "staffId", Type: "text"},
+		{Name: "entriesLogged", Type: "number", Derivation: &FieldDerivation{
+			Kind: DerivationCount, IncrementOnEventIDs: []string{"TimeLogged"},
+		}},
+	}
+
+	for _, tc := range []struct {
+		name      string
+		dv        *FieldDerivation
+		subfields []Field
+		want      string
+	}{
+		{"missing groupByField", &FieldDerivation{Kind: DerivationGroupBy}, validSubfields,
+			`field "staffTotals" is a groupBy derivation but is missing groupByField`},
+		{"missing subfields", &FieldDerivation{Kind: DerivationGroupBy, GroupByField: "staffId"}, nil,
+			`field "staffTotals" is a groupBy derivation but declares no subfields`},
+		{"toggle subfield", &FieldDerivation{Kind: DerivationGroupBy, GroupByField: "staffId"}, []Field{
+			{Name: "staffId", Type: "text"},
+			{Name: "ssoEnabled", Type: "bool", Derivation: &FieldDerivation{
+				Kind: DerivationToggle, OnEventIDs: []string{"A"}, OffEventIDs: []string{"B"},
+			}},
+		}, `groupBy subfield "ssoEnabled" is a toggle derivation, which is not supported inside groupBy`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := base(tc.dv, tc.subfields).Validate()
+			if err == nil {
+				t.Fatalf("expected the model to be refused")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("validation did not mention %q: %v", tc.want, err)
+			}
+		})
+	}
+
+	valid := base(&FieldDerivation{Kind: DerivationGroupBy, GroupByField: "staffId"}, validSubfields)
+	if err := valid.Validate(); err != nil {
+		t.Errorf("a well-formed groupBy field should be valid: %v", err)
+	}
+}
+
 // TestValidateAccepts covers the shapes that must work, including the
 // write-only slice (no read model yet).
 func TestValidateAccepts(t *testing.T) {

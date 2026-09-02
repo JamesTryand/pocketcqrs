@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "2.1.0"
+      "default": "2.3.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -73,6 +73,88 @@
 
     "fieldCardinality": { "enum": ["single", "list"] },
 
+    "fieldDerivationKind": { "enum": ["toggle", "count", "sum", "groupBy"] },
+
+    "fieldDerivation": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/fieldDerivationKind" }
+      },
+      "allOf": [
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "toggle" } } },
+          "then": {
+            "type": "object",
+            "required": ["onEventIds", "offEventIds"],
+            "properties": {
+              "onEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "offEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "initial": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "count" } } },
+          "then": {
+            "type": "object",
+            "required": ["incrementOnEventIds"],
+            "properties": {
+              "incrementOnEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "decrementOnEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" }
+              },
+              "rowKeyField": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "sum" } } },
+          "then": {
+            "type": "object",
+            "required": ["addOnEventIds", "amountField"],
+            "properties": {
+              "addOnEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "subtractOnEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" }
+              },
+              "amountField": { "type": "string", "minLength": 1 },
+              "rowKeyField": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "groupBy" } } },
+          "then": {
+            "type": "object",
+            "required": ["groupByField"],
+            "properties": {
+              "groupByField": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
     "field": {
       "type": "object",
       "required": ["name", "type"],
@@ -84,12 +166,36 @@
         "cardinality": { "$ref": "#/$defs/fieldCardinality" },
         "idAttribute": { "type": "boolean" },
         "pii": { "type": "boolean" },
+        "derivation": { "$ref": "#/$defs/fieldDerivation" },
         "subfields": {
           "type": "array",
           "items": { "$ref": "#/$defs/field" }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["derivation"],
+            "properties": {
+              "derivation": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": { "kind": { "const": "groupBy" } }
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": ["cardinality", "subfields"],
+            "properties": {
+              "cardinality": { "const": "list" },
+              "subfields": { "type": "array", "minItems": 1 }
+            }
+          }
+        }
+      ]
     },
 
     "event": {
@@ -100,6 +206,7 @@
         "description": { "type": "string" },
         "swimlaneId": { "$ref": "#/$defs/id" },
         "aggregate": { "type": "string", "minLength": 1 },
+        "endsStream": { "type": "boolean", "default": false },
         "fields": {
           "type": "array",
           "items": { "$ref": "#/$defs/field" }
@@ -124,6 +231,26 @@
       "additionalProperties": false
     },
 
+    "readModelScope": {
+      "type": "object",
+      "required": ["param", "via"],
+      "properties": {
+        "param": { "type": "string", "minLength": 1 },
+        "via": {
+          "type": "object",
+          "required": ["readModelId", "matchParamTo", "selectField", "filterLocalField"],
+          "properties": {
+            "readModelId": { "$ref": "#/$defs/id" },
+            "matchParamTo": { "type": "string", "minLength": 1 },
+            "selectField": { "type": "string", "minLength": 1 },
+            "filterLocalField": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
     "readModel": {
       "type": "object",
       "required": ["name"],
@@ -138,6 +265,10 @@
         "fields": {
           "type": "array",
           "items": { "$ref": "#/$defs/field" }
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/readModelScope" }
         }
       },
       "additionalProperties": false

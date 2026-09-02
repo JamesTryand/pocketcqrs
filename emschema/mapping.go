@@ -318,10 +318,47 @@ func (m *mapper) fields(owner string, in []Field) []scaffold.Field {
 		if note := FoldNote(owner, f); note != "" {
 			m.rep.warnf("%s", note)
 		}
-		out = append(out, scaffold.Field{
+		sf := scaffold.Field{
 			Name:       scaffold.SanitizeName(f.Name),
 			Type:       FoldType(f),
 			Derivation: m.mapDerivation(f.Derivation),
+		}
+		if f.Derivation != nil && f.Derivation.Kind == DerivationGroupBy {
+			sf.Subfields = m.groupBySubfields(owner, f)
+		}
+		out = append(out, sf)
+	}
+	return out
+}
+
+// groupBySubfields maps a groupBy field's own nested subfields — the shape
+// of one row in the parent field's list. A toggle subfield is rejected with
+// a clear mapping error rather than silently generating wrong code,
+// mirroring dotnetcqrs's DocumentMapper: ToggleDerivation carries no
+// rowKeyField at all (schema-enforced — it is only ever meaningful
+// same-stream), so there is no way to know which TOP-LEVEL row a toggle
+// subfield's triggering event should update once nested inside a groupBy
+// field, which is foreign-stream by construction (that is the whole reason
+// groupBy exists). The field named by the parent's groupByField itself
+// carries no derivation — its value is just the grouping key, copied
+// straight from the matching event payload — so it passes through here
+// exactly like any other plain field.
+func (m *mapper) groupBySubfields(owner string, f Field) []scaffold.Field {
+	out := make([]scaffold.Field, 0, len(f.Subfields))
+	for _, sf := range f.Subfields {
+		if sf.Derivation != nil && sf.Derivation.Kind == DerivationToggle {
+			m.rep.errorf("%s: field %q groupBy subfield %q declares a toggle derivation, "+
+				"which is not supported inside groupBy — only count/sum subfields are",
+				owner, f.Name, sf.Name)
+			continue
+		}
+		if note := FoldNote(owner, sf); note != "" {
+			m.rep.warnf("%s", note)
+		}
+		out = append(out, scaffold.Field{
+			Name:       scaffold.SanitizeName(sf.Name),
+			Type:       FoldType(sf),
+			Derivation: m.mapDerivation(sf.Derivation),
 		})
 	}
 	return out
@@ -357,6 +394,7 @@ func (m *mapper) mapDerivation(in *FieldDerivation) *scaffold.FieldDerivation {
 		SubtractOnEventIDs:  types(in.SubtractOnEventIDs),
 		AmountField:         in.AmountField,
 		RowKeyField:         scaffold.SanitizeName(in.RowKeyField),
+		GroupByField:        scaffold.SanitizeName(in.GroupByField),
 	}
 }
 

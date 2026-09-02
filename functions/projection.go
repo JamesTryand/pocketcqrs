@@ -79,7 +79,7 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 	if ignored > 0 {
 		p.spec.runtime.logger("projection returned values that are not row ops, ignored",
 			"projection", p.spec.Name, "event", ev.Type, "position", ev.Position, "ignored", ignored,
-			"hint", "project(event) must return {upsert:{key,fields}}, {delete:key} or {increment:{key,field,delta}}")
+			"hint", "project(event) must return {upsert:{key,fields}}, {delete:key}, {increment:{key,field,delta}} or {groupByBump:{key,field,groupField,groupValue,subfield,delta}}")
 	}
 
 	ctx = writeguard.MarkInternal(ctx)
@@ -200,11 +200,28 @@ type rowOp struct {
 	increment bool
 	incField  string
 	delta     float64
+
+	// groupBy marks a groupBy-derivation op (schema 2.3.0's nested/grouped
+	// rollup, Finding 4): find-or-create the entry in groupByField's own
+	// JSON array (on the row named by key) whose groupKeyField equals
+	// groupKeyValue, then add delta to that entry's subfield. Reuses key
+	// and delta from increment above — same accumulation, one JSON level
+	// deeper — for exactly the same reason increment exists at all: a
+	// fixture verify run must not read its own row back (see increment's
+	// own doc comment), so the host does the find-or-create-then-bump
+	// itself, live (applyOp below) or in a fixture simulation alike
+	// (dryrun.go's runProjectionOver).
+	groupBy       bool
+	groupByField  string
+	groupKeyField string
+	groupKeyValue any
+	subfield      string
 }
 
 // normalizeOps converts the project() return value into row ops:
 // undefined/null -> none; {upsert:{key,fields}} / {delete:key} /
-// {increment:{key,field,delta}} -> one; an array of those -> many. Each op
+// {increment:{key,field,delta}} / {groupByBump:{key,field,groupField,
+// groupValue,subfield,delta}} -> one; an array of those -> many. Each op
 // may carry a "collection" attribute.
 //
 // It also reports how many returned values were objects but not ops, so the
@@ -281,6 +298,34 @@ func normalizeOp(v any) (rowOp, bool, error) {
 		}
 		return rowOp{collection: collection, increment: true, key: im["key"], incField: field, delta: delta}, true, nil
 	}
+	if gb, ok := m["groupByBump"]; ok {
+		gm, ok := gb.(map[string]any)
+		if !ok {
+			return rowOp{}, false, fmt.Errorf("groupByBump must be {key, field, groupField, groupValue, subfield, delta}, got %T", gb)
+		}
+		field, _ := gm["field"].(string)
+		if field == "" {
+			return rowOp{}, false, fmt.Errorf("groupByBump op is missing its field name")
+		}
+		groupField, _ := gm["groupField"].(string)
+		if groupField == "" {
+			return rowOp{}, false, fmt.Errorf("groupByBump op %q is missing its groupField name", field)
+		}
+		subfield, _ := gm["subfield"].(string)
+		if subfield == "" {
+			return rowOp{}, false, fmt.Errorf("groupByBump op %q is missing its subfield name", field)
+		}
+		rawDelta, hasDelta := gm["delta"]
+		if !hasDelta {
+			return rowOp{}, false, fmt.Errorf("groupByBump op %q.%q is missing its delta", field, subfield)
+		}
+		delta, ok := toFloat(rawDelta)
+		if !ok {
+			return rowOp{}, false, fmt.Errorf("groupByBump op %q.%q delta must be a number, got %T", field, subfield, rawDelta)
+		}
+		return rowOp{collection: collection, groupBy: true, key: gm["key"], groupByField: field,
+			groupKeyField: groupField, groupKeyValue: gm["groupValue"], subfield: subfield, delta: delta}, true, nil
+	}
 	return rowOp{}, false, nil
 }
 
@@ -321,6 +366,25 @@ func (spec *ProjectionSpec) resolveSchema(op rowOp) (*SchemaSpec, error) {
 // reservedRowFields may not be set by projection ops.
 var reservedRowFields = map[string]bool{"id": true, "created": true, "updated": true}
 
+// groupByRowIndex finds the entry in a groupBy field's own nested list whose
+// groupKeyField matches groupKeyValue, or -1. Shared by applyOp (live) and
+// dryrun.go's runProjectionOver (isolated simulation) so both read the same
+// find-or-create rule. jsonEq-style comparison (via jsonEqual, dryrun.go),
+// not ==, because the live path's rows come back from
+// Record.UnmarshalJSONField decoding through encoding/json exactly like the
+// isolated path's do — but a value straight off op.groupKeyValue may still
+// be a different concrete numeric type than one that round-tripped through
+// JSON, and jsonEqual normalizes both through the same encoder before
+// comparing.
+func groupByRowIndex(rows []map[string]any, groupKeyField string, groupKeyValue any) int {
+	for i, r := range rows {
+		if jsonEqual(r[groupKeyField], groupKeyValue) {
+			return i
+		}
+	}
+	return -1
+}
+
 // applyOp applies one row op to the schema's collection with the internal
 // writeguard marker. Upserts are keyed (idempotent); deletes are no-ops
 // when the row is absent.
@@ -356,6 +420,25 @@ func (spec *ProjectionSpec) applyOp(ctx context.Context, s *SchemaSpec, op rowOp
 			return nil
 		}
 		rec.Set(op.incField, rec.GetFloat(op.incField)+op.delta)
+		return app.SaveWithContext(ctx, rec)
+	}
+
+	if op.groupBy {
+		if reservedRowFields[op.groupByField] || op.groupByField == keyField {
+			spec.runtime.logger("projection op field ignored (reserved)",
+				"projection", spec.Name, "field", op.groupByField)
+			return nil
+		}
+		var rows []map[string]any
+		_ = rec.UnmarshalJSONField(op.groupByField, &rows)
+		idx := groupByRowIndex(rows, op.groupKeyField, op.groupKeyValue)
+		if idx < 0 {
+			rows = append(rows, map[string]any{op.groupKeyField: op.groupKeyValue})
+			idx = len(rows) - 1
+		}
+		current, _ := toFloat(rows[idx][op.subfield])
+		rows[idx][op.subfield] = current + op.delta
+		rec.Set(op.groupByField, rows)
 		return app.SaveWithContext(ctx, rec)
 	}
 

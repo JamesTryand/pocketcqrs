@@ -439,3 +439,121 @@ func TestFinding3DomainCompiles(t *testing.T) {
 		t.Fatalf("Finding 3 domain failed to build:\n%s", out)
 	}
 }
+
+// finding4Domain exercises F-20/schema 2.3.0's groupBy derivation: a
+// payrollPeriods read model whose staffTotals field is a nested list of
+// {staffId, outOfHoursHours, entriesLogged} rows, one per distinct staff
+// member who logged time in the period — outOfHoursHours a sum subfield,
+// entriesLogged a count subfield, so both groupBy-owned kinds are covered
+// in one model, mirroring the real project/gotimesheets shape this closes
+// the gap for (FAULTS-AND-WORK.md F-20).
+func finding4Domain() Domain {
+	return Domain{
+		Aggregate: "payrollPeriod",
+		Commands: []Command{
+			{Name: "CreatePayrollPeriod", Once: true,
+				Events: []Event{{Name: "PayrollPeriodCreated", NoFields: true}}},
+			{Name: "LogTime", RequiresExisting: true,
+				Events: []Event{{Name: "TimeLogged", Fields: []Field{
+					{Name: "staffId", Type: "text"}, {Name: "hours", Type: "number"},
+				}}}},
+		},
+		ReadModels: []ReadModel{
+			{
+				Collection: "payrollPeriods",
+				Key:        "periodId",
+				Fields: []Field{
+					{Name: "staffTotals", Type: "json",
+						Derivation: &FieldDerivation{Kind: DerivationGroupBy, GroupByField: "staffId"},
+						Subfields: []Field{
+							{Name: "staffId", Type: "text"},
+							{Name: "outOfHoursHours", Type: "number", Derivation: &FieldDerivation{
+								Kind: DerivationSum, AddOnEventIDs: []string{"TimeLogged"},
+								AmountField: "hours", RowKeyField: "periodId",
+							}},
+							{Name: "entriesLogged", Type: "number", Derivation: &FieldDerivation{
+								Kind: DerivationCount, IncrementOnEventIDs: []string{"TimeLogged"}, RowKeyField: "periodId",
+							}},
+						},
+					},
+				},
+				On: []string{"TimeLogged"},
+			},
+		},
+	}
+}
+
+// TestFinding4ProjectionDerivations: the groupBy field's own trigger event
+// must route to BOTH its subfields' dedicated helpers (sum then count, in
+// declaration order), never the generic merge, and getOrCreate must seed
+// the parent field's own zero-state (an empty list) on a brand new row.
+func TestFinding4ProjectionDerivations(t *testing.T) {
+	files, err := finding4Domain().GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	periods := files[1].Source // payrollPeriods
+	for _, want := range []string{
+		`case "TimeLogged":`,
+		`p.bumpGroupBySum(ctx, ev, "staffTotals", "staffId", "outOfHoursHours", "hours", "periodId", 1)`,
+		`return p.bumpGroupByCount(ctx, ev, "staffTotals", "staffId", "entriesLogged", "periodId", 1)`,
+		`rec.Set("staffTotals", []any{})`, // zero-state default seeded on create
+		"func (p *PayrollPeriodsProjection) groupByEntry(rec *core.Record, field, groupKeyField string, groupKeyValue any) (map[string]any, []map[string]any) {",
+		"_ = rec.UnmarshalJSONField(field, &rows)",
+		"if entry[groupKeyField] == groupKeyValue {",
+		"func (p *PayrollPeriodsProjection) bumpGroupBySum(ctx context.Context, ev events.Event, field, groupKeyField, subfield, amountField, rowKeyField string, sign float64) error {",
+		"func (p *PayrollPeriodsProjection) bumpGroupByCount(ctx context.Context, ev events.Event, field, groupKeyField, subfield, rowKeyField string, delta int) error {",
+	} {
+		if !strings.Contains(periods, want) {
+			t.Errorf("payrollPeriods projection missing %q:\n%s", want, periods)
+		}
+	}
+	if strings.Contains(periods, "applyMerge") {
+		// PayrollPeriodCreated has no derived-field trigger of its own AND is
+		// not otherwise merged (staffTotals is the read model's only field),
+		// so there is nothing left for the generic merge path to do.
+		t.Errorf("payrollPeriods has no plain merge events; applyMerge must not be generated:\n%s", periods)
+	}
+}
+
+// TestFinding4DomainCompiles proves the whole groupBy domain actually
+// compiles against the real pocketcqrs packages, the same way
+// TestFinding3DomainCompiles proves toggle/count/sum.
+func TestFinding4DomainCompiles(t *testing.T) {
+	repoRoot, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := finding4Domain().GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	goMod := "module finding4-domain-smoke\n\ngo 1.25.0\n\n" +
+		"require github.com/jamestryand/pocketcqrs v0.0.0\n\n" +
+		"replace github.com/jamestryand/pocketcqrs => " + repoRoot + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, f.Name), []byte(f.Source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = dir
+	tidy.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
+	if out, err := tidy.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+
+	build := exec.Command("go", "build", "./...")
+	build.Dir = dir
+	build.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("Finding 4 domain failed to build:\n%s", out)
+	}
+}

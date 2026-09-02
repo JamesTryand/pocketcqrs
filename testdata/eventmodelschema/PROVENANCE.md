@@ -3,11 +3,22 @@
 Fixtures for M14 (eventmodelschema import/export). Copied verbatim, unmodified.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
-- **Tag**: `v2.1.0` — commit `a9f0d8e7887d01715620d6b11e5e4078650426ca`
-  (*"added accepted status"*), 2026-08-30
-- **Copied**: 2026-08-30 (previously `v2.0.0` / `1b4a01c`, "Bump
+- **Commit**: `bb4a060304ba33359608be6dedc6fb5e0080edce` — schema version
+  `2.3.0` (*"Schema 2.3.0: groupBy derivation for nested rollups"*),
+  2026-09-02. No `v2.3.0` git tag exists upstream yet at time of copy — this
+  is the same "bare commit hash" fallback PROVENANCE has always used between
+  tagged releases (see the Refreshing note below).
+- **Copied**: 2026-09-02 (previously `v2.1.0` / `a9f0d8e7`, "added accepted
+  status", 2026-08-30; before that `v2.0.0` / `1b4a01c`, "Bump
   eventModelingSchemaVersion to 2.0.0", 2026-08-06; before that `852989a`,
-  "v2 M3: multi-file composition layer")
+  "v2 M3: multi-file composition layer"). **This refresh also catches up the
+  2.2.0 schema content** (`field.derivation` toggle/count/sum,
+  `event.endsStream`, `readModel.scopes`) that `emschema/document.go` had
+  already implemented in Go but whose vendored `eventmodeling.schema.json`
+  copy here had fallen behind — the copy is documentation/example fixture
+  only (nothing in this repo validates a document against it at runtime; see
+  `emschema/document.go`'s own header comment for the Go-side source of
+  truth), so the lag was silent rather than a functional bug.
 - Same author as this repository; no separate licence file exists upstream.
 
 ## Contents
@@ -35,12 +46,19 @@ that fetched `main` would fail for reasons unrelated to this repository.
 Upstream started carrying git tags at `v2.0.0`/`v2.1.0` (2026-08-30); older
 refreshes pinned a bare commit hash.
 
-## The version string, as of 2.1.0
+## The version string, as of 2.3.0
 
-The schema's `default` and all three examples declare `"2.1.0"`, and
-`UPSTREAM-CHANGELOG.md` records what changed at each version. The last breaking
-change was the removal of the `translation` pattern in `2.0.0`; `2.1.0` is
-additive only — a new `sliceStatus` value, `"accepted"`.
+The schema's `default` declares `"2.3.0"`. The three examples here
+(`minimal.json`, `order-fulfillment.json`, `order-fulfillment-split/`)
+predate 2.2.0/2.3.0 and still declare `"1.0.0"`/`"2.1.0"` themselves — left
+unmodified, since re-stamping an example's own version string is not part of
+"copied verbatim, unmodified" and none of them uses a `groupBy` derivation
+anyway. `UPSTREAM-CHANGELOG.md` records what changed at each version. The
+last breaking change was the removal of the `translation` pattern in `2.0.0`;
+`2.1.0` (a new `sliceStatus` value, `"accepted"`), `2.2.0` (`field.derivation`
+toggle/count/sum, `event.endsStream`, `readModel.scopes`) and `2.3.0`
+(`field.derivation` gains `groupBy`, reusing `field`'s existing
+`cardinality: "list"` + `subfields` shape) are all additive only.
 
 **This project still branches on document SHAPE rather than on that field**,
 and deliberately so. The bump fixes the signal going forward but cannot fix

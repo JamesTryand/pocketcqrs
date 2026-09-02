@@ -2,11 +2,11 @@
 // github.com/jamestryand/eventmodelschema — and maps them onto this
 // project's intermediate domain model.
 //
-// The types below mirror eventmodeling.schema.json as read at tag v2.2.0
-// (commit ba04be0, "Schema 2.2.0: derived read-model fields, stream-ending
-// events, scoped queries", 2026-09-01). A vendored copy of that schema and
-// its worked examples lives in testdata/eventmodelschema/, with the tag
-// recorded in PROVENANCE.md.
+// The types below mirror eventmodeling.schema.json as read at commit
+// bb4a060, "Schema 2.3.0: groupBy derivation for nested rollups",
+// 2026-09-02. A vendored copy of that schema and its worked examples lives
+// in testdata/eventmodelschema/, with the source commit recorded in
+// PROVENANCE.md.
 //
 // Two things about the source format shape everything here:
 //
@@ -139,33 +139,40 @@ type Screen struct {
 // Field is a typed payload/column field. The type vocabulary is wider than
 // this project's five //@schema types; see FoldType.
 type Field struct {
-	Name        string  `json:"name"`
-	Type        string  `json:"type"`
-	Description string  `json:"description,omitempty"`
-	Optional    bool    `json:"optional,omitempty"`
-	Cardinality string  `json:"cardinality,omitempty"` // single | list
-	IDAttribute bool    `json:"idAttribute,omitempty"`
-	PII         bool    `json:"pii,omitempty"`
-	Subfields   []Field `json:"subfields,omitempty"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description,omitempty"`
+	Optional    bool   `json:"optional,omitempty"`
+	Cardinality string `json:"cardinality,omitempty"` // single | list
+	IDAttribute bool   `json:"idAttribute,omitempty"`
+	PII         bool   `json:"pii,omitempty"`
+	// Subfields is required (non-empty), alongside Cardinality "list", when
+	// Derivation.Kind is groupBy (schema 2.3.0) — each entry is one column
+	// of the nested row a groupBy derivation produces per distinct group
+	// key. Otherwise it is the plain typed-nested-object shape schema v2
+	// already had.
+	Subfields []Field `json:"subfields,omitempty"`
 	// Derivation makes a read-model field a fold over named events instead
-	// of a same-named payload copy — a toggle, a count or a sum. Only
-	// meaningful on a readModel field. Added in schema 2.2.0 (Finding 3).
+	// of a same-named payload copy — a toggle, a count, a sum or (schema
+	// 2.3.0) a groupBy. Only meaningful on a readModel field. toggle/count/
+	// sum added in schema 2.2.0 (Finding 3).
 	Derivation *FieldDerivation `json:"derivation,omitempty"`
 }
 
-// Derivation kinds, as the schema 2.2.0 discriminated union defines them.
+// Derivation kinds, as the schema 2.3.0 discriminated union defines them.
 const (
-	DerivationToggle = "toggle"
-	DerivationCount  = "count"
-	DerivationSum    = "sum"
+	DerivationToggle  = "toggle"
+	DerivationCount   = "count"
+	DerivationSum     = "sum"
+	DerivationGroupBy = "groupBy"
 )
 
 // FieldDerivation computes a read-model field as a fold over named events.
-// Exactly one of the three shapes applies, selected by Kind; the fields
-// belonging to the other two are left zero. This mirrors the source
+// Exactly one of the four shapes applies, selected by Kind; the fields
+// belonging to the other three are left zero. This mirrors the source
 // schema's `oneOf` on `fieldDerivation` — kept flat here, as EventRef/
 // ReadModelQuery etc. already do for other kind-discriminated shapes in
-// this file, rather than as three separate Go types the mapper would have
+// this file, rather than as four separate Go types the mapper would have
 // to type-switch on.
 type FieldDerivation struct {
 	Kind string `json:"kind"`
@@ -191,6 +198,16 @@ type FieldDerivation struct {
 	// assignment event carrying the projectId it should roll up onto).
 	// Defaults to the read model's own key-field name when empty.
 	RowKeyField string `json:"rowKeyField,omitempty"`
+
+	// groupBy (schema 2.3.0): GroupByField names the payload field on a
+	// contributing event whose distinct values become one nested row each
+	// in the owning field's own list. The owning Field's Subfields carry
+	// the shape of each row — an ordinary Field that may itself declare a
+	// toggle/count/sum Derivation, computed WITHIN that row's group rather
+	// than across the whole read model. The field named by GroupByField
+	// needs no derivation of its own; its value is just the grouping key,
+	// copied straight from the matching event payload.
+	GroupByField string `json:"groupByField,omitempty"`
 }
 
 // Slice is one vertical slice. The pattern-specific fields are flattened
@@ -284,8 +301,9 @@ type Hotspot struct {
 // declares. 2.0.0 (2026-08-06) was the last breaking bump — removal of the
 // `translation` pattern; 2.1.0 (2026-08-30) is additive only, a new
 // `sliceStatus` value (`accepted`); 2.2.0 (2026-09-01) is additive only,
-// `field.derivation`, `event.endsStream`, `readModel.scopes`.
-const SchemaVersion = "2.2.0"
+// `field.derivation`, `event.endsStream`, `readModel.scopes`; 2.3.0
+// (2026-09-02) is additive only, `field.derivation` gains kind `groupBy`.
+const SchemaVersion = "2.3.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

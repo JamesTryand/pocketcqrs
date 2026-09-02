@@ -3,6 +3,7 @@ package functions
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/tests"
@@ -182,5 +183,73 @@ function project(event) {
 	}
 	if rec.GetInt("staffCount") != 1 {
 		t.Fatalf("unexpected row: staffCount=%d", rec.GetInt("staffCount"))
+	}
+}
+
+// TestGroupByBumpOpAccumulatesLive is Finding 4's groupBy derivation
+// (schema 2.3.0) against a real app: two contributing events for the SAME
+// group key must accumulate onto ONE nested entry, and a different group
+// key must land in a SEPARATE entry within the same row's own list — each
+// delivered as its own Apply call (the live shape), mirroring
+// TestIncrementOpAccumulatesLive one JSON level deeper.
+func TestGroupByBumpOpAccumulatesLive(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	rt := NewGojaRuntime(nil)
+	spec, err := LoadProjectionFile(rt, app, writeTempFn(t, "payrollPeriods.js", `//@trigger projection payrollPeriods on TimeLogged
+//@schema payrollPeriods periodId:text staffTotals:json
+//@key periodId
+function project(event) {
+	return { groupByBump: {
+		key: event.data.periodId,
+		field: 'staffTotals',
+		groupField: 'staffId',
+		groupValue: event.data.staffId,
+		subfield: 'outOfHoursHours',
+		delta: event.data.hours,
+	} };
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ReconcileSchemas(app, []*ProjectionSpec{spec}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ev := range []events.Event{
+		{Position: 1, Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s1","hours":3}`)},
+		{Position: 2, Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s1","hours":2}`)},
+		{Position: 3, Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s2","hours":4}`)},
+	} {
+		if err := spec.Consumer().Apply(context.Background(), ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec, err := app.FindFirstRecordByData("payrollPeriods", "periodId", "pp1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]any
+	if err := rec.UnmarshalJSONField("staffTotals", &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 staffTotals entries, got %d: %v", len(rows), rows)
+	}
+	byStaff := map[string]float64{}
+	for _, r := range rows {
+		byStaff[fmt.Sprint(r["staffId"])], _ = toFloat(r["outOfHoursHours"])
+	}
+	if byStaff["s1"] != 5 {
+		t.Errorf("expected s1 outOfHoursHours=5 (3+2 accumulated), got %v", byStaff["s1"])
+	}
+	if byStaff["s2"] != 4 {
+		t.Errorf("expected s2 outOfHoursHours=4 (its own entry), got %v", byStaff["s2"])
 	}
 }

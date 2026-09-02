@@ -189,8 +189,10 @@ type ProjectionDryRun struct {
 	// rather than just reporting zero upserts.
 	IgnoredValues int
 	// Rows is the final simulated row set per collection
-	// (collection -> key -> fields), mirroring applyOp semantics
-	// (upsert merges, increment adds to the running value, delete removes).
+	// (collection -> key -> fields), mirroring applyOp semantics (upsert
+	// merges, increment adds to the running value, delete removes,
+	// groupByBump finds-or-creates a nested entry and adds to ITS running
+	// value).
 	Rows map[string]map[string]map[string]any
 }
 
@@ -279,6 +281,20 @@ func runProjectionOver(spec *ProjectionSpec, log []events.Event, isolated bool) 
 					current, _ = toFloat(row[op.incField])
 				}
 				row[op.incField] = current + op.delta
+				continue
+			}
+
+			if op.groupBy {
+				out.Upserts++
+				rows, _ := row[op.groupByField].([]map[string]any)
+				idx := groupByRowIndex(rows, op.groupKeyField, op.groupKeyValue)
+				if idx < 0 {
+					rows = append(rows, map[string]any{op.groupKeyField: op.groupKeyValue})
+					idx = len(rows) - 1
+				}
+				current, _ := toFloat(rows[idx][op.subfield])
+				rows[idx][op.subfield] = current + op.delta
+				row[op.groupByField] = rows
 				continue
 			}
 

@@ -402,19 +402,24 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 	mergeEvents := subtractStrings(on, derived)
 	plainColumns := plainColumnNames(rm.Fields, rm.Key)
 	usesToggle, usesCount, usesSum := false, false, false
+	usesGroupByCount, usesGroupBySum := false, false
 	for _, acts := range derived {
 		for _, a := range acts {
-			switch a.kind {
-			case DerivationToggle:
+			switch {
+			case a.isGroupBy && a.kind == DerivationCount:
+				usesGroupByCount = true
+			case a.isGroupBy && a.kind == DerivationSum:
+				usesGroupBySum = true
+			case a.kind == DerivationToggle:
 				usesToggle = true
-			case DerivationCount:
+			case a.kind == DerivationCount:
 				usesCount = true
-			case DerivationSum:
+			case a.kind == DerivationSum:
 				usesSum = true
 			}
 		}
 	}
-	usesJSON := len(mergeEvents) > 0 || usesCount || usesSum
+	usesJSON := len(mergeEvents) > 0 || usesCount || usesSum || usesGroupByCount || usesGroupBySum
 
 	writeProjectionImports(&b, usesJSON)
 	writeProjectionHeader(&b, d, rm, ctor, typeName)
@@ -507,6 +512,58 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 		b.WriteString("\tamount, _ := data[amountField].(float64)\n")
 		b.WriteString("\trec, err := p.getOrCreate(rowKey)\n\tif err != nil {\n\t\treturn err\n\t}\n")
 		b.WriteString("\trec.Set(field, rec.GetFloat(field)+sign*amount)\n")
+		b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n}\n\n")
+	}
+
+	if usesGroupByCount || usesGroupBySum {
+		b.WriteString("// groupByEntry finds-or-creates the ROW WITHIN field's own nested JSON\n")
+		b.WriteString("// list matching groupKeyField/groupKeyValue, so bumpGroupByCount/\n")
+		b.WriteString("// bumpGroupBySum share one read-modify-write instead of repeating it per\n")
+		b.WriteString("// kind. The returned entry is already the last element of rows (or was\n")
+		b.WriteString("// just appended as one) — since a map is a reference type, the caller's\n")
+		b.WriteString("// mutations to entry are visible through rows without any index bookkeeping.\n")
+		fmt.Fprintf(&b, "func (p *%s) groupByEntry(rec *core.Record, field, groupKeyField string, groupKeyValue any) (map[string]any, []map[string]any) {\n", typeName)
+		b.WriteString("\tvar rows []map[string]any\n")
+		b.WriteString("\t_ = rec.UnmarshalJSONField(field, &rows)\n")
+		b.WriteString("\tfor _, entry := range rows {\n")
+		b.WriteString("\t\tif entry[groupKeyField] == groupKeyValue {\n\t\t\treturn entry, rows\n\t\t}\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\tentry := map[string]any{groupKeyField: groupKeyValue}\n")
+		b.WriteString("\treturn entry, append(rows, entry)\n")
+		b.WriteString("}\n\n")
+	}
+
+	if usesGroupByCount {
+		b.WriteString("// bumpGroupByCount is bumpCount's nested-list sibling (schema 2.3.0's\n")
+		b.WriteString("// groupBy derivation): rowKeyField names the payload field on the\n")
+		b.WriteString("// triggering event carrying the TOP-LEVEL row's key (unrelated to\n")
+		b.WriteString("// groupKeyField, which only picks the entry WITHIN that row's own list).\n")
+		fmt.Fprintf(&b, "func (p *%s) bumpGroupByCount(ctx context.Context, ev events.Event, field, groupKeyField, subfield, rowKeyField string, delta int) error {\n", typeName)
+		b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n")
+		b.WriteString("\tvar data map[string]any\n\tif err := json.Unmarshal(ev.Data, &data); err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\trowKey, _ := data[rowKeyField].(string)\n")
+		b.WriteString("\trec, err := p.getOrCreate(rowKey)\n\tif err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\tentry, rows := p.groupByEntry(rec, field, groupKeyField, data[groupKeyField])\n")
+		b.WriteString("\tcurrent, _ := entry[subfield].(float64)\n")
+		b.WriteString("\tentry[subfield] = current + float64(delta)\n")
+		b.WriteString("\trec.Set(field, rows)\n")
+		b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n}\n\n")
+	}
+
+	if usesGroupBySum {
+		b.WriteString("// bumpGroupBySum is bumpGroupByCount's sibling for a running total within\n")
+		b.WriteString("// a group entry: amountField names the numeric payload field to add or\n")
+		b.WriteString("// subtract, sign is +1/-1.\n")
+		fmt.Fprintf(&b, "func (p *%s) bumpGroupBySum(ctx context.Context, ev events.Event, field, groupKeyField, subfield, amountField, rowKeyField string, sign float64) error {\n", typeName)
+		b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n")
+		b.WriteString("\tvar data map[string]any\n\tif err := json.Unmarshal(ev.Data, &data); err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\trowKey, _ := data[rowKeyField].(string)\n")
+		b.WriteString("\tamount, _ := data[amountField].(float64)\n")
+		b.WriteString("\trec, err := p.getOrCreate(rowKey)\n\tif err != nil {\n\t\treturn err\n\t}\n")
+		b.WriteString("\tentry, rows := p.groupByEntry(rec, field, groupKeyField, data[groupKeyField])\n")
+		b.WriteString("\tcurrent, _ := entry[subfield].(float64)\n")
+		b.WriteString("\tentry[subfield] = current + sign*amount\n")
+		b.WriteString("\trec.Set(field, rows)\n")
 		b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n}\n\n")
 	}
 
@@ -620,9 +677,36 @@ type derivedAction struct {
 	sign        float64
 	amountField string
 	rowKeyField string // count/sum only; "" is unused by toggle
+
+	// isGroupBy marks an action that bumps a SUBFIELD nested within field's
+	// own grouped-rollup list (schema 2.3.0), rather than field itself as a
+	// plain scalar column. kind/delta/sign/amountField above still describe
+	// the SUBFIELD's own count/sum derivation; rowKeyField above is
+	// unchanged too — it still resolves the TOP-LEVEL row, exactly as it
+	// does for a plain count/sum column. groupKeyField/subfield below are
+	// meaningful only when isGroupBy is true.
+	isGroupBy bool
+	// groupKeyField names the entry property, WITHIN field's own nested
+	// list, that carries the group key (the parent Field.Derivation's own
+	// GroupByField).
+	groupKeyField string
+	// subfield names the entry property this action bumps.
+	subfield string
 }
 
 func (a derivedAction) call() string {
+	if a.isGroupBy {
+		switch a.kind {
+		case DerivationCount:
+			return fmt.Sprintf("p.bumpGroupByCount(ctx, ev, %q, %q, %q, %q, %d)",
+				a.field, a.groupKeyField, a.subfield, a.rowKeyField, a.delta)
+		case DerivationSum:
+			return fmt.Sprintf("p.bumpGroupBySum(ctx, ev, %q, %q, %q, %q, %q, %g)",
+				a.field, a.groupKeyField, a.subfield, a.amountField, a.rowKeyField, a.sign)
+		default:
+			return "nil" // unreachable: mapping/Validate reject a groupBy subfield of any other kind
+		}
+	}
 	switch a.kind {
 	case DerivationToggle:
 		return fmt.Sprintf("p.setToggle(ctx, ev.AggregateID, %q, %t)", a.field, a.boolValue)
@@ -683,6 +767,48 @@ func collectDerivedActions(fields []Field, rmKey string) (map[string][]derivedAc
 			for _, ev := range dv.SubtractOnEventIDs {
 				add(ev, derivedAction{field: f.Name, kind: DerivationSum, sign: -1, amountField: dv.AmountField, rowKeyField: rowKey})
 			}
+		case DerivationGroupBy:
+			// f itself carries no trigger events of its own -- every action
+			// comes from a SUBFIELD's own count/sum derivation, computed
+			// within its group rather than across the whole read model. A
+			// toggle subfield is rejected upstream (mapping.go / Validate),
+			// so there is nothing to collect for one here; the subfield
+			// named by dv.GroupByField carries no derivation at all (its
+			// value is the group key itself), so it is skipped too.
+			for _, sf := range f.Subfields {
+				sdv := sf.Derivation
+				if sdv == nil {
+					continue
+				}
+				switch sdv.Kind {
+				case DerivationCount:
+					rowKey := sdv.RowKeyField
+					if rowKey == "" {
+						rowKey = rmKey
+					}
+					for _, ev := range sdv.IncrementOnEventIDs {
+						add(ev, derivedAction{field: f.Name, kind: DerivationCount, delta: 1, rowKeyField: rowKey,
+							isGroupBy: true, groupKeyField: dv.GroupByField, subfield: sf.Name})
+					}
+					for _, ev := range sdv.DecrementOnEventIDs {
+						add(ev, derivedAction{field: f.Name, kind: DerivationCount, delta: -1, rowKeyField: rowKey,
+							isGroupBy: true, groupKeyField: dv.GroupByField, subfield: sf.Name})
+					}
+				case DerivationSum:
+					rowKey := sdv.RowKeyField
+					if rowKey == "" {
+						rowKey = rmKey
+					}
+					for _, ev := range sdv.AddOnEventIDs {
+						add(ev, derivedAction{field: f.Name, kind: DerivationSum, sign: 1, amountField: sdv.AmountField, rowKeyField: rowKey,
+							isGroupBy: true, groupKeyField: dv.GroupByField, subfield: sf.Name})
+					}
+					for _, ev := range sdv.SubtractOnEventIDs {
+						add(ev, derivedAction{field: f.Name, kind: DerivationSum, sign: -1, amountField: sdv.AmountField, rowKeyField: rowKey,
+							isGroupBy: true, groupKeyField: dv.GroupByField, subfield: sf.Name})
+					}
+				}
+			}
 		}
 	}
 	return actions, order
@@ -722,6 +848,11 @@ func derivedInitDefaults(fields []Field) []derivedFieldDefault {
 			out = append(out, derivedFieldDefault{f.Name, "0"})
 		case DerivationSum:
 			out = append(out, derivedFieldDefault{f.Name, "0.0"})
+		case DerivationGroupBy:
+			// an empty list, not a nil field: a stateView read before any
+			// contributing event has landed should see "no rows yet", not a
+			// missing/null column.
+			out = append(out, derivedFieldDefault{f.Name, "[]any{}"})
 		}
 	}
 	return out

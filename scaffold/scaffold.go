@@ -105,19 +105,31 @@ type Field struct {
 	// of a same-named payload copy. nil on every command/event field — only
 	// a ReadModel's own Fields entries use it. Finding 3.
 	Derivation *FieldDerivation `json:"derivation,omitempty"`
+	// Subfields describes the shape of one nested row when Derivation.Kind
+	// is groupBy — one entry per column, each an ordinary Field that may
+	// carry its own count/sum Derivation, computed WITHIN that row's group.
+	// nil everywhere else. Carried directly on Field, rather than on
+	// FieldDerivation itself the way dotnetcqrs's GroupByDerivation does —
+	// this project's own flatter style already puts every kind's payload on
+	// FieldDerivation as sibling optional fields, so Subfields sits next to
+	// it on Field instead of forcing a fifth place a mapper would have to
+	// know to look. Finding 4 / schema 2.3.0.
+	Subfields []Field `json:"subfields,omitempty"`
 }
 
 // Derivation kinds.
 const (
-	DerivationToggle = "toggle"
-	DerivationCount  = "count"
-	DerivationSum    = "sum"
+	DerivationToggle  = "toggle"
+	DerivationCount   = "count"
+	DerivationSum     = "sum"
+	DerivationGroupBy = "groupBy"
 )
 
 // FieldDerivation computes a read-model field as a fold over named events —
-// a toggle, a count or a sum — instead of copying a same-named payload key.
-// Exactly one of the three shapes applies, selected by Kind; the mapper is
-// responsible for populating only the fields for its own kind.
+// a toggle, a count, a sum or a groupBy — instead of copying a same-named
+// payload key. Exactly one of the four shapes applies, selected by Kind;
+// the mapper is responsible for populating only the fields for its own
+// kind.
 type FieldDerivation struct {
 	Kind string `json:"kind"`
 
@@ -138,8 +150,20 @@ type FieldDerivation struct {
 	// count/sum: the payload field on the triggering events naming the
 	// target row's key. Defaults to the read model's own Key when empty —
 	// the mapper resolves the default; the generator treats empty here as
-	// "use Key" too, so a hand-built Domain need not repeat it.
+	// "use Key" too, so a hand-built Domain need not repeat it. A groupBy
+	// SUBFIELD's own count/sum derivation reuses this exact field for the
+	// exact same purpose — it still names which TOP-LEVEL read-model row a
+	// contributing event targets, unrelated to GroupByField below, which
+	// only picks the entry WITHIN that row's own nested list.
 	RowKeyField string `json:"rowKeyField,omitempty"`
+
+	// groupBy: GroupByField names the payload field on a contributing event
+	// whose distinct values become one nested row each in the owning
+	// Field's own list (Field.Subfields carries that row's shape). The
+	// field named by GroupByField needs no derivation of its own — its
+	// value is just the grouping key, copied straight from the matching
+	// event payload.
+	GroupByField string `json:"groupByField,omitempty"`
 }
 
 // ReadModel is a projection's target collection.
@@ -317,8 +341,48 @@ func (d Domain) Validate() error {
 						add("read model %q: field %q is a sum derivation but is missing addOnEventIds/amountField",
 							rm.Collection, f.Name)
 					}
+				case DerivationGroupBy:
+					if dv.GroupByField == "" {
+						add("read model %q: field %q is a groupBy derivation but is missing groupByField",
+							rm.Collection, f.Name)
+					}
+					if len(f.Subfields) == 0 {
+						add("read model %q: field %q is a groupBy derivation but declares no subfields",
+							rm.Collection, f.Name)
+					}
+					for _, sf := range f.Subfields {
+						if !identifier.MatchString(sf.Name) {
+							add("read model %q: field %q subfield name %q is not a valid identifier",
+								rm.Collection, f.Name, sf.Name)
+						}
+						if !schemaTypes[sf.Type] {
+							add("read model %q: field %q subfield %q has type %q; use text, number, bool, date or json",
+								rm.Collection, f.Name, sf.Name, sf.Type)
+						}
+						if sdv := sf.Derivation; sdv != nil {
+							switch sdv.Kind {
+							case DerivationToggle:
+								add("read model %q: field %q groupBy subfield %q is a toggle derivation, "+
+									"which is not supported inside groupBy — only count/sum subfields are",
+									rm.Collection, f.Name, sf.Name)
+							case DerivationCount:
+								if len(sdv.IncrementOnEventIDs) == 0 {
+									add("read model %q: field %q groupBy subfield %q is a count derivation but declares no incrementOnEventIds",
+										rm.Collection, f.Name, sf.Name)
+								}
+							case DerivationSum:
+								if len(sdv.AddOnEventIDs) == 0 || sdv.AmountField == "" {
+									add("read model %q: field %q groupBy subfield %q is a sum derivation but is missing addOnEventIds/amountField",
+										rm.Collection, f.Name, sf.Name)
+								}
+							default:
+								add("read model %q: field %q groupBy subfield %q has derivation kind %q; use toggle, count or sum",
+									rm.Collection, f.Name, sf.Name, sdv.Kind)
+							}
+						}
+					}
 				default:
-					add("read model %q: field %q has derivation kind %q; use toggle, count or sum",
+					add("read model %q: field %q has derivation kind %q; use toggle, count, sum or groupBy",
 						rm.Collection, f.Name, dv.Kind)
 				}
 			}
@@ -665,7 +729,37 @@ func (d Domain) projection(rm ReadModel) string {
 // and sum trigger events are usually on a DIFFERENT stream (an assignment
 // rolling up onto its project), so they key off the payload field
 // rowKeyField names instead — mirroring derivedAction.call()'s Go rendering.
+//
+// A groupBy-owned subfield renders as its OWN op kind, groupByBump, rather
+// than reusing increment or an upsert that reads its own row back: the host
+// (functions/projection.go, applying live; functions/dryrun.go, simulating
+// in memory for emschema.Verify's isolated scenario checks) does the
+// find-or-create-entry-then-bump itself, exactly the reason increment
+// exists at all for a plain count/sum — see rowOp's own doc comment in
+// projection.go. A read-modify-write written INSIDE project() via pb.query
+// would look identical live, but DryRunProjectionOver isolates reads
+// specifically so a fixture assertion cannot pass vacuously, and a scenario
+// proving two contributing events accumulate onto the same group entry is
+// exactly what this feature needs verified.
 func jsDerivedOp(a derivedAction) string {
+	if a.isGroupBy {
+		switch a.kind {
+		case DerivationCount:
+			return fmt.Sprintf(
+				"{ groupByBump: { key: (event.data || {}).%s, field: %q, groupField: %q, groupValue: (event.data || {}).%s, subfield: %q, delta: %d } }",
+				a.rowKeyField, a.field, a.groupKeyField, a.groupKeyField, a.subfield, a.delta)
+		case DerivationSum:
+			sign := "1"
+			if a.sign < 0 {
+				sign = "-1"
+			}
+			return fmt.Sprintf(
+				"{ groupByBump: { key: (event.data || {}).%s, field: %q, groupField: %q, groupValue: (event.data || {}).%s, subfield: %q, delta: ((event.data || {}).%s || 0) * %s } }",
+				a.rowKeyField, a.field, a.groupKeyField, a.groupKeyField, a.subfield, a.amountField, sign)
+		default:
+			return "null" // unreachable: mapping/Validate reject a groupBy subfield of any other kind
+		}
+	}
 	switch a.kind {
 	case DerivationToggle:
 		return fmt.Sprintf("{ upsert: { key: event.aggregateId, fields: { %s: %t } } }", a.field, a.boolValue)

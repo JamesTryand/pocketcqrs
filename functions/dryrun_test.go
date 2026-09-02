@@ -447,6 +447,59 @@ function project(event) {
 	}
 }
 
+// TestDryRunProjectionOverFixtureAccumulatesGroupByBump is Finding 4's
+// groupBy derivation (schema 2.3.0) proven under the SAME isolation
+// TestDryRunProjectionOverFixtureIsolatesReads exercises for a plain
+// count/sum: two contributing events for the same group key must
+// accumulate onto one nested entry, and a different group key must land in
+// its own entry, purely from the ops returned — no pb.query read-back,
+// which emschema.Verify's stateView scenario checking depends on to avoid a
+// vacuous pass.
+func TestDryRunProjectionOverFixtureAccumulatesGroupByBump(t *testing.T) {
+	rt := NewGojaRuntime(nil)
+	spec, err := LoadProjectionSource(rt, nil, "payrollPeriods.js", `//@trigger projection payrollPeriods on TimeLogged
+//@schema payrollPeriods periodId:text staffTotals:json
+//@key periodId
+function project(event) {
+  return { groupByBump: {
+    key: event.data.periodId,
+    field: 'staffTotals',
+    groupField: 'staffId',
+    groupValue: event.data.staffId,
+    subfield: 'outOfHoursHours',
+    delta: event.data.hours,
+  } };
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := []events.Event{
+		{Position: 1, AggregateID: "t1", Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s1","hours":3}`)},
+		{Position: 2, AggregateID: "t2", Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s1","hours":2}`)},
+		{Position: 3, AggregateID: "t3", Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s2","hours":4}`)},
+	}
+	res, err := DryRunProjectionOver(spec, fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, ok := res.Rows["payrollPeriods"]["pp1"]["staffTotals"].([]map[string]any)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("expected 2 staffTotals entries, got %#v (rows: %v)", res.Rows["payrollPeriods"]["pp1"]["staffTotals"], res.Rows)
+	}
+	byStaff := map[string]any{}
+	for _, r := range rows {
+		byStaff[fmt.Sprint(r["staffId"])] = r["outOfHoursHours"]
+	}
+	if byStaff["s1"] != float64(5) {
+		t.Errorf("expected s1 outOfHoursHours=5 (3+2 accumulated), got %v", byStaff["s1"])
+	}
+	if byStaff["s2"] != float64(4) {
+		t.Errorf("expected s2 outOfHoursHours=4 (its own entry), got %v", byStaff["s2"])
+	}
+}
+
 // stubReader stands in for live collections.
 type stubReader struct{}
 
