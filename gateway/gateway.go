@@ -93,6 +93,29 @@ type Config struct {
 	// through, so the degradation is a documented default, not silent
 	// inertness left unstated.
 	ExternalCallerCollection string
+	// Authorize, when set, is consulted for every command after Mode and
+	// before Idempotency-Key lookup — see the authorize package's own
+	// Authorizer for the shape a real deployment supplies (a policy table
+	// built from an emschema.Document's requiredRole/fieldGatedRole/
+	// requiredOwnership/scope declarations, platform/command-authorization,
+	// ported from dotnetcqrs's own MapCqrsGateway `authorize` hook). Checked
+	// BEFORE the idempotency lookup, deliberately: an unauthorized attempt
+	// has no side effect (same reasoning a domain rejection already gets —
+	// see the Idempotency-Key handling below), so nothing about it should
+	// ever be cached as a replayable response, and a later retry by an
+	// actor whose role has since changed must be re-evaluated, not served
+	// a stale verdict.
+	//
+	// Returning (false, nil) rejects the request with 403; a non-nil error
+	// rejects with 500 (this package has no logger to report it through, so
+	// the error becomes the response body, same posture Config.Mode's own
+	// error path already takes). Nil (the default) means every
+	// authenticated caller may issue every command — today's unchanged
+	// behavior for a deployment that wires nothing here, or for any command
+	// a wired Authorizer's own table has no policy for. Not consulted at
+	// all when cfg.Forward is set (the destination decides; see the top of
+	// RegisterRoutes's handler).
+	Authorize func(re *core.RequestEvent, aggregate, command, id string, payload []byte) (bool, error)
 }
 
 // RegisterRoutes binds the command endpoint:
@@ -183,6 +206,19 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		}
 		if len(payload) == 0 {
 			payload = []byte(`{}`)
+		}
+
+		if cfg.Authorize != nil {
+			authorized, err := cfg.Authorize(re, aggregate, cmdName, id, payload)
+			if err != nil {
+				return re.JSON(http.StatusInternalServerError,
+					map[string]string{"error": "authorization check failed: " + err.Error()})
+			}
+			if !authorized {
+				return re.JSON(http.StatusForbidden, map[string]string{
+					"error": "not authorized to issue " + cmdName + " on " + aggregate,
+				})
+			}
 		}
 
 		// Idempotency-Key handling. Scoped to the two outcomes a retried

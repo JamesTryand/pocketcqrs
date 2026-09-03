@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "2.4.0"
+      "default": "2.5.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -215,6 +215,13 @@
       "additionalProperties": false
     },
 
+    "commandRole": {
+      "anyOf": [
+        { "$ref": "#/$defs/id" },
+        { "type": "array", "items": { "$ref": "#/$defs/id" }, "minItems": 1 }
+      ]
+    },
+
     "command": {
       "type": "object",
       "required": ["name"],
@@ -226,6 +233,82 @@
         "fields": {
           "type": "array",
           "items": { "$ref": "#/$defs/field" }
+        },
+        "requiredRole": { "$ref": "#/$defs/commandRole" },
+        "fieldGatedRole": { "$ref": "#/$defs/commandFieldGatedRole" },
+        "requiredOwnership": { "$ref": "#/$defs/commandOwnership" },
+        "scope": { "$ref": "#/$defs/commandScope" }
+      },
+      "additionalProperties": false
+    },
+
+    "commandFieldGatedRole": {
+      "type": "object",
+      "required": ["field", "value", "requiredRole"],
+      "properties": {
+        "field": { "type": "string", "minLength": 1 },
+        "value": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "boolean" },
+            { "type": "number" }
+          ]
+        },
+        "requiredRole": { "$ref": "#/$defs/commandRole" }
+      },
+      "additionalProperties": false
+    },
+
+    "commandOwnership": {
+      "type": "object",
+      "required": ["via"],
+      "properties": {
+        "bypassRoles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1
+        },
+        "via": {
+          "type": "object",
+          "required": ["readModelId", "keyField", "ownerField"],
+          "properties": {
+            "readModelId": { "$ref": "#/$defs/id" },
+            "keyField": { "type": "string", "minLength": 1 },
+            "ownerField": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "commandScope": {
+      "type": "object",
+      "required": ["resolveVia", "memberOfVia"],
+      "properties": {
+        "bypassRoles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1
+        },
+        "resolveVia": {
+          "type": "object",
+          "required": ["readModelId", "keyField", "selectField"],
+          "properties": {
+            "readModelId": { "$ref": "#/$defs/id" },
+            "keyField": { "type": "string", "minLength": 1 },
+            "selectField": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "memberOfVia": {
+          "type": "object",
+          "required": ["readModelId", "matchField"],
+          "properties": {
+            "readModelId": { "$ref": "#/$defs/id" },
+            "matchField": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

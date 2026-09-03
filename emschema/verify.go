@@ -300,7 +300,7 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		res.Detail = fmt.Sprintf("read model %q does not exist", q.ReadModelID)
 		return
 	}
-	collection := scaffold.SanitizeName(collectionName(rm.Name, q.ReadModelID))
+	collection := scaffold.SanitizeName(ReadModelCollectionName(rm.Name, q.ReadModelID))
 	file, ok := v.sources[collection+".js"]
 	if !ok {
 		res.Skipped = true
@@ -481,7 +481,7 @@ func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, 
 			return nil, nil, fmt.Sprintf("scope %q names via read model %q, which does not exist",
 				scope.Param, scope.Via.ReadModelID)
 		}
-		viaCollection := scaffold.SanitizeName(collectionName(via.Name, scope.Via.ReadModelID))
+		viaCollection := scaffold.SanitizeName(ReadModelCollectionName(via.Name, scope.Via.ReadModelID))
 		file, ok := v.sources[viaCollection+".js"]
 		if !ok {
 			return nil, nil, fmt.Sprintf("scope %q's via read model %q was not generated", scope.Param, viaCollection)

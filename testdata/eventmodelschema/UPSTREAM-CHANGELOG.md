@@ -3,6 +3,40 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 2.5.0
+
+**Additive (non-breaking):**
+- `command` gains four optional authorization declarations, from the signed-off
+  `platform/command-authorization` design proposal:
+  - `requiredRole` (new `$def` `commandRole`: a role id, or a non-empty array of
+    role ids) — the actor's own role must match one of them.
+  - `fieldGatedRole` (new `$def` `commandFieldGatedRole`: `{ field, value,
+    requiredRole }`) — `requiredRole` applies only when the command payload's
+    `field` equals `value`.
+  - `requiredOwnership` (new `$def` `commandOwnership`: `{ bypassRoles?, via:
+    { readModelId, keyField, ownerField } }`) — the actor's own id must equal
+    the value of `ownerField` on the read-model row `via` resolves (keyed by
+    the command's own target), unless the actor's role is in `bypassRoles`.
+  - `scope` (new `$def` `commandScope`: `{ bypassRoles?, resolveVia: {
+    readModelId, keyField, selectField }, memberOfVia: { readModelId,
+    matchField } }`) — resolves a value from the target's own read-model row,
+    then the actor's own id must be a member of the set `memberOfVia`
+    resolves for that value, unless the actor's role is in `bypassRoles`.
+
+  `requiredOwnership` and `scope` are kept as two separate declarations rather
+  than merged into one — see `docs/design-notes.md` for why (a genuine second
+  resolution hop distinguishes them: equality-against-actor vs.
+  set-membership).
+
+See `docs/design-notes.md` ("v2.5.0: command authorization") for the full
+design rationale, including why `requiredOwnership`'s resolution needed a
+read-model `via` lookup rather than a bare field name, and what this addition
+deliberately leaves to the host layer (how an actor's role claim itself gets
+populated — including for an "administrator" role that lives outside any
+`staff`-shaped aggregate).
+
+A 2.4.0 document validates unchanged against 2.5.0.
+
 ## 2.4.0
 
 **Additive (non-breaking):**

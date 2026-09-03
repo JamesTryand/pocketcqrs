@@ -445,7 +445,7 @@ func (m *mapper) mapReadModels() {
 			m.rep.warnf("%s", keyNote)
 		}
 		m.domain(owner).ReadModels = append(m.domain(owner).ReadModels, scaffold.ReadModel{
-			Collection: scaffold.SanitizeName(collectionName(rm.Name, id)),
+			Collection: scaffold.SanitizeName(ReadModelCollectionName(rm.Name, id)),
 			Key:        key,
 			Fields:     m.fields("read model "+id, rm.Fields),
 			On:         on,
@@ -457,7 +457,7 @@ func (m *mapper) mapReadModels() {
 
 // mapScopes carries a read model's scopes through, resolving each
 // via.readModelId to its OWN generated collection name (see mapReadModels'
-// own `collectionName(rm.Name, id)` call) — the generator has no document to
+// own `ReadModelCollectionName(rm.Name, id)` call) — the generator has no document to
 // look the id up in at codegen time, so the mapper is where this reference
 // must be resolved, exactly like eventType resolves an event id to its
 // generated type name.
@@ -476,7 +476,7 @@ func (m *mapper) mapScopes(id string, rm ReadModel) []scaffold.ReadModelScope {
 		out = append(out, scaffold.ReadModelScope{
 			Param: sc.Param,
 			Via: scaffold.ReadModelScopeVia{
-				Collection:       scaffold.SanitizeName(collectionName(via.Name, sc.Via.ReadModelID)),
+				Collection:       scaffold.SanitizeName(ReadModelCollectionName(via.Name, sc.Via.ReadModelID)),
 				MatchParamTo:     scaffold.SanitizeName(sc.Via.MatchParamTo),
 				SelectField:      scaffold.SanitizeName(sc.Via.SelectField),
 				FilterLocalField: scaffold.SanitizeName(sc.Via.FilterLocalField),
@@ -558,8 +558,11 @@ func (m *mapper) commandName(id string) string {
 	return TypeName(c.Name, id)
 }
 
-// collectionName renders a read-model name as a collection identifier.
-func collectionName(name, id string) string {
+// ReadModelCollectionName renders a read-model name as the collection
+// identifier its generated projection uses -- exported so package authorize
+// can resolve the SAME name a command's requiredOwnership/scope via
+// read-model reference names, without duplicating this convention.
+func ReadModelCollectionName(name, id string) string {
 	return LowerFirst(TypeName(name, id))
 }
 
@@ -657,7 +660,7 @@ func (m *mapper) domainDoc(agg string, d scaffold.Domain) string {
 		for _, rm := range d.ReadModels {
 			question, desc := "", ""
 			for id, srm := range m.doc.ReadModels {
-				if scaffold.SanitizeName(collectionName(srm.Name, id)) == rm.Collection {
+				if scaffold.SanitizeName(ReadModelCollectionName(srm.Name, id)) == rm.Collection {
 					question, desc = srm.Question, srm.Description
 					break
 				}

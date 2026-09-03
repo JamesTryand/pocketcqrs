@@ -2,11 +2,11 @@
 // github.com/jamestryand/eventmodelschema — and maps them onto this
 // project's intermediate domain model.
 //
-// The types below mirror eventmodeling.schema.json as read at commit
-// 0acc987, "Schema 2.4.0: readModel.filters for single-field date-range
-// query filtering", 2026-09-02. A vendored copy of that schema and its
-// worked examples lives in testdata/eventmodelschema/, with the source
-// commit recorded in PROVENANCE.md.
+// The types below mirror eventmodeling.schema.json as read at v2.5.0,
+// "command authorization" (`requiredRole`/`fieldGatedRole`/
+// `requiredOwnership`/`scope`), 2026-09-03. A vendored copy of that schema
+// and its worked examples lives in testdata/eventmodelschema/, with the
+// source commit recorded in PROVENANCE.md.
 //
 // Two things about the source format shape everything here:
 //
@@ -23,7 +23,10 @@
 //     checkGeneration.
 package emschema
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Document is a whole EventModeling model.
 //
@@ -90,6 +93,117 @@ type Command struct {
 	Reason      string  `json:"reason,omitempty"`
 	Aggregate   string  `json:"aggregate,omitempty"`
 	Fields      []Field `json:"fields,omitempty"`
+	// RequiredRole names the role(s) whose actor may issue this command
+	// outright — a single role id, or a list (any one satisfies it). Absent
+	// means no role requirement, the default for every command before this.
+	// Added in schema 2.5.0 (platform/command-authorization).
+	RequiredRole RoleList `json:"requiredRole,omitempty"`
+	// FieldGatedRole additionally requires a role only when the command's
+	// own payload field equals a specific value (e.g. onboard-staff's
+	// role="manager" needs an administrator actor; setting role="staff"
+	// needs nobody in particular). Orthogonal to RequiredRole — a command
+	// may declare either, both, or neither. Added in schema 2.5.0.
+	FieldGatedRole *CommandFieldGatedRole `json:"fieldGatedRole,omitempty"`
+	// RequiredOwnership requires the command's own target (resolved via a
+	// read model, keyed by the command's aggregateId) to be owned by the
+	// actor's own identity, unless the actor's role is one of
+	// BypassRoles. Added in schema 2.5.0.
+	RequiredOwnership *CommandOwnership `json:"requiredOwnership,omitempty"`
+	// Scope requires the actor's own identity to be a MEMBER of a set
+	// resolved through two read-model hops — first resolving a value off
+	// the command's own target, then checking membership against that
+	// value in a second read model — unless the actor's role is one of
+	// BypassRoles. The "Manager bypasses; otherwise a Project Manager of
+	// the target's own project" shape. Kept as its own declaration rather
+	// than folded into RequiredOwnership: a genuine second resolution hop
+	// (set membership, not equality) RequiredOwnership does not need.
+	// Added in schema 2.5.0.
+	Scope *CommandScope `json:"scope,omitempty"`
+}
+
+// RoleList is requiredRole's shape as this package reads it: the source
+// schema allows either one role id or an array of them (anyOf id / array of
+// id), and this type accepts either JSON form transparently rather than
+// forcing every caller to branch on which one a document used.
+type RoleList []string
+
+// UnmarshalJSON accepts a bare string or a string array.
+func (r *RoleList) UnmarshalJSON(data []byte) error {
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*r = RoleList{single}
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(data, &list); err != nil {
+		return fmt.Errorf("requiredRole must be a string or an array of strings: %w", err)
+	}
+	*r = RoleList(list)
+	return nil
+}
+
+// MarshalJSON renders a single-element list as a bare string (the common
+// case) and anything else as an array — round-trips a bare string faithfully
+// rather than always widening it to a one-element array.
+func (r RoleList) MarshalJSON() ([]byte, error) {
+	if len(r) == 1 {
+		return json.Marshal(r[0])
+	}
+	return json.Marshal([]string(r))
+}
+
+// CommandFieldGatedRole is one field-value-conditional role gate — see
+// Command.FieldGatedRole. Value is matched against the payload's own field
+// value by JSON-level equality (string/bool/number, per the source schema);
+// a payload lacking the field, or carrying a different value, means this
+// declaration imposes no additional requirement.
+type CommandFieldGatedRole struct {
+	Field        string   `json:"field"`
+	Value        any      `json:"value"`
+	RequiredRole RoleList `json:"requiredRole"`
+}
+
+// CommandOwnership is command.requiredOwnership's shape — see
+// Command.RequiredOwnership.
+type CommandOwnership struct {
+	BypassRoles []string            `json:"bypassRoles,omitempty"`
+	Via         CommandOwnershipVia `json:"via"`
+}
+
+// CommandOwnershipVia names the read model that resolves the command's
+// target's owning identity: the row where KeyField equals the command's own
+// aggregateId, and OwnerField is the column compared against the actor's
+// own identity.
+type CommandOwnershipVia struct {
+	ReadModelID string `json:"readModelId"`
+	KeyField    string `json:"keyField"`
+	OwnerField  string `json:"ownerField"`
+}
+
+// CommandScope is command.scope's shape — see Command.Scope.
+type CommandScope struct {
+	BypassRoles []string                `json:"bypassRoles,omitempty"`
+	ResolveVia  CommandScopeResolveVia  `json:"resolveVia"`
+	MemberOfVia CommandScopeMemberOfVia `json:"memberOfVia"`
+}
+
+// CommandScopeResolveVia names the read model that resolves a value off the
+// command's own target: the row where KeyField equals the command's own
+// aggregateId, and SelectField is the column collected from it (e.g. a time
+// entry's own projectId).
+type CommandScopeResolveVia struct {
+	ReadModelID string `json:"readModelId"`
+	KeyField    string `json:"keyField"`
+	SelectField string `json:"selectField"`
+}
+
+// CommandScopeMemberOfVia names the read model that decides membership: the
+// actor's own staffId must appear as a `staffId` in this read model where
+// MatchField equals the value ResolveVia collected (e.g. project-managers
+// where projectId = the resolved project).
+type CommandScopeMemberOfVia struct {
+	ReadModelID string `json:"readModelId"`
+	MatchField  string `json:"matchField"`
 }
 
 // ReadModel has no Aggregate by design: read models are cross-cutting, so
@@ -335,8 +449,14 @@ type Hotspot struct {
 // `sliceStatus` value (`accepted`); 2.2.0 (2026-09-01) is additive only,
 // `field.derivation`, `event.endsStream`, `readModel.scopes`; 2.3.0
 // (2026-09-02) is additive only, `field.derivation` gains kind `groupBy`;
-// 2.4.0 (2026-09-02) is additive only, `readModel` gains `filters`.
-const SchemaVersion = "2.4.0"
+// 2.4.0 (2026-09-02) is additive only, `readModel` gains `filters`; 2.5.0
+// (2026-09-03) is additive only, `command` gains `requiredRole`/
+// `fieldGatedRole`/`requiredOwnership`/`scope` — platform/command-
+// authorization, ported from dotnetcqrs's own v0.6.0 (`CommandAuthorization`
+// policy table + `MapCqrsGateway`'s `authorize` hook) after that project
+// proved it out first in `project/timesheets`. See package `authorize` for
+// this project's own policy-table + gateway-hook equivalent.
+const SchemaVersion = "2.5.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

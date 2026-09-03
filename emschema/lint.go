@@ -94,6 +94,10 @@ func Lint(doc *Document) *Report {
 		}
 	}
 
+	for id, c := range doc.Commands {
+		lintCommandAuth(doc, id, c, r)
+	}
+
 	notePII(doc, r)
 	noteLossy(doc, r)
 	sort.Strings(r.Errors)
@@ -293,6 +297,47 @@ func lintScenarios(doc *Document, s Slice, r *Report) {
 			if _, ok := doc.ReadModels[q.ReadModelID]; !ok {
 				r.errorf("scenario %q queries read model %q, which does not exist", sc.ID, q.ReadModelID)
 			}
+		}
+	}
+}
+
+// lintCommandAuth checks referential integrity and structural completeness
+// for a command's requiredRole/fieldGatedRole/requiredOwnership/scope —
+// platform/command-authorization, schema 2.5.0. requiredRole itself needs no
+// check here (a non-empty RoleList is already guaranteed by
+// RoleList.UnmarshalJSON refusing anything but a string or string array);
+// the other three carry read-model references the source schema cannot
+// itself verify, same reasoning ReadModelScope's own via.readModelId gets
+// above.
+func lintCommandAuth(doc *Document, id string, c Command, r *Report) {
+	if fg := c.FieldGatedRole; fg != nil {
+		if fg.Field == "" {
+			r.errorf("command %q: fieldGatedRole is missing its field name", id)
+		}
+		if len(fg.RequiredRole) == 0 {
+			r.errorf("command %q: fieldGatedRole is missing requiredRole", id)
+		}
+	}
+	if own := c.RequiredOwnership; own != nil {
+		if own.Via.ReadModelID == "" || own.Via.KeyField == "" || own.Via.OwnerField == "" {
+			r.errorf("command %q: requiredOwnership is missing one of via.readModelId/keyField/ownerField", id)
+		} else if _, ok := doc.ReadModels[own.Via.ReadModelID]; !ok {
+			r.errorf("command %q: requiredOwnership references read model %q, which does not exist",
+				id, own.Via.ReadModelID)
+		}
+	}
+	if sc := c.Scope; sc != nil {
+		if sc.ResolveVia.ReadModelID == "" || sc.ResolveVia.KeyField == "" || sc.ResolveVia.SelectField == "" {
+			r.errorf("command %q: scope.resolveVia is missing one of readModelId/keyField/selectField", id)
+		} else if _, ok := doc.ReadModels[sc.ResolveVia.ReadModelID]; !ok {
+			r.errorf("command %q: scope.resolveVia references read model %q, which does not exist",
+				id, sc.ResolveVia.ReadModelID)
+		}
+		if sc.MemberOfVia.ReadModelID == "" || sc.MemberOfVia.MatchField == "" {
+			r.errorf("command %q: scope.memberOfVia is missing readModelId/matchField", id)
+		} else if _, ok := doc.ReadModels[sc.MemberOfVia.ReadModelID]; !ok {
+			r.errorf("command %q: scope.memberOfVia references read model %q, which does not exist",
+				id, sc.MemberOfVia.ReadModelID)
 		}
 	}
 }
