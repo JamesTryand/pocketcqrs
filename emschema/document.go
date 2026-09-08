@@ -222,6 +222,17 @@ type ReadModel struct {
 	// of this read model's own columns, with named presets rather than a
 	// raw date range. Sibling to Scopes, added in schema 2.4.0.
 	Filters []ReadModelFilter `json:"filters,omitempty"`
+	// RequiredRole names the role(s) that may read this read model at all —
+	// a single role id, or a list (any one satisfies it). Absent means no
+	// role requirement, the default for every read model before this. The
+	// read-side mirror of Command.RequiredRole; unlike the command side
+	// there is no separate policy table to build, since this project has no
+	// per-command dispatch to hook for reads at all — every read model is
+	// already its own PocketBase collection, served by PocketBase's native
+	// REST API, not a generated route. See scaffold.Domain.projection's
+	// //@rule emission for how this is actually enforced. Added in schema
+	// 2.7.0 (dotnetcqrs's own readModel.requiredRole, commit 382fb9e).
+	RequiredRole RoleList `json:"requiredRole,omitempty"`
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
@@ -410,6 +421,14 @@ type CommandRef struct {
 type ReadModelQuery struct {
 	ReadModelID string          `json:"readModelId"`
 	QueryParams json.RawMessage `json:"queryParams,omitempty"`
+	// AsOf pins what "today" means for a dateRangePreset filter
+	// (last7Days/lastCalendarMonth) this scenario's query resolves against,
+	// instead of the verifier resolving the preset against the live clock —
+	// a scenario with no AsOf keeps that live-clock behavior unchanged. An
+	// ISO date string, same format parseFilterDateString already accepts.
+	// Added in schema 2.6.0, ported from dotnetcqrs's own verify-runner
+	// support (commit 2febf60, v0.7.0) the same day.
+	AsOf *string `json:"asOf,omitempty"`
 }
 
 // EventsThen is a stateChange scenario's `then`.
@@ -455,8 +474,16 @@ type Hotspot struct {
 // authorization, ported from dotnetcqrs's own v0.6.0 (`CommandAuthorization`
 // policy table + `MapCqrsGateway`'s `authorize` hook) after that project
 // proved it out first in `project/timesheets`. See package `authorize` for
-// this project's own policy-table + gateway-hook equivalent.
-const SchemaVersion = "2.5.0"
+// this project's own policy-table + gateway-hook equivalent. 2.6.0 and 2.7.0
+// (both 2026-09-08) are additive only, ported the same day dotnetcqrs shipped
+// them (v0.7.0/v0.8.0): `readModelQuery.asOf` (a verify-scenario clock pin —
+// see verify.go's runViewScenario/filterByFilters) and `readModel.requiredRole`
+// (the read-side mirror of 2.5.0's command.requiredRole — see this file's
+// ReadModel.RequiredRole doc and scaffold.Domain.projection's //@rule
+// emission for how this project enforces it, necessarily differently from
+// dotnetcqrs's pluggable resolveOwnRole delegate, since reads here have no
+// generated route to hook at all).
+const SchemaVersion = "2.7.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

@@ -445,12 +445,13 @@ func (m *mapper) mapReadModels() {
 			m.rep.warnf("%s", keyNote)
 		}
 		m.domain(owner).ReadModels = append(m.domain(owner).ReadModels, scaffold.ReadModel{
-			Collection: scaffold.SanitizeName(ReadModelCollectionName(rm.Name, id)),
-			Key:        key,
-			Fields:     m.fields("read model "+id, rm.Fields),
-			On:         on,
-			Scopes:     m.mapScopes(id, rm),
-			Filters:    m.mapFilters(id, rm),
+			Collection:   scaffold.SanitizeName(ReadModelCollectionName(rm.Name, id)),
+			Key:          key,
+			Fields:       m.fields("read model "+id, rm.Fields),
+			On:           on,
+			Scopes:       m.mapScopes(id, rm),
+			Filters:      m.mapFilters(id, rm),
+			RequiredRole: append([]string(nil), rm.RequiredRole...),
 		})
 	}
 }

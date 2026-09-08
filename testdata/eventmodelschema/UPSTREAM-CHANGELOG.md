@@ -3,6 +3,46 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 2.7.0
+
+**Additive (non-breaking):**
+- `readModel` gains `requiredRole` — the read-side mirror of `command.requiredRole`
+  (2.5.0): the actor's own role must be a member of the declared role(s) to query
+  this read model at all. Raised by `project/timesheets`
+  (`build-plan/00-decisions-and-blockers.md` D12): every generated read-model query
+  route required only *an* authenticated actor, never a role, so any signed-in user
+  could read any tenant's full data (confirmed in a real browser — a Staff-role
+  account reading the full staff roster including hourly costs).
+- **Internal rename, no document-visible change**: the `$def` backing `requiredRole`
+  (`command.requiredRole`, `commandFieldGatedRole.requiredRole`, and now
+  `readModel.requiredRole`) is renamed from `commandRole` to `roleRequirement` — it
+  was never actually command-specific (already shared by `commandFieldGatedRole`
+  before this release), and reads oddly once a `readModel` property references it
+  too. `$def` names aren't part of a document's own vocabulary — nothing an author
+  writes changes.
+
+A 2.6.0 document validates unchanged against 2.7.0. Consuming `readModel.requiredRole`
+(a generated `ReadModelAuthorization` check in every generated query route,
+structurally parallel to `CommandAuthorization`) is `platform/eventmodeling-codegen`'s
+job, not this schema's — same split every other read/write-side capability here has
+kept (`filters`, `asOf`, `command.requiredRole` itself).
+
+## 2.6.0
+
+**Additive (non-breaking):**
+- `readModelQuery` (a scenario's `when`/`then` for a `stateView` slice) gains an
+  optional `asOf` (ISO 8601 date, `YYYY-MM-DD`), sibling to `queryParams`. Meaningful
+  only alongside a `filters`-declared (2.4.0) `dateRangePreset` param: when present, a
+  verify runner should resolve `last7Days`/`lastCalendarMonth` against `asOf` instead of
+  the live clock, letting a scenario pin "today" once instead of drifting out of its own
+  window on a rolling cadence. Absent, behavior is unchanged (today's live-clock
+  resolution).
+- Consuming `asOf` (stubbing the verify-time clock) is a generator's job
+  (`platform/eventmodeling-codegen`), not this schema's — same split as `filters`
+  itself.
+
+A 2.5.0 document validates unchanged against 2.6.0.
+
 ## 2.5.0
 
 **Additive (non-breaking):**

@@ -597,6 +597,12 @@ func writeProjectionHeader(b *strings.Builder, d Domain, rm ReadModel, ctor, typ
 	b.WriteString("// once they've settled; the collection itself becomes an ordinary\n")
 	b.WriteString("// PocketBase migration (see migrations/1754200000_tasks_collection.go for\n")
 	b.WriteString("// the shape) — this file does not create it.\n")
+	if len(rm.RequiredRole) > 0 {
+		fmt.Fprintf(b, "// requiredRole (schema 2.7.0): %s must be able to read %q. This target has\n",
+			strings.Join(rm.RequiredRole, " or "), rm.Collection)
+		b.WriteString("// no generated collection/rule step (unlike the JS target's //@rule) --\n")
+		b.WriteString("// set ListRule/ViewRule yourself in that hand-written migration.\n")
+	}
 	fmt.Fprintf(b, "func %s(app core.App) *%s { return &%s{app: app} }\n\n", ctor, typeName, typeName)
 	fmt.Fprintf(b, "type %s struct {\n\tapp core.App\n}\n\n", typeName)
 	fmt.Fprintf(b, "func (p *%s) Name() string { return %q }\n", typeName, rm.Collection)

@@ -295,6 +295,14 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		res.Detail = err.Error()
 		return
 	}
+	ref := nowFunc()
+	if q.AsOf != nil {
+		ref, err = parseFilterDateString(*q.AsOf)
+		if err != nil {
+			res.Detail = fmt.Sprintf("asOf %q: %v", *q.AsOf, err)
+			return
+		}
+	}
 	rm, ok := v.doc.ReadModels[q.ReadModelID]
 	if !ok {
 		res.Detail = fmt.Sprintf("read model %q does not exist", q.ReadModelID)
@@ -339,7 +347,7 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		res.Detail = scopeErr
 		return
 	}
-	filteredRows, remainingParams, filterErr := filterByFilters(rm, scopedRows, remainingParams)
+	filteredRows, remainingParams, filterErr := filterByFilters(rm, scopedRows, remainingParams, ref)
 	if filterErr != "" {
 		res.Detail = filterErr
 		return
@@ -537,7 +545,13 @@ func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, 
 // selectRows rather than turned into a predicate, because there was no
 // column or declared filter for it to become one against. A read model that
 // declares the param in Filters now gets a real range predicate instead.
-func filterByFilters(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage) (map[string]map[string]any, json.RawMessage, string) {
+//
+// ref is what a dateRangePreset resolves "today" against — nowFunc() by
+// default, or a scenario's own readModelQuery.asOf when it declares one
+// (schema 2.6.0), resolved by the caller (runViewScenario) before this is
+// called. Passed explicitly rather than read from nowFunc() here, so this
+// function has no live-clock dependency of its own to reason about.
+func filterByFilters(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage, ref time.Time) (map[string]map[string]any, json.RawMessage, string) {
 	if len(rm.Filters) == 0 || len(queryParams) == 0 {
 		return rows, queryParams, ""
 	}
@@ -579,7 +593,7 @@ func filterByFilters(rm ReadModel, rows map[string]map[string]any, queryParams j
 			return nil, nil, fmt.Sprintf("filter %q: preset %q is not one of this filter's declared presets %v",
 				filt.Param, preset, filt.Presets)
 		}
-		from, to, err := resolveDateRangeFilter(preset, val, nowFunc())
+		from, to, err := resolveDateRangeFilter(preset, val, ref)
 		if err != nil {
 			return nil, nil, fmt.Sprintf("filter %q: %v", filt.Param, err)
 		}

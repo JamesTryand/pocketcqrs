@@ -187,6 +187,14 @@ type ReadModel struct {
 	// named presets rather than a raw date range — sibling to Scopes.
 	// Schema 2.4.0 / F-20's dateRange follow-up.
 	Filters []ReadModelFilter `json:"filters,omitempty"`
+	// RequiredRole names the role(s) allowed to read this collection at
+	// all, resolved from emschema.ReadModel.RequiredRole (schema 2.7.0).
+	// Enforced by emitting a //@rule directive on the generated projection
+	// — see Domain.projection — since this project has no generated route
+	// to hook a per-request check into for reads (unlike dotnetcqrs's
+	// pluggable resolveOwnRole, PocketBase's own collection rule is the
+	// only enforcement point that exists here).
+	RequiredRole []string `json:"requiredRole,omitempty"`
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
@@ -702,6 +710,13 @@ func (d Domain) projection(rm ReadModel) string {
 	fmt.Fprintf(&b, "//@trigger projection %s on %s\n", rm.Collection, strings.Join(on, " "))
 	fmt.Fprintf(&b, "//@schema %s %s\n", rm.Collection, strings.Join(columns, " "))
 	fmt.Fprintf(&b, "//@key %s\n", rm.Key)
+	if len(rm.RequiredRole) > 0 {
+		fmt.Fprintf(&b, "// requiredRole (schema 2.7.0): assumes this deployment's auth collection has\n")
+		fmt.Fprintf(&b, "// a \"role\" field -- hand-edit the rule below if that isn't this project's own\n")
+		fmt.Fprintf(&b, "// convention (this generated file is a one-time scaffold, not regenerated\n")
+		fmt.Fprintf(&b, "// over hand edits, the same posture every other //@... directive here takes).\n")
+		fmt.Fprintf(&b, "//@rule %s %s\n", rm.Collection, requiredRoleRule(rm.RequiredRole))
+	}
 	b.WriteString("//\n")
 
 	derived, order := collectDerivedActions(rm.Fields, rm.Key)
@@ -839,6 +854,23 @@ func jsDerivedOp(a derivedAction) string {
 	default:
 		return "null" // unreachable: Validate rejects any other kind before generation runs
 	}
+}
+
+// requiredRoleRule renders RequiredRole as a PocketBase rule expression: an
+// OR of equality checks against @request.auth.role, one per role, "any one
+// satisfies it" — the same any-of semantics emschema.RoleList already gives
+// command.requiredRole. Assumes the deployment's own auth collection names
+// its role field "role"; there is no pluggable per-deployment hook the way
+// dotnetcqrs's resolveOwnRole delegate is one, because a PocketBase rule is
+// a declarative expression, not a callback — see projection's own emitted
+// comment, which tells an operator how to hand-edit this if their auth
+// collection uses a different field name.
+func requiredRoleRule(roles []string) string {
+	clauses := make([]string, len(roles))
+	for i, r := range roles {
+		clauses[i] = fmt.Sprintf("@request.auth.role = %q", r)
+	}
+	return strings.Join(clauses, " || ")
 }
 
 // writeJSProjectionScopes appends one resolve<Param> helper per declared

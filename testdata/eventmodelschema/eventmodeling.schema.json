@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "2.5.0"
+      "default": "2.7.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -215,7 +215,7 @@
       "additionalProperties": false
     },
 
-    "commandRole": {
+    "roleRequirement": {
       "anyOf": [
         { "$ref": "#/$defs/id" },
         { "type": "array", "items": { "$ref": "#/$defs/id" }, "minItems": 1 }
@@ -234,7 +234,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/field" }
         },
-        "requiredRole": { "$ref": "#/$defs/commandRole" },
+        "requiredRole": { "$ref": "#/$defs/roleRequirement" },
         "fieldGatedRole": { "$ref": "#/$defs/commandFieldGatedRole" },
         "requiredOwnership": { "$ref": "#/$defs/commandOwnership" },
         "scope": { "$ref": "#/$defs/commandScope" }
@@ -254,7 +254,7 @@
             { "type": "number" }
           ]
         },
-        "requiredRole": { "$ref": "#/$defs/commandRole" }
+        "requiredRole": { "$ref": "#/$defs/roleRequirement" }
       },
       "additionalProperties": false
     },
@@ -388,7 +388,8 @@
         "filters": {
           "type": "array",
           "items": { "$ref": "#/$defs/readModelFilter" }
-        }
+        },
+        "requiredRole": { "$ref": "#/$defs/roleRequirement" }
       },
       "additionalProperties": false
     },
@@ -500,7 +501,8 @@
       "required": ["readModelId"],
       "properties": {
         "readModelId": { "$ref": "#/$defs/id" },
-        "queryParams": { "type": "object" }
+        "queryParams": { "type": "object" },
+        "asOf": { "type": "string", "format": "date" }
       },
       "additionalProperties": false
     },

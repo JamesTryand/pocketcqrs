@@ -3,23 +3,31 @@
 Fixtures for M14 (eventmodelschema import/export). Copied verbatim, unmodified.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
-- **Commit**: `649e86d`, tag `v2.5.0` — *"Schema 2.5.0: command authorization
-  (requiredRole, fieldGatedRole, requiredOwnership, scope)"*, 2026-09-03 —
-  platform/command-authorization, ported into this repo the same day (see
-  `emschema/document.go`'s `Command` type and package `authorize`).
-- **Copied**: 2026-09-03 (previously `0acc987` / `2.4.0`, "readModel.filters
-  for single-field date-range query filtering", 2026-09-02; before that
-  `bb4a060` / `2.3.0`, "groupBy derivation for nested rollups", 2026-09-02;
-  before that `v2.1.0` / `a9f0d8e7`, "added accepted status", 2026-08-30;
-  before that `v2.0.0` / `1b4a01c`, "Bump eventModelingSchemaVersion to
-  2.0.0", 2026-08-06; before that `852989a`, "v2 M3: multi-file composition
-  layer"). This refresh is additive-only over 2.4.0 — `command` gains four
-  optional keywords (new `$defs` `commandRole`/`commandFieldGatedRole`/
-  `commandOwnership`/`commandScope`) — the copy is documentation/example
-  fixture only (nothing in this repo validates a document against it at
-  runtime; see `emschema/document.go`'s own header comment for the Go-side
-  source of truth, and `emschema/lint.go`'s `lintCommandAuth` for this
-  repo's own referential-integrity checks over the four new keywords).
+- **Commit**: `c4fcf2c`, tag `v2.7.0` — *"readModel.requiredRole -- the
+  read-side mirror of command authorization"*, 2026-09-08 — raised by
+  `project/timesheets` (D12), ported into this repo the same day (see
+  `emschema/document.go`'s `ReadModel.RequiredRole` and
+  `scaffold.Domain.projection`'s `//@rule` emission).
+- **Copied**: 2026-09-08 (venture-overview schema-update check; previously
+  `649e86d` / `v2.5.0`, "command authorization (requiredRole, fieldGatedRole,
+  requiredOwnership, scope)", 2026-09-03; before that `0acc987` / `2.4.0`,
+  "readModel.filters for single-field date-range query filtering",
+  2026-09-02; before that `bb4a060` / `2.3.0`, "groupBy derivation for nested
+  rollups", 2026-09-02; before that `v2.1.0` / `a9f0d8e7`, "added accepted
+  status", 2026-08-30; before that `v2.0.0` / `1b4a01c`, "Bump
+  eventModelingSchemaVersion to 2.0.0", 2026-08-06; before that `852989a`,
+  "v2 M3: multi-file composition layer"). Two releases skipped straight from
+  2.5.0 to 2.7.0 in one refresh — 2.6.0 (`readModelQuery.asOf`, see
+  `emschema/verify.go`'s `runViewScenario`/`filterByFilters`) and 2.7.0
+  (`readModel.requiredRole`) both landed in `dotnetcqrs` the same day
+  (2026-09-08, v0.7.0/v0.8.0) and were ported here together in the same
+  pass, having previously gone unported entirely (this repo stayed on 2.5.0
+  through both schema releases until this refresh). Both additive only over
+  2.5.0 — the copy is documentation/example fixture only (nothing in this
+  repo validates a document against it at runtime; see
+  `emschema/document.go`'s own header comment for the Go-side source of
+  truth, and `emschema/lint.go`'s `lintCommandAuth` for this repo's own
+  referential-integrity checks over the 2.5.0 keywords).
 - Same author as this repository; no separate licence file exists upstream.
 
 ## Contents
