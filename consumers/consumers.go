@@ -122,6 +122,15 @@ func (e *Engine) Names() []string {
 	return out
 }
 
+// Checkpoint returns the named consumer's durable position from THIS
+// engine's checkpoint store — the one it actually advances. On a secondary
+// that is the local checkpoints store, not the replicated source, whose
+// checkpoint table holds the master's progress (see
+// NewEngineWithCheckpoints). 0 for a consumer that has never run.
+func (e *Engine) Checkpoint(ctx context.Context, name string) (int64, error) {
+	return e.checkpoints.Checkpoint(ctx, name)
+}
+
 // Start runs the catch-up loop until ctx is done: immediately on every
 // committed event (in-process nudge) and on a slow ticker fallback
 // (covers restarts and missed nudges).

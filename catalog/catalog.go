@@ -157,10 +157,6 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	checkpoints, err := in.Store.Checkpoints(ctx)
-	if err != nil {
-		return nil, err
-	}
 	flows, err := in.Store.ReactorFlows(ctx)
 	if err != nil {
 		return nil, err
@@ -234,7 +230,14 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 		reactorDispatches[spec.Name()] = spec.Dispatches
 	}
 	for _, name := range in.Engine.Names() {
-		cons := Consumer{Name: name, Checkpoint: checkpoints[name]}
+		// read through the engine, not in.Store: on a secondary the store is
+		// the replicated events.db, whose checkpoint table is the MASTER's
+		// progress; this node's own lives in its local checkpoint store
+		checkpoint, err := in.Engine.Checkpoint(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		cons := Consumer{Name: name, Checkpoint: checkpoint}
 		switch {
 		case projKinds[name] != "":
 			cons.Kind = projKinds[name]

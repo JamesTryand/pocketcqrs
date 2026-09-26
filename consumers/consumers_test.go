@@ -170,6 +170,19 @@ func TestEngineWithSeparateCheckpointStore(t *testing.T) {
 	if rec.count() != 1 {
 		t.Fatalf("expected still 1 after second pass, got %d", rec.count())
 	}
+
+	// the engine reports progress from ITS checkpoint store (what the
+	// catalog shows), never from the replicated source's own table
+	got, err := engine.Checkpoint(ctx, rec.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != pos {
+		t.Fatalf("engine.Checkpoint = %d, want the local checkpoint %d", got, pos)
+	}
+	if srcPos, _ := ro.Checkpoint(ctx, rec.Name()); srcPos == got {
+		t.Fatalf("test is not discriminating: source checkpoint %d equals local %d", srcPos, got)
+	}
 }
 
 type failingConsumer struct {
