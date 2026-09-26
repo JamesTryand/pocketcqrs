@@ -89,6 +89,7 @@ provide) — a stated incompatibility, not a scale-dependent risk.
 | --- | --- | --- |
 | `--cqrsRole` | `master` | `master` appends to `events.db`; `secondary` polls a replica read-only and refuses local writes |
 | `--cqrsEventsPath` | `<dir>/events.db` | where `events.db` lives — a secondary points this at the master's replicated file (a LiteFS FUSE mount path, for genuine cross-host — see below) |
+| `--cqrsRequireExistingEventLog` | `false` | master only: refuse to start if `events.db` (at `--cqrsEventsPath`) does not already exist, instead of creating an empty log. Turn it on for a master whose log lives on a LiteFS mount once the log exists; leave it off for the first boot that creates it. A secondary always requires an existing log |
 | `--cqrsVFS` | *(none)* | **dead hook — not the cross-host mechanism.** A SQLite VFS name to open `events.db` through on a secondary, if one is already registered with the driver. Nothing in this codebase registers a VFS, and LiteFS (the actual decided mechanism) does not use this flag at all — it works by FUSE-mounting a directory, not by SQLite VFS registration. Leave this unset |
 | `--cqrsMasterAddr` | *(none)* | the master's base URL; when set on a secondary, commands are proxied there instead of refused |
 | `--cqrsForwardAuth` | `false` | also route PocketBase's own auth-collection traffic (login, token refresh, `_users`/`_superusers` records — reads included) to the master, since a secondary's copies of those tables are unrelated local tables, not replicas |
@@ -180,6 +181,12 @@ is ready, folding both processes into one unit — a real option, not yet exerci
 own testing, which deliberately keeps `litefs mount` and `pocketcqrs serve` as two separate,
 independently-inspectable processes.
 
+Backstop for the master: pass `--cqrsRequireExistingEventLog` once the log exists. Started before
+the mount is up, a master otherwise creates a fresh, empty `events.db` on the bare mount point and
+serves as if history were empty; with the flag it exits with `events: event log does not exist`
+instead, and the supervisor's restart retries it. Leave the flag off only for the very first boot
+that is meant to create the log.
+
 #### Adopting LiteFS on an existing deployment
 
 A single-instance deployment does not need to decide about LiteFS up front. Run on a plain
@@ -197,7 +204,8 @@ the start.
 
 **Do not just `cp` the existing file into the FUSE mount** — this fails outright
 (`Input/output error`), and if the failure isn't checked, pocketcqrs will silently open a fresh,
-empty database at that path instead of the real one. `litefs import` is the only supported path.
+empty database at that path instead of the real one (unless `--cqrsRequireExistingEventLog` is set,
+which refuses to start instead). `litefs import` is the only supported path.
 
 #### Restarts
 

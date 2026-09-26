@@ -861,3 +861,31 @@ func TestImportEventsIDCollisionRollsBackAtomically(t *testing.T) {
 		t.Fatalf("expected nothing written after the id-collision rollback, got %+v", widgets)
 	}
 }
+
+// TestOpenExistingRefusesAMissingLog: the opt-in guard behind
+// --cqrsRequireExistingEventLog. A master started before its LiteFS mount
+// is up would otherwise create a fresh, empty events.db at the mount point
+// and carry on as if history were empty.
+func TestOpenExistingRefusesAMissingLog(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.db")
+
+	if _, err := OpenExisting(path); !errors.Is(err, ErrEventLogMissing) {
+		t.Fatalf("expected ErrEventLogMissing, got %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("a refused open must not create the file: stat err = %v", err)
+	}
+
+	// once the log exists, OpenExisting is just Open
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = OpenExisting(path)
+	if err != nil {
+		t.Fatalf("OpenExisting on an existing log: %v", err)
+	}
+	s.Close()
+}

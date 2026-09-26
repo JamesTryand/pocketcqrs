@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http/httputil"
@@ -258,6 +259,19 @@ func main() {
 		"path to events.db, overriding the default of <dir>/events.db; a "+roleSecondary+
 			" needs this to point at the master's replicated file rather than its own local one",
 	)
+	// Opt-in guard for a master whose events.db lives on a mount (LiteFS):
+	// started before the mount is up, events.Open would create a fresh,
+	// empty log on the bare mount point and serve as if history were empty.
+	// Off by default so a single-node first boot still creates the log.
+	var requireEventLog bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&requireEventLog,
+		"cqrsRequireExistingEventLog",
+		false,
+		"refuse to start a "+roleMaster+" whose events.db does not already exist, instead of creating "+
+			"an empty one (e.g. started before its LiteFS mount is up). Leave off for the first boot "+
+			"that creates the log. A "+roleSecondary+" always requires it",
+	)
 	// Command forwarding (item 3): only meaningful on a secondary. Empty
 	// (the default) leaves a secondary refusing commands outright (see
 	// events.ErrReadOnly in gateway.go) -- a deliberate choice, e.g. a
@@ -510,6 +524,12 @@ func main() {
 				opts = append(opts, events.WithVFS(vfs))
 			}
 			store, err = events.OpenReadOnly(eventsPath, opts...)
+		} else if requireEventLog {
+			store, err = events.OpenExisting(eventsPath)
+			if errors.Is(err, events.ErrEventLogMissing) {
+				err = fmt.Errorf("%w (--cqrsRequireExistingEventLog is set: is the events.db mount up? "+
+					"drop the flag only for the first boot that should create the log)", err)
+			}
 		} else {
 			store, err = events.Open(eventsPath)
 		}

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -146,6 +147,26 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("events: migrate: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+// ErrEventLogMissing is returned by OpenExisting when path does not exist.
+var ErrEventLogMissing = errors.New("events: event log does not exist")
+
+// OpenExisting is Open for a writer that must NOT create the log: it refuses
+// with ErrEventLogMissing when path does not already exist, instead of
+// silently starting an empty history. The case it exists for is a master
+// whose events.db lives on a mount (LiteFS FUSE) that is not up yet — Open
+// would create a fresh file on the bare mount point and the node would serve
+// as if nothing had ever happened. Opt-in: the very first boot of a new
+// deployment still needs plain Open to create the file.
+func OpenExisting(path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrEventLogMissing, path)
+		}
+		return nil, fmt.Errorf("events: stat %s: %w", path, err)
+	}
+	return Open(path)
 }
 
 // OpenOption configures OpenReadOnly.
