@@ -26,7 +26,8 @@ import (
 var ErrConcurrency = errors.New("events: concurrency conflict")
 
 // ErrReadOnly is returned by every write method (Append, SaveCheckpoint,
-// SetMeta, SetMode) on a Store opened with OpenReadOnly.
+// SetMeta, SetMode, ImportEvents and the dead-letter writes) on a Store
+// opened with OpenReadOnly.
 var ErrReadOnly = errors.New("events: store is read-only")
 
 // NewEvent is an event about to be appended.
@@ -255,6 +256,12 @@ func migrate(db *sql.DB) error {
 
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
+
+// ReadOnly reports whether the store was opened with OpenReadOnly. A node
+// whose store is read-only is a replica: it folds the log into its own read
+// models but must not run the side-effecting tiers (effect functions,
+// reactors, cron) -- those belong to the one node that can write.
+func (s *Store) ReadOnly() bool { return s.readOnly }
 
 // Append atomically validates expectedSequence against the stream's current
 // length and appends evts. Sequences are 1-based and contiguous, so the

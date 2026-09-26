@@ -33,11 +33,24 @@ func startSecondary(t *testing.T, master *harness, extra ...string) *harness {
 // litestream_replica_test.go).
 func startSecondaryAt(t *testing.T, master *harness, eventsPath string, extra ...string) *harness {
 	t.Helper()
+	return startSecondaryWith(t, master, eventsPath, nil, extra...)
+}
+
+// startSecondaryWith is startSecondaryAt plus function files (name→source)
+// written into the secondary's own functions dir before boot, for tests
+// about which tiers a secondary does and does not run.
+func startSecondaryWith(t *testing.T, master *harness, eventsPath string, functions map[string]string, extra ...string) *harness {
+	t.Helper()
 
 	dir := t.TempDir()
 	fnDir := filepath.Join(dir, "pb_functions")
 	if err := os.MkdirAll(fnDir, 0o755); err != nil {
 		t.Fatal(err)
+	}
+	for name, src := range functions {
+		if err := os.WriteFile(filepath.Join(fnDir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	dataDir := filepath.Join(dir, "pb_data")
 

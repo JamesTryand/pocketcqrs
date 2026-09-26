@@ -68,6 +68,31 @@ func TestOpenReadOnlyRejectsWrites(t *testing.T) {
 	if err := ro.SetMode(ctx, ModeMaintenance); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("SetMode: expected ErrReadOnly, got %v", err)
 	}
+	// dead letters are writes too: an effect function that somehow runs
+	// against a replica must get a clear refusal, not "attempt to write a
+	// readonly database"
+	if err := ro.AddDeadLetter(ctx, "fn:x", stream[0], errors.New("boom")); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("AddDeadLetter: expected ErrReadOnly, got %v", err)
+	}
+	if err := ro.ResolveDeadLetter(ctx, 1); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("ResolveDeadLetter: expected ErrReadOnly, got %v", err)
+	}
+	if err := ro.FailDeadLetterRetry(ctx, 1, errors.New("boom")); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("FailDeadLetterRetry: expected ErrReadOnly, got %v", err)
+	}
+	if !ro.ReadOnly() || writerReadOnly(t, path) {
+		t.Fatal("ReadOnly() must report true for OpenReadOnly and false for Open")
+	}
+}
+
+func writerReadOnly(t *testing.T, path string) bool {
+	t.Helper()
+	w, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	return w.ReadOnly()
 }
 
 // TestOpenReadOnlyAgainstDeleteModeCopy reproduces what a Litestream

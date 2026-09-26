@@ -79,6 +79,11 @@ type components struct {
 	verifyCache *authverify.Cache
 }
 
+// runsSideEffects reports whether a node of this role registers the
+// side-effecting tiers (reactors, effect functions, cron). Only the master
+// does; the reload path applies the same rule via events.Store.ReadOnly.
+func runsSideEffects(role string) bool { return role != roleSecondary }
+
 func main() {
 	// `skill` copies files out of the binary and touches nothing else, so run
 	// it before PocketBase exists.
@@ -678,11 +683,22 @@ func main() {
 			c.Engine.Register(p)
 		}
 
+		// Side-effecting tiers — reactors, effect functions and cron — run on
+		// the master ONLY. A secondary folds the same log into its own read
+		// models (projections above), but re-running effects there would
+		// fire every one of them once per node, their dead-letter writes and
+		// reactor dispatches would bounce off the read-only store, and cron
+		// would tick on every box. See runsSideEffects.
+		sideEffects := runsSideEffects(c.role)
+		if !sideEffects {
+			logger.Info("secondary: reactors, effect functions and cron are not registered on this node (they run on the master)")
+		}
+
 		// sagas: reactors dispatch follow-up commands through the registry.
 		// The fulfillment saga is example content — it wires the example
 		// order aggregate to the example task one, so it only exists when
 		// they do.
-		if c.Tutorial {
+		if c.Tutorial && sideEffects {
 			c.Engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.Registry,
 				func(msg string, args ...any) { logger.Info(msg, args...) },
 				func(msg string, args ...any) { logger.Warn(msg, args...) }))
@@ -700,6 +716,9 @@ func main() {
 		// adminapi's State.ProspectiveCommands.
 		var activeReactors []*functions.ReactorSpec
 		for _, spec := range loaded.Reactors {
+			if !sideEffects {
+				break
+			}
 			if err := functions.ValidateReactorSpec(c.Registry, spec); err != nil {
 				if strictBoot {
 					return fmt.Errorf("strict boot: JS reactor %q failed validation: %w", spec.Reactor, err)
@@ -753,18 +772,20 @@ func main() {
 		// but safe to guard alongside them — see writeguard.AuthOrigins (F-6).
 		writeguard.Register(e.App, append(cols, writeguard.AuthOrigins)...)
 
-		// effect functions: durable delivery through the consumers engine
-		for _, fc := range rt.Consumers() {
-			c.Engine.Register(fc)
-		}
-
-		// cron functions: scheduled by PocketBase's cron service
-		for _, job := range rt.CronJobs() {
-			id := "fn:" + job.Name
-			if err := e.App.Cron().Add(id, job.Schedule, job.Fire); err != nil {
-				return err
+		// effect functions: durable delivery through the consumers engine,
+		// and cron functions: scheduled by PocketBase's cron service.
+		// Master only (see sideEffects above).
+		if sideEffects {
+			for _, fc := range rt.Consumers() {
+				c.Engine.Register(fc)
 			}
-			c.CronJobs = append(c.CronJobs, id)
+			for _, job := range rt.CronJobs() {
+				id := "fn:" + job.Name
+				if err := e.App.Cron().Add(id, job.Schedule, job.Fire); err != nil {
+					return err
+				}
+				c.CronJobs = append(c.CronJobs, id)
+			}
 		}
 
 		return nil

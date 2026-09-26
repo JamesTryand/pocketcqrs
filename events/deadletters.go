@@ -40,8 +40,12 @@ func nowString() string {
 	return time.Now().UTC().Format("2006-01-02 15:04:05.000Z")
 }
 
-// AddDeadLetter records a failed delivery of ev by consumer.
+// AddDeadLetter records a failed delivery of ev by consumer. A read-only
+// store refuses with ErrReadOnly, like every other write method.
 func (s *Store) AddDeadLetter(ctx context.Context, consumer string, ev Event, cause error) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	raw, err := json.Marshal(ev)
 	if err != nil {
 		return err
@@ -89,6 +93,9 @@ func (s *Store) DeadLetters(ctx context.Context, includeResolved bool) ([]DeadLe
 
 // ResolveDeadLetter marks a dead letter resolved (retry succeeded or dismissed).
 func (s *Store) ResolveDeadLetter(ctx context.Context, id int64) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	res, err := s.db.ExecContext(ctx, `UPDATE dead_letters SET resolved = 1 WHERE id = ?`, id)
 	if err != nil {
 		return err
@@ -101,6 +108,9 @@ func (s *Store) ResolveDeadLetter(ctx context.Context, id int64) error {
 
 // FailDeadLetterRetry records a failed retry attempt.
 func (s *Store) FailDeadLetterRetry(ctx context.Context, id int64, cause error) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE dead_letters SET attempts = attempts + 1, last_failed = ?, error = ? WHERE id = ?`,
 		nowString(), cause.Error(), id)

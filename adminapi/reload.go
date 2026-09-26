@@ -29,6 +29,11 @@ type ReloadReport struct {
 	DecidersReloaded   []string `json:"decidersReloaded,omitempty"`
 	DecidersRemoved    []string `json:"decidersRemoved,omitempty"`
 	DecidersRefused    []string `json:"decidersRefused,omitempty"`
+	// SideEffects is set when this node is a read-only replica: effect
+	// functions, reactors and cron are not registered here (they run on the
+	// master), so EffectsReloaded, ReactorsReloaded and CronReloaded stay
+	// empty by design.
+	SideEffects string `json:"sideEffects,omitempty"`
 }
 
 // RegisterReloadRoute binds the superuser-only hot-reload endpoint:
@@ -166,10 +171,22 @@ func (s *State) reloadFunctions(ctx context.Context, functionsDir string) (*Relo
 	// -----------------------------------------------------------------
 	// effects tier: safe to swap in any mode
 	// -----------------------------------------------------------------
+	// A read-only replica never runs the side-effecting tiers (effect
+	// functions, reactors, cron) -- the master does, once. Their old
+	// registrations are still removed (there are none on a replica booted
+	// by the stock binary, but an embedder may have wired some), and
+	// nothing fresh is added.
+	sideEffects := !s.Store.ReadOnly()
+	if !sideEffects {
+		report.SideEffects = "skipped: read-only replica (effect functions, reactors and cron run on the master)"
+	}
 	for _, consumer := range s.FnRuntime.Consumers() {
 		s.Engine.Unregister(consumer.Name())
 	}
 	for _, consumer := range fresh.Consumers() {
+		if !sideEffects {
+			break
+		}
 		s.Engine.Register(consumer)
 		report.EffectsReloaded = append(report.EffectsReloaded, consumer.Name())
 	}
@@ -193,6 +210,9 @@ func (s *State) reloadFunctions(ctx context.Context, functionsDir string) (*Relo
 	prospective := s.ProspectiveCommands(mode, loaded)
 	var keptReactors []*functions.ReactorSpec
 	for _, spec := range loaded.Reactors {
+		if !sideEffects {
+			break
+		}
 		if err := functions.ValidateReactorSpec(prospective, spec); err != nil {
 			// refusal keeps the old reactor serving, exactly as a refused
 			// decider does — and it is REPORTED, which is the whole point:
@@ -222,6 +242,9 @@ func (s *State) reloadFunctions(ctx context.Context, functionsDir string) (*Relo
 	}
 	s.CronJobs = nil
 	for _, job := range fresh.CronJobs() {
+		if !sideEffects {
+			break
+		}
 		id := "fn:" + job.Name
 		if err := s.App.Cron().Add(id, job.Schedule, job.Fire); err != nil {
 			return nil, fmt.Errorf("reload: cron function %s: %w", job.Name, err)

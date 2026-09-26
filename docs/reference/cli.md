@@ -63,6 +63,11 @@ Two consequences worth knowing:
 
 One master appends to `events.db`; any number of secondaries poll a
 replicated copy of that file read-only and run their own local projections.
+Only the master runs the side-effecting tiers — effect functions
+(`//@trigger event`), reactors (Go and `//@trigger reactor`) and cron
+(`//@trigger cron`); a secondary loads the same function files but never
+registers those, at boot or on reload, so each effect fires once for the
+fleet, not once per node.
 There is no leader election — the master is fixed by configuration.
 `data.db` (auth records, settings, signing secrets) is per-node and **never
 replicated**; only `events.db` is.
