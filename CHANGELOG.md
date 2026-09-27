@@ -3,6 +3,18 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased
+
+### Added
+
+- **Node identity** (cross-stack node-identity contract 1.0). `serve` resolves a `node_id` before
+  listening and logs it with `identity`, `instance`, `host`, `role` and `started_at`: an assigned
+  `CQRS_NODE_ID` (or the new `--cqrsNodeId`) wins; otherwise `pb_data/node-id`, generated as a
+  UUIDv7 on first boot. An unwritable data dir or a damaged `node-id` gives an `ephemeral` id and a
+  logged warning or error; the file is never overwritten. An invalid `CQRS_NODE_ID` (outside
+  `^[A-Za-z0-9_-]{1,64}$`) refuses to start. New package `nodeidentity`. Nothing reports the id
+  over HTTP yet; the health/telemetry endpoints will. See `docs/reference/cli.md`, "Node identity".
+
 ## v0.11.0 — runtime-contract fixes, events.db slice/merge, schema 2.3.0–2.7.0
 
 Five fixes found while specifying the cross-stack health/telemetry contract (every node state and
