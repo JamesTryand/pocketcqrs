@@ -137,10 +137,14 @@ type Config struct {
 // rejected with 503: the write side is paused so schema-bearing functions
 // can be reloaded safely.
 //
-// Returns 200 with the appended events, 400 for domain/validation errors,
-// 401 without a token, 404 for unknown aggregates, 409 for concurrency
-// conflicts, 503 in maintenance mode, 504 if Config.Batching is set and the
-// command's batch does not commit within BatchTimeout.
+// Returns 200 with the appended events, 400 for a domain rejection (an
+// error returned by the decider's Decide -- see decider.IsRejection), 401
+// without a token, 404 for unknown aggregates, 409 for concurrency
+// conflicts, 503 in maintenance mode or while the event store stays locked
+// (events.IsUnavailable), 504 if Config.Batching is set and the command's
+// batch does not commit within BatchTimeout, and 500 for any other failure
+// (stream load/upcast, fold, append, a JS decide that timed out) -- never
+// 400, which a client reads as "the domain said no".
 //
 // If Config.Batching is set, a command is enqueued and the handler blocks
 // until its own batch commits (item 4) instead of deciding inline — every
@@ -302,8 +306,26 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 				return re.JSON(http.StatusServiceUnavailable, map[string]string{
 					"error": "this node is a read-only replica; commands must go to the master",
 				})
-			default:
+			case decider.IsRejection(err):
+				// the decider's own verdict: the only 400 on this path. Not
+				// cached for idempotency replay (no side effect happened).
 				return apis.NewBadRequestError(err.Error(), err)
+			case events.IsUnavailable(err):
+				// the event store stayed locked past its busy_timeout:
+				// nothing was applied, and a retry may well succeed
+				re.Response.Header().Set("Retry-After", "1")
+				return re.JSON(http.StatusServiceUnavailable, map[string]string{
+					"error": "the event store is busy: " + err.Error(),
+					"hint":  "nothing was applied; safe to retry shortly",
+				})
+			default:
+				// anything else failed on the way to or from the decider
+				// (loading/upcasting the stream, folding it, the append, a
+				// JS decide that timed out): the platform's fault, not the
+				// caller's, so it must not look like a domain rejection
+				return re.JSON(http.StatusInternalServerError, map[string]string{
+					"error": "command failed: " + err.Error(),
+				})
 			}
 		}
 
@@ -316,8 +338,7 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 }
 
 // errBatchTimeout is handleViaBatching's sentinel for "the batch never
-// committed within Config.BatchTimeout" — mapped to 504 by RegisterRoutes,
-// not the generic 400 every other decide error gets.
+// committed within Config.BatchTimeout" — mapped to 504 by RegisterRoutes.
 var errBatchTimeout = errors.New("gateway: batch commit did not complete in time")
 
 // handleViaBatching enqueues a command through cfg.Batching and blocks

@@ -278,3 +278,41 @@ func TestValidateDeciderSpec(t *testing.T) {
 		t.Fatalf("expected missing transform fn error, got %v", err)
 	}
 }
+
+// TestJSDecideErrorClassification: a JS decider rejects by throwing, and
+// that is a domain rejection. A decide that never reaches a verdict -- the
+// execution timeout, or a result that is not an event list -- is a platform
+// failure (decider.ErrDecideFault), so the gateway does not report it as a
+// 400 the caller should accept.
+func TestJSDecideErrorClassification(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name      string
+		decide    string
+		rejection bool
+	}{
+		{"throw is a rejection", `throw new Error("no thanks");`, true},
+		{"malformed result is a fault", `return "not an array";`, false},
+		{"timeout is a fault", `while (true) {}`, false},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, registry := deciderSetup(t)
+			rt := NewGojaRuntime(nil)
+			src := "function initialState() { return {}; }\n" +
+				"function decide(command, state) { " + tc.decide + " }\n" +
+				"function evolve(state, event) { return state; }\n"
+			agg := fmt.Sprintf("probe%d", i)
+			spec := mkDeciderSpec(t, rt, agg, src, nil, nil)
+			registry.RegisterUntyped(agg, spec.UntypedDecider())
+
+			_, err := registry.HandleWithMeta(ctx, agg, "p1", decider.Command{Name: "Go"}, nil)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := decider.IsRejection(err); got != tc.rejection {
+				t.Fatalf("IsRejection = %v, want %v (err: %v)", got, tc.rejection, err)
+			}
+		})
+	}
+}

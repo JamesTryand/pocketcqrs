@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -377,5 +378,73 @@ func TestHandleWithMetaComposesDecideWithMetaAndAppend(t *testing.T) {
 	}
 	if appended[0].Sequence != 1 {
 		t.Fatalf("expected the composed HandleWithMeta to append at sequence 1, got %d", appended[0].Sequence)
+	}
+}
+
+type failingLoader struct{ err error }
+
+func (f failingLoader) LoadStream(context.Context, string, string) ([]events.Event, error) {
+	return nil, f.err
+}
+
+// TestOnlyDecideErrorsAreRejections: the registry marks an error returned
+// by Decide as a domain rejection, and nothing else it can return --
+// loading the stream (SQLite, upcaster) and folding it (Evolve) are not
+// the decider's verdict. The mark is transparent: the message and
+// errors.Is on the original error are unchanged.
+func TestOnlyDecideErrorsAreRejections(t *testing.T) {
+	ctx := context.Background()
+	domainErr := errors.New("counter is frozen")
+
+	r := setup(t)
+	Register(r, "frozen", &Decider[counterState]{
+		InitialState: func() counterState { return counterState{} },
+		Decide: func(Command, counterState) ([]events.NewEvent, error) {
+			return nil, domainErr
+		},
+		Evolve: func(s counterState, _ events.Event) (counterState, error) { return s, nil },
+	})
+	_, err := r.Handle(ctx, "frozen", "f1", Command{Name: "Increment"})
+	if !IsRejection(err) {
+		t.Fatalf("an error returned by Decide must be a rejection, got %T %v", err, err)
+	}
+	if !errors.Is(err, domainErr) || err.Error() != domainErr.Error() {
+		t.Fatalf("the rejection mark must be transparent, got %q", err)
+	}
+
+	// a Decide adapter can say "this is not a verdict" (e.g. a JS timeout)
+	Register(r, "faulty", &Decider[counterState]{
+		InitialState: func() counterState { return counterState{} },
+		Decide: func(Command, counterState) ([]events.NewEvent, error) {
+			return nil, fmt.Errorf("%w: execution timeout", ErrDecideFault)
+		},
+		Evolve: func(s counterState, _ events.Event) (counterState, error) { return s, nil },
+	})
+	if _, err := r.Handle(ctx, "faulty", "x1", Command{Name: "Increment"}); err == nil || IsRejection(err) {
+		t.Fatalf("an ErrDecideFault must not be a rejection, got %v", err)
+	}
+
+	// loading the stream fails: infrastructure, not a rejection
+	loadErr := errors.New("disk I/O error")
+	if _, _, err := r.DecideWithMeta(ctx, failingLoader{err: loadErr}, "counter", "c1",
+		Command{Name: "Increment"}, nil); !errors.Is(err, loadErr) || IsRejection(err) {
+		t.Fatalf("a load failure must pass through unmarked, got %v", err)
+	}
+
+	// folding history fails: not the decider's verdict on this command
+	Register(r, "broken", &Decider[counterState]{
+		InitialState: func() counterState { return counterState{} },
+		Decide: func(Command, counterState) ([]events.NewEvent, error) {
+			return []events.NewEvent{{Type: "Incremented", Data: json.RawMessage(`{}`)}}, nil
+		},
+		Evolve: func(s counterState, _ events.Event) (counterState, error) {
+			return s, errors.New("cannot fold")
+		},
+	})
+	if _, err := r.Handle(ctx, "broken", "b1", Command{Name: "Increment"}); err != nil {
+		t.Fatal(err) // empty stream: Evolve never runs
+	}
+	if _, err := r.Handle(ctx, "broken", "b1", Command{Name: "Increment"}); err == nil || IsRejection(err) {
+		t.Fatalf("an Evolve failure must not be a rejection, got %v", err)
 	}
 }

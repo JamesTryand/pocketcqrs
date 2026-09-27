@@ -3,6 +3,7 @@ package functions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -111,14 +112,14 @@ func (r *GojaRuntime) runDecide(spec *DeciderSpec, cmd decider.Command, state an
 	defer func() {
 		if rec := recover(); rec != nil {
 			result = nil
-			err = fmt.Errorf("%v", rec)
+			err = decider.Fault(fmt.Errorf("%v", rec))
 		}
 	}()
 
 	vm, timer := r.newDeciderVM(spec.Aggregate)
 	defer timer.Stop()
 	if _, err := vm.RunProgram(spec.Prog); err != nil {
-		return nil, err
+		return nil, decider.Fault(err)
 	}
 
 	var payload any
@@ -137,10 +138,16 @@ func (r *GojaRuntime) runDecide(spec *DeciderSpec, cmd decider.Command, state an
 
 	fn, ok := goja.AssertFunction(vm.Get("decide"))
 	if !ok {
-		return nil, fmt.Errorf("decider %s does not define decide(command, state)", spec.Aggregate)
+		return nil, decider.Fault(fmt.Errorf("decider %s does not define decide(command, state)", spec.Aggregate))
 	}
 	v, err := fn(goja.Undefined(), vm.ToValue(command), vm.ToValue(state))
 	if err != nil {
+		// a throw is the decider's rejection; the execution timeout (an
+		// interrupt) is the decider never reaching a verdict at all
+		var interrupted *goja.InterruptedError
+		if errors.As(err, &interrupted) {
+			return nil, decider.Fault(err)
+		}
 		return nil, err
 	}
 	if goja.IsUndefined(v) || goja.IsNull(v) {
@@ -150,20 +157,20 @@ func (r *GojaRuntime) runDecide(spec *DeciderSpec, cmd decider.Command, state an
 	exported := v.Export()
 	list, ok := exported.([]any)
 	if !ok {
-		return nil, fmt.Errorf("decider %s: decide must return an array of events, got %T", spec.Aggregate, exported)
+		return nil, decider.Fault(fmt.Errorf("decider %s: decide must return an array of events, got %T", spec.Aggregate, exported))
 	}
 	for _, item := range list {
 		m, ok := item.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("decider %s: event must be {type, data}, got %T", spec.Aggregate, item)
+			return nil, decider.Fault(fmt.Errorf("decider %s: event must be {type, data}, got %T", spec.Aggregate, item))
 		}
 		typ, _ := m["type"].(string)
 		if typ == "" {
-			return nil, fmt.Errorf("decider %s: event is missing its type", spec.Aggregate)
+			return nil, decider.Fault(fmt.Errorf("decider %s: event is missing its type", spec.Aggregate))
 		}
 		data, err := json.Marshal(m["data"])
 		if err != nil {
-			return nil, err
+			return nil, decider.Fault(err)
 		}
 		ne := events.NewEvent{Type: typ, Data: data}
 		if ver, ok := m["version"]; ok {

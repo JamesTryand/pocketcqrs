@@ -24,12 +24,15 @@ resulting event's metadata:
 | status | when |
 | --- | --- |
 | `200` | `{ "events": [...] }` — the appended envelopes (empty when the decider returned no events) |
-| `400` | domain/validation rejection from the decider (its thrown message) |
+| `400` | domain/validation rejection from the decider (its thrown message) — **only** an error the decider's `decide` itself returned or threw |
 | `401` | no/invalid auth token |
+| `403` | a configured `Authorize` hook refused the command |
 | `404` | unknown aggregate |
 | `409` | concurrency conflict (the stream changed between load and append; retry the command) |
 | `422` | the `Idempotency-Key` was already used for a *different* request — see below |
-| `503` | maintenance mode — `{ error, hint }`; retry after `system maintenance off` |
+| `500` | the platform failed, not the domain: loading/upcasting the stream, folding it (`evolve`), the append, a JS `decide` that hit the execution timeout or returned something that is not an event list, or an `Authorize` hook error — `{ error }` |
+| `503` | maintenance mode — `{ error, hint }`; retry after `system maintenance off`. Also: the event store stayed locked past its busy timeout, the command queue is full, or this node is a read-only secondary with no `--cqrsMasterAddr` (nothing applied in any of these; `Retry-After` is set where a retry can help) |
+| `504` | command batching is on and the command's batch did not commit within `--cqrsBatchTimeout` |
 
 ### Idempotency
 

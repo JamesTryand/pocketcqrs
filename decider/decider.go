@@ -19,6 +19,50 @@ import (
 // ErrUnknownAggregate is returned when no decider is registered for an aggregate.
 var ErrUnknownAggregate = errors.New("decider: unknown aggregate")
 
+// RejectionError marks an error as the decider's own verdict on a command —
+// a domain rejection — as opposed to anything else that can fail on the
+// way to or from Decide (loading or upcasting the stream, folding it,
+// appending). The registry applies it to whatever Decide returns; deciders
+// never construct it and nothing about Decide's contract changes. It is
+// transparent: Error() is the decider's message and Unwrap exposes the
+// original, so errors.Is/As on it behave exactly as before.
+type RejectionError struct {
+	Err error
+}
+
+func (e *RejectionError) Error() string { return e.Err.Error() }
+func (e *RejectionError) Unwrap() error { return e.Err }
+
+// IsRejection reports whether err is (or wraps) a decider's domain
+// rejection. Callers mapping errors to outcomes (the gateway: 400 vs 5xx)
+// use this instead of treating every unrecognized error as a rejection.
+func IsRejection(err error) bool {
+	var r *RejectionError
+	return errors.As(err, &r)
+}
+
+// ErrDecideFault lets a Decide ADAPTER — not domain code — say that an
+// error is not a verdict: the decider did not reach a decision at all (the
+// JS runtime's execution timeout, a decider returning a malformed result).
+// Wrap it (Fault(err), or fmt.Errorf("%w: ...", ErrDecideFault)) and the registry leaves
+// the error unmarked, so it surfaces as a platform failure, not a 400.
+var ErrDecideFault = errors.New("decider: decide did not reach a verdict")
+
+// Fault marks err as ErrDecideFault without changing its message: the
+// result's Error() is err's, and errors.Is matches both ErrDecideFault and
+// anything err itself wraps. Nil stays nil.
+func Fault(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &faultError{err: err}
+}
+
+type faultError struct{ err error }
+
+func (e *faultError) Error() string   { return e.err.Error() }
+func (e *faultError) Unwrap() []error { return []error{ErrDecideFault, e.err} }
+
 // Command is an incoming intent: a name plus its JSON payload.
 //
 // Actor and Now mirror exactly what the JS decider binding already receives
@@ -280,7 +324,10 @@ func (r *Registry) DecideWithMeta(ctx context.Context, loader StreamLoader, aggr
 
 	newEvents, err := d.decide(cmd, state, meta)
 	if err != nil {
-		return nil, 0, err
+		if errors.Is(err, ErrDecideFault) {
+			return nil, 0, err
+		}
+		return nil, 0, &RejectionError{Err: err}
 	}
 
 	for i := range newEvents {
