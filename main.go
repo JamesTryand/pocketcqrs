@@ -29,6 +29,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/gateway"
 	"github.com/jamestryand/pocketcqrs/idempotency"
 	"github.com/jamestryand/pocketcqrs/migrations"
+	"github.com/jamestryand/pocketcqrs/nodeidentity"
 	"github.com/jamestryand/pocketcqrs/outbound"
 	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/reactors"
@@ -85,6 +86,20 @@ type components struct {
 	// through this cache; components only holds it to start/stop its
 	// pruner.
 	verifyCache *authverify.Cache
+
+	// identity is who this node is (the node-identity contract), resolved
+	// once at the start of serve, before the node listens. The health and
+	// telemetry endpoints will report it; nothing reads it yet.
+	identity nodeidentity.Identity
+}
+
+// contractRole is --cqrsRole in the runtime contracts' vocabulary: the
+// master is the writer, a secondary a reader.
+func contractRole(role string) string {
+	if role == roleSecondary {
+		return "reader"
+	}
+	return "writer"
 }
 
 // runsSideEffects reports whether a node of this role registers the
@@ -93,6 +108,9 @@ type components struct {
 func runsSideEffects(role string) bool { return role != roleSecondary }
 
 func main() {
+	// the node-identity contract's started_at: process start, not serve
+	processStart := time.Now()
+
 	// `skill` copies files out of the binary and touches nothing else, so run
 	// it before PocketBase exists.
 	//
@@ -249,6 +267,17 @@ func main() {
 		roleMaster,
 		"this node's role: "+roleMaster+" (default, appends to events.db) or "+roleSecondary+
 			" (polls a replicated events.db read-only; commands are refused, not forwarded)",
+	)
+	// Node identity (contracts/node-identity.md): an explicitly assigned id
+	// wins over the node-id file in the data dir. The env var always works;
+	// the flag is this binary's own convention for the same setting.
+	var nodeID string
+	app.RootCmd.PersistentFlags().StringVar(
+		&nodeID,
+		"cqrsNodeId",
+		os.Getenv(nodeidentity.EnvNodeID),
+		"this node's id, assigned by an orchestrator (default $"+nodeidentity.EnvNodeID+
+			"; when unset, the id stored in <dir>/"+nodeidentity.FileName+", generated on first boot)",
 	)
 	var vfs string
 	app.RootCmd.PersistentFlags().StringVar(
@@ -410,6 +439,9 @@ func main() {
 		log.Fatalf("invalid --cqrsRole %q (want %q or %q)", role, roleMaster, roleSecondary)
 	}
 	c.role = role
+	if err := nodeidentity.ValidateAssigned(nodeID); err != nil {
+		log.Fatal(err)
+	}
 
 	if role != roleSecondary && app.RootCmd.PersistentFlags().Changed("cqrsVFS") {
 		log.Printf("warning: --cqrsVFS is set but --cqrsRole=%s ignores it (only %s opens events.db through a VFS)", role, roleSecondary)
@@ -822,6 +854,26 @@ func main() {
 
 	bg := newBackground()
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		// Resolve identity before anything else the node serves. The data
+		// dir is node-local and never replicated (only events.db is), so a
+		// secondary never inherits the master's id. `instance` is the
+		// PocketBase application name (Settings > Application name), the
+		// one per-deployment workload name this binary has.
+		identity, err := nodeidentity.Resolve(nodeidentity.Options{
+			Assigned:  nodeID,
+			StateDir:  e.App.DataDir(),
+			Instance:  e.App.Settings().Meta.AppName,
+			Role:      contractRole(c.role),
+			StartedAt: processStart,
+			Logf:      log.Printf,
+		})
+		if err != nil {
+			return err
+		}
+		c.identity = identity
+		log.Printf("node identity: node_id=%s identity=%s instance=%q host=%s role=%s started_at=%s",
+			identity.NodeID, identity.Kind, identity.Instance, identity.Host, identity.Role, identity.StartedAtRFC3339())
+
 		gateway.RegisterRoutes(e, c.Registry, gatewayCfg)
 		// the verify oracle answers on every node (a secondary delegates to
 		// the master), so it is registered unconditionally; the verifying

@@ -59,6 +59,40 @@ Two consequences worth knowing:
   when you drop the flag. They keep their write-guard rather than silently
   becoming writable, and boot logs a warning naming them.
 
+### Node identity
+
+Every node has a `node_id` that survives restarts and tells apart several
+nodes on one machine (the cross-stack node-identity contract, 1.0 — dotnetcqrs
+follows the same rules). `serve` resolves it once, before listening, and logs
+it:
+
+```
+node identity: node_id=0192b5c4-7e1a-7c3e-9f00-5b2d8a1c4e77 identity=persistent instance="Acme" host=node-3 role=writer started_at=2026-09-27T01:40:12.345Z
+```
+
+| flag / env | default | meaning |
+| --- | --- | --- |
+| `--cqrsNodeId` / `CQRS_NODE_ID` | *(none)* | an id assigned by an orchestrator (the flag defaults to the env var). Wins over the stored id and never touches `node-id`; `identity=assigned`. Must match `^[A-Za-z0-9_-]{1,64}$` or the node refuses to start |
+
+Without an assignment the id lives in `<dir>/node-id` (`pb_data/node-id`),
+generated as a UUIDv7 on first boot and read back afterwards
+(`identity=persistent`). The data dir is node-local — only `events.db` is
+ever replicated — so a secondary never inherits the master's id.
+
+- **A container without a durable `pb_data` volume must set `CQRS_NODE_ID`.**
+  The node cannot tell that its data dir will vanish: it writes `node-id`,
+  reports `persistent`, and comes back as a new node after every restart.
+- If `node-id` can't be written, the id is `ephemeral` (this process only) and
+  a warning is logged. If `node-id` exists but is empty, invalid or
+  unreadable, the id is also `ephemeral`, an error is logged on every boot,
+  and **the file is never overwritten** — remove or fix it by hand.
+- Copying a data dir copies its id; a monitor should flag one `node_id` seen
+  on two hosts at once.
+- `instance` is the PocketBase application name (Settings → Application
+  name); `role` is `writer` for `--cqrsRole master`, `reader` for
+  `secondary`; `started_at` is process start, so it changes on every restart
+  while `node_id` does not.
+
 ## Multi-node (single writer, multiple readers)
 
 One master appends to `events.db`; any number of secondaries poll a
