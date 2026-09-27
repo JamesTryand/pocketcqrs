@@ -3,6 +3,65 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.11.0 — runtime-contract fixes, events.db slice/merge, schema 2.3.0–2.7.0
+
+Five fixes found while specifying the cross-stack health/telemetry contract (every node state and
+what it reports), a month of codegen catch-up with dotnetcqrs, and an importable admin API.
+
+### Changed — behaviour existing deployments will notice
+
+- **Gateway status codes: only a decider's own verdict is a 400.** `Registry.DecideWithMeta` marks
+  whatever `Decide` returns (Go) or throws (JS) as `decider.RejectionError` (message unchanged,
+  original reachable via `Unwrap`); `Decide` itself is untouched. Everything else is no longer
+  reported as a rejection: a busy or locked event store is **503** with `Retry-After`, any other
+  failure (upcaster fault, JS timeout, missing `decide()`, malformed result — adapters mark these
+  with `decider.Fault`) is **500**. Previously all of these were 400. See
+  `docs/reference/gateway.md`. dotnetcqrs `v0.15.0` classifies rejections the same way.
+- **Reactors, effect functions and cron run on the master only.** They were registered on every
+  role, so a secondary re-ran every effect and cron job (an effect called twice per event with one
+  secondary) and its reactors and dead-letter writes failed against the read-only replica. Applies
+  at boot and on hot reload; the reload report gains a `sideEffects` field. Projections still run
+  everywhere.
+- **Clean shutdown.** An `OnTerminate` hook stops the consumer engine, batch writer and pruners on
+  a shared context, waits up to 5s for the in-flight event delivery or batch commit to finish, then
+  closes this binary's stores. Previously they ran on `context.Background()` and were never told to
+  stop.
+
+### Added
+
+- **`--cqrsRequireExistingEventLog`** (master, opt-in): refuse to start when `events.db` does not
+  already exist, instead of silently creating an empty log — the failure mode when a master starts
+  before its LiteFS mount. Default behaviour unchanged. See `docs/reference/cli.md`.
+- **`adminapi` package** (Item 10): the catalog/ops/admin HTTP routes are now importable, via
+  `adminapi.RegisterRoutes`, for embedders reconstructing their own `main.go`.
+- **`events export` / `events import [--dry-run]`**: slice an aggregate set's events out of one
+  `events.db` into a pack and merge it into another, with collision refusal before any write.
+  `pack export` gains `--aggregates`.
+- **Codegen, schema 2.3.0 → 2.7.0** (ported from dotnetcqrs): `groupBy` derivations,
+  `readModel.filters` (`dateRange`), command authorization (`requiredRole`, `fieldGatedRole`,
+  `requiredOwnership`, `scope`), `readModelQuery.asOf`, `readModel.requiredRole`; ordered-fold
+  create/update evidence, `endsStream`, scoped read models, JS-target fold support, and per-row
+  named-list `stateView` results in verify.
+- **`docs/concepts.md`**: CQRS explained for readers coming from CRUD.
+
+### Fixed
+
+- **Catalog on a secondary reports its own checkpoints** (`GET /api/cqrs/catalog`), not the
+  master's replicated ones.
+- **Dead-letter writes on a read-only store** return `events.ErrReadOnly` instead of an opaque
+  SQLite error.
+- **emschema: a fan-out automation is not a create** — an automation dispatching to existing
+  streams no longer collides with the target aggregate's real create.
+
+### Known issues
+
+- `TestSecondaryVerifyCacheRidesOutMasterOutageThenFailsClosed` and
+  `TestSecondaryVerifyGraceServesThroughOutage` (smoke) fail, as they already did before this
+  release: the catalog route re-verifies with the master on every request, so it cannot ride out a
+  master outage on a cached verdict. Tests or route to be reconciled.
+- The termination hook's real signal path is covered by unit tests only; its smoke test skips on
+  Windows.
+
 ## v0.10.0 — extcaller moves in from pocketcqrs-extensions
 
 ### Added
