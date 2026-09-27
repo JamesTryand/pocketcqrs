@@ -73,6 +73,13 @@ type components struct {
 	// immediately after ParseFlags, same lifecycle as State.Tutorial.
 	role string
 
+	// commandQueue and checkpoints are held only so the termination hook
+	// can close them: the batch writer's intake queue (nil without
+	// batching) and a secondary's local checkpoint store (nil on a master,
+	// whose checkpoints live in events.db).
+	commandQueue *commandqueue.Store
+	checkpoints  *events.Store
+
 	// verifyCache holds --cqrsVerifyAuth's (F-13) bounded-TTL verdicts.
 	// Nil except on a secondary running verify mode. State.Verifier reads
 	// through this cache; components only holds it to start/stop its
@@ -587,6 +594,7 @@ func main() {
 			if err != nil {
 				return err
 			}
+			c.checkpoints = checkpoints
 			c.Engine = consumers.NewEngineWithCheckpoints(store, checkpoints, engineLogger)
 		} else {
 			c.Engine = consumers.NewEngine(store, engineLogger)
@@ -600,6 +608,7 @@ func main() {
 			if err != nil {
 				return err
 			}
+			c.commandQueue = queue
 			c.batchWriter = batching.NewWriter(store, queue, c.Registry, engineLogger)
 			c.batchWriter.MaxDepth = commandQueueMaxDepth
 			gatewayCfg.Batching = c.batchWriter
@@ -811,6 +820,7 @@ func main() {
 		return nil
 	})
 
+	bg := newBackground()
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		gateway.RegisterRoutes(e, c.Registry, gatewayCfg)
 		// the verify oracle answers on every node (a secondary delegates to
@@ -837,16 +847,37 @@ func main() {
 		functions.RegisterHTTPRoutes(e, c.HTTPFns, !gatewayCfg.AllowAnonymous)
 		adminapi.RegisterRoutes(e, c.State, adminapi.Config{FunctionsDir: functionsDir})
 		registerEntraLoginRoutes(e, selfAddr)
-		c.Engine.Start(context.Background())
+		// background loops run on bg's shared context so the termination
+		// hook below can stop them and wait for them
+		bg.Go(c.Engine.Run)
 		if c.batchWriter != nil {
-			c.batchWriter.Start(context.Background())
+			bg.Go(c.batchWriter.Run)
 		}
-		c.idempotency.StartPruner(context.Background(), time.Hour, idempotencyRetention,
-			func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
-		if c.verifyCache != nil {
-			c.verifyCache.StartPruner(context.Background(), time.Hour, verifyGrace,
+		bg.Go(func(ctx context.Context) {
+			c.idempotency.RunPruner(ctx, time.Hour, idempotencyRetention,
 				func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
+		})
+		if c.verifyCache != nil {
+			bg.Go(func(ctx context.Context) {
+				c.verifyCache.RunPruner(ctx, time.Hour, verifyGrace,
+					func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
+			})
 		}
+		return e.Next()
+	})
+
+	// Termination: PocketBase's own graceful-shutdown handler (priority
+	// -9999) has already stopped the HTTP server when this runs. Tell the
+	// background loops to stop — each finishes its in-flight unit (an event
+	// delivery, a batch) and returns — wait for them, bounded, then close
+	// this binary's own stores. PocketBase closes its own DBs after this
+	// hook chain (ResetBootstrapState). Also runs after one-shot CLI
+	// commands, where there is nothing to wait for.
+	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
+		if !bg.Stop(shutdownDrainTimeout) {
+			log.Printf("shutdown: background loops still running after %s; closing stores anyway", shutdownDrainTimeout)
+		}
+		c.closeStores()
 		return e.Next()
 	})
 

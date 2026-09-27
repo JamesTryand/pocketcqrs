@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jamestryand/pocketcqrs/events"
 )
@@ -258,5 +259,75 @@ func TestDeliverySurvivesRestart(t *testing.T) {
 	}
 	if rec2.seen[0].AggregateID != "t2" {
 		t.Fatalf("replayed wrong event: %+v", rec2.seen[0])
+	}
+}
+
+// gate is a consumer whose Apply blocks until released, so a test can stop
+// the engine while a delivery is in flight.
+type gate struct {
+	entered chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	applied []int64
+}
+
+func (g *gate) Name() string { return "gate" }
+func (g *gate) Apply(ctx context.Context, ev events.Event) error {
+	select {
+	case g.entered <- struct{}{}:
+	default:
+	}
+	<-g.release
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.applied = append(g.applied, ev.Position)
+	return nil
+}
+
+// TestRunStopsBetweenEventsAndFinishesTheInFlightOne: cancelling Run's
+// context is a stop request, not an abort. The delivery already in flight
+// completes AND checkpoints (so it is not redelivered on the next boot),
+// no further event is started, and Run returns so a shutdown hook can wait
+// for it.
+func TestRunStopsBetweenEventsAndFinishesTheInFlightOne(t *testing.T) {
+	var dir string
+	store := openStore(t, &dir)
+	defer store.Close()
+	appendOne(t, store, "t1")
+	appendOne(t, store, "t2")
+
+	g := &gate{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	engine := NewEngine(store, nil)
+	engine.Register(g)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		engine.Run(ctx)
+		close(done)
+	}()
+
+	<-g.entered // first event is in flight
+	cancel()
+	close(g.release)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+
+	g.mu.Lock()
+	applied := append([]int64(nil), g.applied...)
+	g.mu.Unlock()
+	if len(applied) != 1 {
+		t.Fatalf("expected exactly the in-flight event to be applied, got positions %v", applied)
+	}
+	pos, err := store.Checkpoint(context.Background(), g.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pos != applied[0] {
+		t.Fatalf("the in-flight event finished but its checkpoint is %d, want %d", pos, applied[0])
 	}
 }

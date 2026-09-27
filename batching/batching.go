@@ -139,25 +139,36 @@ func (w *Writer) Enqueue(ctx context.Context, aggregate, aggregateID, command st
 	return qc.ID, ch, nil
 }
 
-// Start runs the batch-forming loop until ctx is done: immediately on
-// every Enqueue's nudge, and on a fallback ticker (covers a burst that
-// arrives while a batch is already forming, and any missed nudge).
+// Start runs the batch-forming loop in the background until ctx is done:
+// immediately on every Enqueue's nudge, and on a fallback ticker (covers a
+// burst that arrives while a batch is already forming, and any missed
+// nudge). Run is the blocking form.
 func (w *Writer) Start(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(w.interval)
-		defer ticker.Stop()
-		for {
-			if _, err := w.RunOnce(ctx); err != nil {
-				w.logger("batching run error", "error", err)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-w.nudge:
-			case <-ticker.C:
-			}
+	go w.Run(ctx)
+}
+
+// Run is Start, blocking until the loop has exited. Cancelling ctx is a
+// stop request, not an abort: the batch being decided or committed runs to
+// completion (its waiters are signaled), no new batch is started, and Run
+// returns. Commands still pending stay durably queued for the next boot.
+func (w *Writer) Run(ctx context.Context) {
+	work := context.WithoutCancel(ctx)
+	ticker := time.NewTicker(w.interval)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
 		}
-	}()
+		if _, err := w.RunOnce(work); err != nil {
+			w.logger("batching run error", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-w.nudge:
+		case <-ticker.C:
+		}
+	}
 }
 
 // RunOnce drains up to maxBatch pending commands once: resumes any whose

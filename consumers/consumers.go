@@ -131,32 +131,54 @@ func (e *Engine) Checkpoint(ctx context.Context, name string) (int64, error) {
 	return e.checkpoints.Checkpoint(ctx, name)
 }
 
-// Start runs the catch-up loop until ctx is done: immediately on every
-// committed event (in-process nudge) and on a slow ticker fallback
-// (covers restarts and missed nudges).
+// Start runs the catch-up loop in the background until ctx is done:
+// immediately on every committed event (in-process nudge) and on a slow
+// ticker fallback (covers restarts and missed nudges). Run is the blocking
+// form, for a caller that needs to wait for the loop to exit.
 func (e *Engine) Start(ctx context.Context) {
+	e.subscribe()
+	go e.loop(ctx)
+}
+
+// Run is Start, blocking until the loop has exited. Cancelling ctx is a
+// stop request, not an abort: the delivery in flight finishes and is
+// checkpointed, no further event is started, and Run returns — the shape a
+// shutdown hook waits on.
+func (e *Engine) Run(ctx context.Context) {
+	e.subscribe()
+	e.loop(ctx)
+}
+
+func (e *Engine) subscribe() {
 	e.source.Subscribe(func(events.Event) {
 		select {
 		case e.nudge <- struct{}{}:
 		default:
 		}
 	})
+}
 
-	go func() {
-		ticker := time.NewTicker(e.tick)
-		defer ticker.Stop()
-		for {
-			if err := e.RunOnce(ctx); err != nil {
-				e.logger("consumer run error", "error", err)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-e.nudge:
-			case <-ticker.C:
-			}
+func (e *Engine) loop(stop context.Context) {
+	// deliveries run on a context the stop does not cancel, so a stop never
+	// cuts an Apply/SaveCheckpoint pair in half; runOnce checks stop
+	// between events instead
+	work := context.WithoutCancel(stop)
+	ticker := time.NewTicker(e.tick)
+	defer ticker.Stop()
+	for {
+		if stop.Err() != nil {
+			return
 		}
-	}()
+		if err := e.runOnce(work, stop); err != nil {
+			e.logger("consumer run error", "error", err)
+		}
+		select {
+		case <-stop.Done():
+			return
+		case <-e.nudge:
+		case <-ticker.C:
+		}
+	}
 }
 
 // RunOnce applies every pending event to every consumer until caught up.
@@ -167,12 +189,22 @@ func (e *Engine) Start(ctx context.Context) {
 // pass. Returns an aggregated error (via errors.Join) covering every
 // consumer that failed this pass, or nil if all succeeded.
 func (e *Engine) RunOnce(ctx context.Context) error {
+	return e.runOnce(ctx, ctx)
+}
+
+// runOnce is RunOnce with the stop signal separated from the work context:
+// once stop is done, no further event is started (the one in flight has
+// already finished, checkpoint included).
+func (e *Engine) runOnce(ctx, stop context.Context) error {
 	e.mu.RLock()
 	consumers := append([]Consumer(nil), e.consumers...)
 	e.mu.RUnlock()
 	var errs []error
 	for _, c := range consumers {
-		if err := e.runOnceFor(ctx, c); err != nil {
+		if stop.Err() != nil {
+			break
+		}
+		if err := e.runOnceFor(ctx, stop, c); err != nil {
 			errs = append(errs, fmt.Errorf("consumer %s: %w", c.Name(), err))
 		}
 	}
@@ -181,7 +213,7 @@ func (e *Engine) RunOnce(ctx context.Context) error {
 
 // runOnceFor applies every pending event to a single consumer until caught
 // up, or until the consumer's own checkpoint/poll/apply fails.
-func (e *Engine) runOnceFor(ctx context.Context, c Consumer) error {
+func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer) error {
 	pos, err := e.checkpoints.Checkpoint(ctx, c.Name())
 	if err != nil {
 		return err
@@ -204,6 +236,9 @@ func (e *Engine) runOnceFor(ctx context.Context, c Consumer) error {
 				return err
 			}
 			pos = ev.Position
+			if stop.Err() != nil {
+				return nil
+			}
 		}
 	}
 	return nil

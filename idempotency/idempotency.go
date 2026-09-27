@@ -115,23 +115,27 @@ func (s *Store) Prune(ctx context.Context, maxAge time.Duration) error {
 // StartPruner runs Prune on a fixed interval until ctx is done. logger may
 // be nil (defaults to no-op).
 func (s *Store) StartPruner(ctx context.Context, interval, maxAge time.Duration, logger func(msg string, args ...any)) {
+	go s.RunPruner(ctx, interval, maxAge, logger)
+}
+
+// RunPruner is StartPruner, blocking until ctx is done — for a caller that
+// needs to wait for the pruner to exit (a shutdown hook).
+func (s *Store) RunPruner(ctx context.Context, interval, maxAge time.Duration, logger func(msg string, args ...any)) {
 	if logger == nil {
 		logger = func(string, ...any) {}
 	}
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := s.Prune(ctx, maxAge); err != nil {
-					logger("idempotency prune error", "error", err)
-				}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.Prune(ctx, maxAge); err != nil {
+				logger("idempotency prune error", "error", err)
 			}
 		}
-	}()
+	}
 }
 
 // Hash computes the request identity Lookup/Save compare against, so the

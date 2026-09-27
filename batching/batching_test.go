@@ -428,3 +428,43 @@ func mustUnmarshal(t *testing.T, raw json.RawMessage) map[string]any {
 	}
 	return m
 }
+
+// TestRunFinishesTheInFlightBatchOnStop: cancelling Run's context stops the
+// writer from starting another batch, but the batch already deciding or
+// committing completes -- a stop request is not an abort, so a command a
+// caller is waiting on is not rolled back at the last moment.
+func TestRunFinishesTheInFlightBatchOnStop(t *testing.T) {
+	store, _, _, w := setup(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// the stop arrives exactly while the batch is committing
+	store.CommitBatchFault = func() error {
+		cancel()
+		return nil
+	}
+
+	_, wait, err := w.Enqueue(context.Background(), "task", "t1", "Create", json.RawMessage(`{}`), metaNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		w.Run(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+	select {
+	case outcome := <-wait:
+		if outcome.Err != nil || len(outcome.Events) != 1 {
+			t.Fatalf("the in-flight batch must commit despite the stop: %+v", outcome)
+		}
+	default:
+		t.Fatal("the in-flight command was never signaled")
+	}
+}

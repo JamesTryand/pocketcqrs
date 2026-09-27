@@ -146,21 +146,25 @@ func (c *Cache) Prune(ctx context.Context, grace time.Duration) error {
 // StartPruner runs Prune on a fixed interval until ctx is done. logger may
 // be nil (defaults to no-op).
 func (c *Cache) StartPruner(ctx context.Context, interval, grace time.Duration, logger func(msg string, args ...any)) {
+	go c.RunPruner(ctx, interval, grace, logger)
+}
+
+// RunPruner is StartPruner, blocking until ctx is done — for a caller that
+// needs to wait for the pruner to exit (a shutdown hook).
+func (c *Cache) RunPruner(ctx context.Context, interval, grace time.Duration, logger func(msg string, args ...any)) {
 	if logger == nil {
 		logger = func(string, ...any) {}
 	}
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := c.Prune(ctx, grace); err != nil {
-					logger("authverify prune error", "error", err)
-				}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.Prune(ctx, grace); err != nil {
+				logger("authverify prune error", "error", err)
 			}
 		}
-	}()
+	}
 }
