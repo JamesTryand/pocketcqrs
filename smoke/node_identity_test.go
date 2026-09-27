@@ -23,8 +23,17 @@ var identityLine = regexp.MustCompile(`node identity: node_id=(\S+) identity=(\S
 
 // bootOnce serves over dataDir until healthy, stops, and returns the
 // node-identity log line's node_id, identity, role and started_at.
+//
+// It seeds the superuser first, as the harness does: serving a data dir
+// with no superuser makes PocketBase open the installer page in a browser.
+// `superuser upsert` bootstraps but never serves, so it resolves no identity
+// and writes no node-id.
 func bootOnce(t *testing.T, bin, dir, dataDir, label string, extra ...string) (nodeID, kind, role, startedAt string) {
 	t.Helper()
+	seed := exec.Command(bin, "superuser", "upsert", superuserEmail, superuserPassword, "--dir", dataDir)
+	if out, err := seed.CombinedOutput(); err != nil {
+		t.Fatalf("seeding the superuser failed: %v\n%s", err, out)
+	}
 	addr := freeAddr(t)
 	args := append([]string{"serve", "--http", addr, "--dir", dataDir,
 		"--functionsDir", filepath.Join(dir, "pb_functions")}, extra...)
