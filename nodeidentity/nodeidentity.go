@@ -38,6 +38,13 @@ const (
 
 	// Stack is this stack's name as the contract reports it.
 	Stack = "pocketcqrs"
+
+	// EnvInstance sets the instance attribute explicitly (contract I6);
+	// unset, the caller's own workload name is used.
+	EnvInstance = "CQRS_INSTANCE"
+
+	// UnknownHost is reported when the hostname cannot be read (contract I7).
+	UnknownHost = "unknown"
 )
 
 // Kind says where node_id came from; it is reported as `identity`.
@@ -68,6 +75,16 @@ func ValidateAssigned(id string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid node id %q (%s or --cqrsNodeId): want 1-64 characters from A-Z a-z 0-9 _ -", id, EnvNodeID)
+}
+
+// ValidateInstance checks an explicit instance name (empty means use the
+// workload's own name). It has node_id's format; an invalid one fails the
+// boot, like any other invalid configuration.
+func ValidateInstance(name string) error {
+	if name == "" || Valid(name) {
+		return nil
+	}
+	return fmt.Errorf("invalid instance %q (%s or --cqrsInstance): want 1-64 characters from A-Z a-z 0-9 _ -", name, EnvInstance)
 }
 
 // Identity is who this node is. NodeID and Kind identify it; the rest
@@ -137,8 +154,10 @@ func Resolve(o Options) (Identity, error) {
 		started = time.Now()
 	}
 	host, err := hostname()
-	if err != nil {
-		logf("warning: node identity: cannot read the hostname: %v", err)
+	if err != nil || host == "" {
+		// never a boot failure: host describes the node, it does not identify it
+		logf("warning: node identity: cannot read the hostname (%v); reporting host=%s", err, UnknownHost)
+		host = UnknownHost
 	}
 	id := Identity{Instance: o.Instance, Host: host, Stack: Stack, Role: o.Role, StartedAt: started.UTC()}
 

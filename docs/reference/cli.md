@@ -73,6 +73,7 @@ node identity: node_id=0192b5c4-7e1a-7c3e-9f00-5b2d8a1c4e77 identity=persistent 
 | flag / env | default | meaning |
 | --- | --- | --- |
 | `--cqrsNodeId` / `CQRS_NODE_ID` | *(none)* | an id assigned by an orchestrator (the flag defaults to the env var). Wins over the stored id and never touches `node-id`; `identity=assigned`. Must match `^[A-Za-z0-9_-]{1,64}$` or the node refuses to start |
+| `--cqrsInstance` / `CQRS_INSTANCE` | *(the application name)* | the `instance` identity reports (the flag defaults to the env var). Same format as `node_id`, or the node refuses to start |
 
 Without an assignment the id lives in `<dir>/node-id` (`pb_data/node-id`),
 generated as a UUIDv7 on first boot and read back afterwards
@@ -88,8 +89,10 @@ ever replicated — so a secondary never inherits the master's id.
   and **the file is never overwritten** — remove or fix it by hand.
 - Copying a data dir copies its id; a monitor should flag one `node_id` seen
   on two hosts at once.
-- `instance` is the PocketBase application name (Settings → Application
-  name); `role` is `writer` for `--cqrsRole master`, `reader` for
+- `instance` is `--cqrsInstance`/`CQRS_INSTANCE` if set, else the PocketBase
+  application name (Settings → Application name, "Acme" until renamed);
+  `host` is `unknown`, with a warning, if the hostname can't be read;
+  `role` is `writer` for `--cqrsRole master`, `reader` for
   `secondary`; `started_at` is process start, so it changes on every restart
   while `node_id` does not.
 

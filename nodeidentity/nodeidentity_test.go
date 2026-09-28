@@ -137,6 +137,47 @@ func TestAttributes(t *testing.T) {
 	}
 }
 
+// I7: an unreadable (or empty) hostname is reported as "unknown" with a
+// warning, and never fails the boot.
+func TestUnreadableHostnameIsUnknown(t *testing.T) {
+	for name, hostname := range map[string]func() (string, error){
+		"error": func() (string, error) { return "", errors.New("no hostname") },
+		"empty": func() (string, error) { return "", nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var logged []string
+			got, err := Resolve(Options{
+				Assigned: assignedID, hostname: hostname,
+				Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) },
+			})
+			if err != nil {
+				t.Fatalf("boot failed for an unreadable hostname: %v", err)
+			}
+			if got.Host != UnknownHost {
+				t.Errorf("host = %q, want %q", got.Host, UnknownHost)
+			}
+			if len(logged) != 1 || !strings.Contains(logged[0], "warning") {
+				t.Errorf("want one warning, got %q", logged)
+			}
+		})
+	}
+}
+
+// I6: an explicit instance has node_id's format; empty means the workload's
+// own name.
+func TestValidateInstance(t *testing.T) {
+	for _, ok := range []string{"", "timesheets", "model_b-2", strings.Repeat("a", 64)} {
+		if err := ValidateInstance(ok); err != nil {
+			t.Errorf("ValidateInstance(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"has space", "a.b", strings.Repeat("a", 65)} {
+		if err := ValidateInstance(bad); err == nil {
+			t.Errorf("ValidateInstance(%q) = nil, want an error", bad)
+		}
+	}
+}
+
 func TestValid(t *testing.T) {
 	for id, ok := range map[string]bool{
 		storedID: true, "a": true, "A_z-9": true, strings.Repeat("x", 64): true,

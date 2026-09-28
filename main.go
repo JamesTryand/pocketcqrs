@@ -279,6 +279,14 @@ func main() {
 		"this node's id, assigned by an orchestrator (default $"+nodeidentity.EnvNodeID+
 			"; when unset, the id stored in <dir>/"+nodeidentity.FileName+", generated on first boot)",
 	)
+	var instance string
+	app.RootCmd.PersistentFlags().StringVar(
+		&instance,
+		"cqrsInstance",
+		os.Getenv(nodeidentity.EnvInstance),
+		"this node's workload name as identity reports it (default $"+nodeidentity.EnvInstance+
+			"; when unset, the application name from Settings)",
+	)
 	var vfs string
 	app.RootCmd.PersistentFlags().StringVar(
 		&vfs,
@@ -440,6 +448,9 @@ func main() {
 	}
 	c.role = role
 	if err := nodeidentity.ValidateAssigned(nodeID); err != nil {
+		log.Fatal(err)
+	}
+	if err := nodeidentity.ValidateInstance(instance); err != nil {
 		log.Fatal(err)
 	}
 
@@ -856,13 +867,18 @@ func main() {
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		// Resolve identity before anything else the node serves. The data
 		// dir is node-local and never replicated (only events.db is), so a
-		// secondary never inherits the master's id. `instance` is the
-		// PocketBase application name (Settings > Application name), the
-		// one per-deployment workload name this binary has.
+		// secondary never inherits the master's id. `instance` is
+		// --cqrsInstance/CQRS_INSTANCE, else the PocketBase application name
+		// (Settings > Application name), the one per-deployment workload
+		// name this binary has.
+		workload := instance
+		if workload == "" {
+			workload = e.App.Settings().Meta.AppName
+		}
 		identity, err := nodeidentity.Resolve(nodeidentity.Options{
 			Assigned:  nodeID,
 			StateDir:  e.App.DataDir(),
-			Instance:  e.App.Settings().Meta.AppName,
+			Instance:  workload,
 			Role:      contractRole(c.role),
 			StartedAt: processStart,
 			Logf:      log.Printf,

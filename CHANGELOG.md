@@ -13,7 +13,9 @@ All notable changes to PocketCQRS. Format loosely follows
   UUIDv7 on first boot. An unwritable data dir or a damaged `node-id` gives an `ephemeral` id and a
   logged warning or error; the file is never overwritten. An invalid `CQRS_NODE_ID` (outside
   `^[A-Za-z0-9_-]{1,64}$`) refuses to start. New package `nodeidentity`. Nothing reports the id
-  over HTTP yet; the health/telemetry endpoints will. See `docs/reference/cli.md`, "Node identity".
+  over HTTP yet; the health/telemetry endpoints will. See `docs/reference/cli.md`, "Node identity". `instance` is
+  `CQRS_INSTANCE` (or `--cqrsInstance`) if set, else the application name; an unreadable hostname
+  is reported as `unknown`.
 
 ## v0.11.0 — runtime-contract fixes, events.db slice/merge, schema 2.3.0–2.7.0
 
