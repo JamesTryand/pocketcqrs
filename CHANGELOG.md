@@ -3,7 +3,23 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased
+## v0.12.0 — node identity, cached auth-verify for the read-only ops routes
+
+Node identity per the cross-stack node-identity contract 1.0 (identical to dotnetcqrs v0.16.0),
+and the read-only ops routes' auth-verify decided and built (Shape C').
+
+### Changed — behaviour existing deployments will notice
+
+- **The five read-only, capability-gated ops routes verify through a cache.** `/api/cqrs/events`,
+  `/streams`, `/deadletters`, `GET /admin/mode` and `/catalog` now use
+  `authverify.RequireCapabilityCached` instead of a fresh verify with the master on every request:
+  cached for `--cqrsOpsVerifyCacheTTL` (new, default 30s, separate from `--cqrsVerifyCacheTTL`),
+  with the same opt-in grace through a master outage. A revoked token therefore keeps working on
+  these routes for up to that TTL. Every mutating or superuser-only route (dead-letter
+  retry/dismiss, `POST /admin/mode`, function admin, dryrun, scaffold, reload) is unchanged:
+  `RequireSuperuser`, fresh. Serving a stale cached verdict is logged as a warning
+  (`Verifier.WithStaleLogger`), never silent. See `docs/reference/cli.md`, "How auth works across
+  nodes".
 
 ### Added
 
@@ -16,6 +32,11 @@ All notable changes to PocketCQRS. Format loosely follows
   over HTTP yet; the health/telemetry endpoints will. See `docs/reference/cli.md`, "Node identity". `instance` is
   `CQRS_INSTANCE` (or `--cqrsInstance`) if set, else the application name; an unreadable hostname
   is reported as `unknown`.
+
+### Tests
+
+- **Smoke tests build each binary once per run** and copy it per test, instead of `go build` per
+  test. The full smoke suite dropped from ~11 min to under 4 on a 2-core machine.
 
 ## v0.11.0 — runtime-contract fixes, events.db slice/merge, schema 2.3.0–2.7.0
 
