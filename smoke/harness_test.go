@@ -128,7 +128,76 @@ func (h *harness) startDashboard() {
 	waitFor(h.t, h.DashboardURL+"/login")
 }
 
+// Every smoke test runs the same binaries, and linking them is most of a
+// test's cost, so each package is built once per run and every test gets its
+// own copy at out. A copy rather than a shared path: PocketBase resolves its
+// default directories next to the executable, and on Windows a running
+// executable (or a hard link to it) cannot be deleted, which would break
+// another test's TempDir cleanup.
+var (
+	buildMu   sync.Mutex
+	builtBins = map[string]string{}
+	buildDir  string
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if buildDir != "" {
+		os.RemoveAll(buildDir)
+	}
+	os.Exit(code)
+}
+
 func build(t *testing.T, pkg, out string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		out += ".exe"
+	}
+	if err := copyExecutable(builtOnce(t, pkg), out); err != nil {
+		t.Fatalf("copying the %s binary: %v", pkg, err)
+	}
+	return out
+}
+
+// builtOnce builds pkg the first time a test asks for it and returns the
+// cached binary afterwards. A failed build fails that test and is not cached.
+func builtOnce(t *testing.T, pkg string) string {
+	t.Helper()
+	buildMu.Lock()
+	defer buildMu.Unlock()
+	if bin, ok := builtBins[pkg]; ok {
+		return bin
+	}
+	if buildDir == "" {
+		dir, err := os.MkdirTemp("", "pocketcqrs-smoke-bin-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		buildDir = dir
+	}
+	bin := goBuild(t, pkg, filepath.Join(buildDir, fmt.Sprintf("bin%d", len(builtBins))))
+	builtBins[pkg] = bin
+	return bin
+}
+
+func copyExecutable(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func goBuild(t *testing.T, pkg, out string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		out += ".exe"
