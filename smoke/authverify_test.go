@@ -81,8 +81,12 @@ func TestSecondaryVerifiesAuthAgainstMaster(t *testing.T) {
 
 // TestSecondaryRevocationBitesOpsImmediately: rotating a record's TokenKey
 // on the master — PocketBase's own per-user logout/revocation mechanism —
-// must lock that token out of the secondary's ops surface promptly, because
-// the ops gate re-verifies fresh on every request (shape C, no cache).
+// must lock that token out of a mutating, superuser-only ops route
+// promptly, because that gate re-verifies fresh on every request (shape C,
+// no cache). This no longer holds for the five READ-ONLY ops routes since
+// capability-verify-shape-decision.md (2026-09-28) moved them to shape C′ —
+// see TestSecondaryOpsTierRevocationIsBoundedByItsOwnTTL below for that
+// tier's own, deliberately bounded (not immediate) revocation lag.
 func TestSecondaryRevocationBitesOpsImmediately(t *testing.T) {
 	master := startBackend(t, nil)
 	secondary := startSecondary(t, master, "--cqrsMasterAddr", master.BackendURL, "--cqrsVerifyAuth")
@@ -109,7 +113,7 @@ func TestSecondaryRevocationBitesOpsImmediately(t *testing.T) {
 	}
 
 	opsStatus := func() int {
-		r := secondary.do(http.MethodGet, secondary.BackendURL+"/api/cqrs/events", nil,
+		r := secondary.do(http.MethodGet, secondary.BackendURL+"/api/cqrs/admin/functions", nil,
 			map[string]string{"Authorization": login.Token})
 		defer r.Body.Close()
 		return r.StatusCode
@@ -122,6 +126,62 @@ func TestSecondaryRevocationBitesOpsImmediately(t *testing.T) {
 
 	eventually(t, "the revoked token to be rejected by the secondary's ops gate", func() bool {
 		return opsStatus() == http.StatusUnauthorized
+	})
+}
+
+// TestSecondaryOpsTierRevocationIsBoundedByItsOwnTTL is
+// TestSecondaryRevocationBitesOpsImmediately's counterpart for the five
+// read-only, capability-gated ops routes (capability-verify-shape-
+// decision.md, 2026-09-28): a token revoked at the master keeps reaching
+// them until the cached verdict's --cqrsOpsVerifyCacheTTL elapses — a
+// deliberate, bounded revocation-lag tradeoff for outage tolerance, not a
+// regression. A short TTL here keeps the eventual rejection well within
+// eventually's 15s budget.
+func TestSecondaryOpsTierRevocationIsBoundedByItsOwnTTL(t *testing.T) {
+	master := startBackend(t, nil)
+	secondary := startSecondary(t, master, "--cqrsMasterAddr", master.BackendURL,
+		"--cqrsVerifyAuth", "--cqrsOpsVerifyCacheTTL", "2s")
+
+	const email = "revoke-me-ops-tier@example.com"
+	const password = "revoke-pass-1234"
+	master.apiOK(http.MethodPost, "/api/collections/_superusers/records",
+		jsonBody(map[string]string{"email": email, "password": password, "passwordConfirm": password}), nil)
+
+	resp := secondary.do(http.MethodPost, secondary.BackendURL+"/api/collections/_superusers/auth-with-password",
+		jsonBody(map[string]string{"identity": email, "password": password}), nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("login via secondary failed: %d: %s", resp.StatusCode, b)
+	}
+	var login struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&login); err != nil {
+		t.Fatal(err)
+	}
+
+	opsTierStatus := func() int {
+		r := secondary.do(http.MethodGet, secondary.BackendURL+"/api/cqrs/events", nil,
+			map[string]string{"Authorization": login.Token})
+		defer r.Body.Close()
+		return r.StatusCode
+	}
+	if got := opsTierStatus(); got != http.StatusOK {
+		t.Fatalf("expected the fresh token to reach the read-only ops tier, got %d", got)
+	}
+
+	rotateTokenKey(t, master.DataDir, email)
+
+	// immediately after rotation, still within the ops TTL: the cached
+	// verdict has not yet been re-checked, so this MUST still pass -- the
+	// whole point of not calling the master on every read-only request
+	if got := opsTierStatus(); got != http.StatusOK {
+		t.Fatalf("expected the cached verdict to still pass immediately after rotation, got %d", got)
+	}
+
+	eventually(t, "the revoked token to be rejected once the ops tier's cached verdict expires", func() bool {
+		return opsTierStatus() == http.StatusUnauthorized
 	})
 }
 
@@ -146,26 +206,43 @@ func rotateTokenKey(t *testing.T, dataDir, email string) {
 }
 
 // TestSecondaryVerifyCacheRidesOutMasterOutageThenFailsClosed: within the
-// verdict TTL a cached route keeps serving with the master GONE (C′'s
-// outage tolerance); the fresh ops gate answers 503 at once; and past the
-// TTL, with no grace configured, the cached route fails closed as 503 too —
-// not 401, which would send users to a login flow that also cannot work.
+// verdict TTL, every read-only ops route keeps serving with the master GONE
+// (C′'s outage tolerance, capability-verify-shape-decision.md); a mutating,
+// superuser-only ops route (never cached) answers 503 at once regardless;
+// and past the TTL, with no grace configured, the cached routes fail closed
+// as 503 too — not 401, which would send users to a login flow that also
+// cannot work.
+//
+// --cqrsOpsVerifyCacheTTL governs the five read-only routes' freshness, not
+// --cqrsVerifyCacheTTL (the general end-user TTL) — see the decision doc's
+// "what's left to build" caveat about this test.
 func TestSecondaryVerifyCacheRidesOutMasterOutageThenFailsClosed(t *testing.T) {
 	master := startBackend(t, nil)
 	secondary := startSecondary(t, master, "--cqrsMasterAddr", master.BackendURL,
-		"--cqrsVerifyAuth", "--cqrsVerifyCacheTTL", "4s")
+		"--cqrsVerifyAuth", "--cqrsOpsVerifyCacheTTL", "4s")
 
-	// prime the cached verdict, then take the master away
+	// prime the cached verdict via ONE of the five routes, then take the
+	// master away
 	secondary.apiOK(http.MethodGet, "/api/cqrs/catalog", nil, nil)
 	master.stop()
 
 	if status, body := secondary.api(http.MethodGet, "/api/cqrs/catalog", nil, nil); status != http.StatusOK {
 		t.Fatalf("expected the cached verdict to serve through the outage, got %d: %s", status, body)
 	}
-	if status, body := secondary.api(http.MethodGet, "/api/cqrs/events", nil, nil); status != http.StatusServiceUnavailable {
-		t.Fatalf("expected the fresh ops gate to answer 503 with master down, got %d: %s", status, body)
+	// the other four read-only routes share the SAME cache row (keyed by
+	// token hash, not by route) -- catalog's warm-up serves them too,
+	// without ever calling any of them before the outage
+	for _, path := range []string{"/api/cqrs/events", "/api/cqrs/streams", "/api/cqrs/deadletters", "/api/cqrs/admin/mode"} {
+		if status, body := secondary.api(http.MethodGet, path, nil, nil); status != http.StatusOK {
+			t.Fatalf("expected %s to ride the outage on catalog's shared cache row, got %d: %s", path, status, body)
+		}
 	}
-	eventually(t, "the cached route to fail closed as 503 once the verdict expires", func() bool {
+	// a mutating, superuser-only ops route is never cached (unchanged Shape
+	// C) -- 503 immediately, master down or not, no warm-up possible
+	if status, body := secondary.api(http.MethodPost, "/api/cqrs/admin/mode", jsonBody(map[string]string{"mode": "maintenance"}), nil); status != http.StatusServiceUnavailable {
+		t.Fatalf("expected the fresh, mutating ops gate to answer 503 with master down, got %d: %s", status, body)
+	}
+	eventually(t, "the cached routes to fail closed as 503 once the verdict expires", func() bool {
 		status, _ := secondary.api(http.MethodGet, "/api/cqrs/catalog", nil, nil)
 		return status == http.StatusServiceUnavailable
 	})
@@ -173,11 +250,12 @@ func TestSecondaryVerifyCacheRidesOutMasterOutageThenFailsClosed(t *testing.T) {
 
 // TestSecondaryVerifyGraceServesThroughOutage: --cqrsVerifyGrace is the
 // operator's opt-in to keep serving EXPIRED verdicts while the master is
-// unreachable — the availability half of C′'s stated tradeoff.
+// unreachable — the availability half of C′'s stated tradeoff, shared by
+// the ops tier's own --cqrsOpsVerifyCacheTTL.
 func TestSecondaryVerifyGraceServesThroughOutage(t *testing.T) {
 	master := startBackend(t, nil)
 	secondary := startSecondary(t, master, "--cqrsMasterAddr", master.BackendURL,
-		"--cqrsVerifyAuth", "--cqrsVerifyCacheTTL", "1s", "--cqrsVerifyGrace", "10m")
+		"--cqrsVerifyAuth", "--cqrsOpsVerifyCacheTTL", "1s", "--cqrsVerifyGrace", "10m")
 
 	secondary.apiOK(http.MethodGet, "/api/cqrs/catalog", nil, nil)
 	master.stop()
@@ -187,5 +265,9 @@ func TestSecondaryVerifyGraceServesThroughOutage(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	if status, body := secondary.api(http.MethodGet, "/api/cqrs/catalog", nil, nil); status != http.StatusOK {
 		t.Fatalf("expected the stale verdict to serve within grace, got %d: %s", status, body)
+	}
+	// another of the five, same shared cache row
+	if status, body := secondary.api(http.MethodGet, "/api/cqrs/streams", nil, nil); status != http.StatusOK {
+		t.Fatalf("expected streams to serve stale within grace too, got %d: %s", status, body)
 	}
 }

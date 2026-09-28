@@ -330,8 +330,10 @@ func main() {
 		false,
 		"verify bearer tokens against the master (with a bounded local verdict cache) so this "+
 			"secondary's own authenticated LOCAL reads work. Requires --cqrsMasterAddr; implies "+
-			"--cqrsForwardAuth (only master-minted tokens can verify remotely). The ops routes "+
-			"re-verify uncached on every request so an admin revocation bites immediately.",
+			"--cqrsForwardAuth (only master-minted tokens can verify remotely). Every mutating or "+
+			"superuser-only ops route re-verifies uncached on every request so an admin revocation "+
+			"bites immediately; the five read-only ops routes cache instead, see "+
+			"--cqrsOpsVerifyCacheTTL.",
 	)
 	var verifyCacheTTL time.Duration
 	app.RootCmd.PersistentFlags().DurationVar(
