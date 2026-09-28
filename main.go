@@ -577,7 +577,8 @@ func main() {
 			}
 			c.verifyCache = cache
 			c.Verifier = authverify.New(masterURL, cache, verifyCacheTTL, verifyGrace,
-				authverify.WithOpsTTL(opsVerifyCacheTTL))
+				authverify.WithOpsTTL(opsVerifyCacheTTL),
+				authverify.WithStaleLogger(func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) }))
 		}
 
 		// write side: deciders + command handling. The platform registers no

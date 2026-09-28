@@ -17,12 +17,13 @@ import (
 // for the callers where a stale "yes" is not acceptable — the ops routes'
 // superuser gate above all.
 type Verifier struct {
-	client *Client
-	cache  *Cache
-	ttl    time.Duration
-	opsTTL time.Duration
-	grace  time.Duration
-	group  singleflight.Group
+	client      *Client
+	cache       *Cache
+	ttl         time.Duration
+	opsTTL      time.Duration
+	grace       time.Duration
+	staleLogger func(msg string, args ...any)
+	group       singleflight.Group
 
 	// now is stubbed by tests; everything time-dependent goes through it.
 	now func() time.Time
@@ -63,6 +64,17 @@ func WithOpsTTL(d time.Duration) Option {
 	return func(v *Verifier) { v.opsTTL = d }
 }
 
+// WithStaleLogger registers a callback invoked whenever VerifyCachedOpsTier
+// (only — not the general VerifyCached path) serves a past-cutoff cache
+// entry during a grace window: capability-verify-shape-decision.md's
+// requirement that "serving on a stale ... cached verdict must be
+// observable, not silent." msg/args follow this project's other injected
+// loggers' key-value convention (adminapi.reload's SetWarn,
+// functions.NewGojaRuntime). nil (the default) means no logging.
+func WithStaleLogger(fn func(msg string, args ...any)) Option {
+	return func(v *Verifier) { v.staleLogger = fn }
+}
+
 // tokenExp reads the token's own exp claim, rejecting a token that is
 // malformed or already expired/not-yet-valid without any network cost.
 // The claims are NOT signature-checked here — that is exactly what only
@@ -87,7 +99,7 @@ func tokenExp(token string) (time.Time, error) {
 // when no verdict could be had: master down, cache empty or past expiry,
 // and past any grace window.
 func (v *Verifier) VerifyCached(ctx context.Context, token string) (*Verdict, error) {
-	return v.verifyCached(ctx, token, v.ttl)
+	return v.verifyCached(ctx, token, v.ttl, "")
 }
 
 // VerifyCachedOpsTier is VerifyCached judged against opsTTL (New's
@@ -105,16 +117,19 @@ func (v *Verifier) VerifyCachedOpsTier(ctx context.Context, token string) (*Verd
 	if ttl <= 0 {
 		ttl = v.ttl
 	}
-	return v.verifyCached(ctx, token, ttl)
+	return v.verifyCached(ctx, token, ttl, "ops")
 }
 
 // verifyCached is VerifyCached and VerifyCachedOpsTier's shared
 // implementation, differing only in which TTL judges the cached entry's
-// VerifiedAt. Deriving the cutoff from VerifiedAt at read time, rather than
-// trusting the entry's own stored ExpiresAt, is what makes the two methods
-// safe to share one cache: ExpiresAt reflects whichever TTL last wrote the
-// row, but VerifiedAt does not depend on which caller wrote it.
-func (v *Verifier) verifyCached(ctx context.Context, token string, ttl time.Duration) (*Verdict, error) {
+// VerifiedAt, and in tier, a label identifying the caller for
+// staleLogger — "" for VerifyCached (not in this decision's scope), "ops"
+// for VerifyCachedOpsTier. Deriving the cutoff from VerifiedAt at read
+// time, rather than trusting the entry's own stored ExpiresAt, is what
+// makes the two methods safe to share one cache: ExpiresAt reflects
+// whichever TTL last wrote the row, but VerifiedAt does not depend on which
+// caller wrote it.
+func (v *Verifier) verifyCached(ctx context.Context, token string, ttl time.Duration, tier string) (*Verdict, error) {
 	exp, err := tokenExp(token)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidToken, err)
@@ -147,6 +162,10 @@ func (v *Verifier) verifyCached(ctx context.Context, token string, ttl time.Dura
 			graceUntil = entry.TokenExp
 		}
 		if now.Before(graceUntil) {
+			if tier != "" && v.staleLogger != nil {
+				v.staleLogger("authverify: serving a stale cached verdict during a master outage",
+					"tier", tier, "collection", entry.Verdict.CollectionName, "graceUntil", graceUntil)
+			}
 			return &entry.Verdict, nil
 		}
 	}

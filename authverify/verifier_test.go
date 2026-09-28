@@ -290,6 +290,52 @@ func TestVerifyCachedOpsTierFallsBackToGeneralTTL(t *testing.T) {
 	}
 }
 
+// TestVerifyCachedOpsTierLogsOnlyWhenServingStale proves
+// capability-verify-shape-decision.md's "must be observable, not silent"
+// requirement: the stale logger fires exactly on the grace path, not on a
+// fresh cache hit, not on a fresh remote verify, and not on VerifyCached
+// (out of this decision's scope).
+func TestVerifyCachedOpsTierLogsOnlyWhenServingStale(t *testing.T) {
+	master := newFakeMaster(t)
+	var logs []string
+	v := New(master.url(t), openTestCache(t), 5*time.Minute, 30*time.Minute,
+		WithOpsTTL(30*time.Second),
+		WithStaleLogger(func(msg string, args ...any) { logs = append(logs, msg) }))
+	token := mintToken(t, time.Hour)
+	ctx := context.Background()
+
+	// cold: a fresh remote verify, not stale
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("expected no stale-logger calls on a fresh remote verify, got %v", logs)
+	}
+
+	master.srv.Close()
+
+	// 1 minute on: past the ops tier's 30s cutoff (forcing a re-verify that
+	// fails, then grace) but nowhere near the general 5m ttl -- this is the
+	// signal's one required path
+	v.now = func() time.Time { return time.Now().Add(time.Minute) }
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected exactly 1 stale-logger call, got %v", logs)
+	}
+
+	// 10 minutes on: now past the GENERAL 5m ttl too, so VerifyCached takes
+	// its own grace path -- still must not log, out of this decision's scope
+	v.now = func() time.Time { return time.Now().Add(10 * time.Minute) }
+	if _, err := v.VerifyCached(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected VerifyCached's own grace path to never invoke the stale logger, got %v", logs)
+	}
+}
+
 func TestVerifyFreshIgnoresTheCache(t *testing.T) {
 	master := newFakeMaster(t)
 	v := newTestVerifier(t, master.url(t), 5*time.Minute, 30*time.Minute)
