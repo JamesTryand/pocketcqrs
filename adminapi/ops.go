@@ -87,7 +87,7 @@ func RegisterOpsRoutes(e *core.ServeEvent, s *State) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"events": evs})
-	}).Bind(authverify.RequireCapability(s.Verifier, capOpsEventsRead))
+	}).Bind(authverify.RequireCapabilityCached(s.Verifier, capOpsEventsRead))
 
 	// one row per stream, optionally restricted to one aggregate
 	e.Router.GET("/api/cqrs/streams", func(re *core.RequestEvent) error {
@@ -97,7 +97,7 @@ func RegisterOpsRoutes(e *core.ServeEvent, s *State) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"streams": streams})
-	}).Bind(authverify.RequireCapability(s.Verifier, capOpsStreamsRead))
+	}).Bind(authverify.RequireCapabilityCached(s.Verifier, capOpsStreamsRead))
 
 	// failed function deliveries; pending only unless ?all=1
 	e.Router.GET("/api/cqrs/deadletters", func(re *core.RequestEvent) error {
@@ -107,7 +107,7 @@ func RegisterOpsRoutes(e *core.ServeEvent, s *State) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]any{"deadLetters": letters})
-	}).Bind(authverify.RequireCapability(s.Verifier, capOpsDeadlettersRead))
+	}).Bind(authverify.RequireCapabilityCached(s.Verifier, capOpsDeadlettersRead))
 
 	// re-deliver one dead letter through the CURRENT function code.
 	//
@@ -166,7 +166,7 @@ func RegisterOpsRoutes(e *core.ServeEvent, s *State) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, map[string]string{"mode": mode})
-	}).Bind(authverify.RequireCapability(s.Verifier, capOpsModeRead))
+	}).Bind(authverify.RequireCapabilityCached(s.Verifier, capOpsModeRead))
 
 	e.Router.POST("/api/cqrs/admin/mode", func(re *core.RequestEvent) error {
 		payload, err := io.ReadAll(re.Request.Body)

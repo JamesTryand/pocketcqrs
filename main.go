@@ -367,8 +367,10 @@ func main() {
 		false,
 		"verify bearer tokens against the master (with a bounded local verdict cache) so this "+
 			"secondary's own authenticated LOCAL reads work. Requires --cqrsMasterAddr; implies "+
-			"--cqrsForwardAuth (only master-minted tokens can verify remotely). The ops routes "+
-			"re-verify uncached on every request so an admin revocation bites immediately.",
+			"--cqrsForwardAuth (only master-minted tokens can verify remotely). Every mutating or "+
+			"superuser-only ops route re-verifies uncached on every request so an admin revocation "+
+			"bites immediately; the five read-only ops routes cache instead, see "+
+			"--cqrsOpsVerifyCacheTTL.",
 	)
 	var verifyCacheTTL time.Duration
 	app.RootCmd.PersistentFlags().DurationVar(
@@ -388,6 +390,17 @@ func main() {
 			"(never past the token's own exp). 0 (the default) fails closed: expired verdict + "+
 			"unreachable master = 503. Opting in trades a bounded revocation lag for reads that "+
 			"keep working through a master outage.",
+	)
+	var opsVerifyCacheTTL time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&opsVerifyCacheTTL,
+		"cqrsOpsVerifyCacheTTL",
+		30*time.Second,
+		"a shorter, independently-tunable --cqrsVerifyCacheTTL for the read-only, capability-gated "+
+			"ops routes (capability-verify-shape-decision.md) — a tighter bound on the "+
+			"revocation-lag/information-disclosure window than reusing the general TTL, since these "+
+			"routes expose topology and internal names once a capability grant has been revoked. "+
+			"Shares --cqrsVerifyGrace's outage policy.",
 	)
 
 	// Command batching (item 4): ON by default -- F-5's fix (queue-depth
@@ -484,7 +497,7 @@ func main() {
 		log.Print("--cqrsVerifyAuth implies --cqrsForwardAuth: auth flows forward to the master so every token is master-minted and remotely verifiable")
 	}
 	if !verifyAuth {
-		for _, name := range []string{"cqrsVerifyCacheTTL", "cqrsVerifyGrace"} {
+		for _, name := range []string{"cqrsVerifyCacheTTL", "cqrsVerifyGrace", "cqrsOpsVerifyCacheTTL"} {
 			if app.RootCmd.PersistentFlags().Changed(name) {
 				log.Printf("warning: --%s has no effect without --cqrsVerifyAuth", name)
 			}
@@ -608,7 +621,9 @@ func main() {
 				return err
 			}
 			c.verifyCache = cache
-			c.Verifier = authverify.New(masterURL, cache, verifyCacheTTL, verifyGrace)
+			c.Verifier = authverify.New(masterURL, cache, verifyCacheTTL, verifyGrace,
+				authverify.WithOpsTTL(opsVerifyCacheTTL),
+				authverify.WithStaleLogger(func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) }))
 		}
 
 		// write side: deciders + command handling. The platform registers no

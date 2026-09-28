@@ -91,18 +91,7 @@ func hasCapability(rec *core.Record, capability string) bool {
 // superuser gate.
 func RequireCapability(v *Verifier, capability string) *hook.Handler[*core.RequestEvent] {
 	if v == nil {
-		return &hook.Handler[*core.RequestEvent]{
-			Id: "pcRequireCapability:" + capability,
-			Func: func(re *core.RequestEvent) error {
-				if re.Auth == nil {
-					return re.UnauthorizedError("The request requires a valid authorization token.", nil)
-				}
-				if !hasCapability(re.Auth, capability) {
-					return re.ForbiddenError("The authorized record is not allowed to perform this action.", nil)
-				}
-				return re.Next()
-			},
-		}
+		return requireCapabilityLocal(capability, "pcRequireCapability:")
 	}
 	return &hook.Handler[*core.RequestEvent]{
 		Id: "pcRequireCapabilityRemote:" + capability,
@@ -125,6 +114,77 @@ func RequireCapability(v *Verifier, capability string) *hook.Handler[*core.Reque
 			}
 			// checkSuperuserIP no-ops for a non-superuser record; safe
 			// unconditionally, same as RequireSuperuser's own call.
+			if err := checkSuperuserIP(re, rec); err != nil {
+				return err
+			}
+			if !hasCapability(rec, capability) {
+				return re.ForbiddenError("The authorized record is not allowed to perform this action.", nil)
+			}
+			re.Auth = rec
+			return re.Next()
+		},
+	}
+}
+
+// requireCapabilityLocal is the v == nil branch shared by RequireCapability
+// and RequireCapabilityCached: it trusts whatever already populated re.Auth
+// (PocketBase's own loadAuthToken locally; this package's global Shape C′
+// middleware on a --cqrsVerifyAuth secondary) and only runs the capability
+// check itself.
+func requireCapabilityLocal(capability, idPrefix string) *hook.Handler[*core.RequestEvent] {
+	return &hook.Handler[*core.RequestEvent]{
+		Id: idPrefix + capability,
+		Func: func(re *core.RequestEvent) error {
+			if re.Auth == nil {
+				return re.UnauthorizedError("The request requires a valid authorization token.", nil)
+			}
+			if !hasCapability(re.Auth, capability) {
+				return re.ForbiddenError("The authorized record is not allowed to perform this action.", nil)
+			}
+			return re.Next()
+		},
+	}
+}
+
+// RequireCapabilityCached is capability-verify-shape-decision.md's Shape C′
+// gate for the read-only ops tier (2026-09-28): on a --cqrsVerifyAuth
+// secondary, it accepts a cached verdict within its own, dedicated
+// --cqrsOpsVerifyCacheTTL (VerifyCachedOpsTier), and — with
+// --cqrsVerifyGrace configured — a stale one through a master outage,
+// rather than RequireCapability's per-request master round trip. It is otherwise
+// structurally identical to RequireCapability: same superuser parity, same
+// IP check, same hasCapability check, same Materialize round trip — only
+// VerifyFresh becomes VerifyCached. RequireCapability itself is UNCHANGED
+// and stays fresh, for any future mutating or otherwise
+// revocation-sensitive capability-gated route: a stale "yes" is fine for a
+// read-only observability route and not for those.
+//
+// With no verifier (v == nil) this is identical to RequireCapability(nil,
+// ...): both trust re.Auth, which is where the two gates converge — the
+// only difference either ever makes is how a secondary re-verifies.
+func RequireCapabilityCached(v *Verifier, capability string) *hook.Handler[*core.RequestEvent] {
+	if v == nil {
+		return requireCapabilityLocal(capability, "pcRequireCapabilityCached:")
+	}
+	return &hook.Handler[*core.RequestEvent]{
+		Id: "pcRequireCapabilityCachedRemote:" + capability,
+		Func: func(re *core.RequestEvent) error {
+			token := tokenFromRequest(re)
+			if token == "" {
+				return re.UnauthorizedError("The request requires a valid authorization token.", nil)
+			}
+			verdict, err := v.VerifyCachedOpsTier(re.Request.Context(), token)
+			switch {
+			case errors.Is(err, ErrInvalidToken):
+				return re.UnauthorizedError("The request requires a valid authorization token.", nil)
+			case err != nil:
+				return apis.NewApiError(http.StatusServiceUnavailable,
+					"Capability verification unavailable: cannot reach the master.", err)
+			}
+			rec, err := Materialize(re.App, verdict)
+			if err != nil {
+				return re.UnauthorizedError("The request requires a valid authorization token.", err)
+			}
 			if err := checkSuperuserIP(re, rec); err != nil {
 				return err
 			}

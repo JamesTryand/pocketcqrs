@@ -133,6 +133,7 @@ provide) — a stated incompatibility, not a scale-dependent risk.
 | `--cqrsVerifyAuth` | `false` | verify bearer tokens against the master with a bounded local verdict cache, so a secondary's own authenticated **local** reads work; implies `--cqrsForwardAuth` |
 | `--cqrsVerifyCacheTTL` | `5m` | how long a verdict is trusted before re-checking, always additionally capped by the token's own `exp`. Also the revocation-lag bound |
 | `--cqrsVerifyGrace` | `0` | opt-in: how far past expiry a stale verdict may still serve while the master is **unreachable** (never past the token's `exp`). `0` fails closed |
+| `--cqrsOpsVerifyCacheTTL` | `30s` | a shorter, independently-tunable `--cqrsVerifyCacheTTL` for the read-only, capability-gated ops routes (`capability-verify-shape-decision.md`); shares `--cqrsVerifyGrace`'s outage policy |
 
 A read-write-capable secondary is these three together:
 
@@ -293,11 +294,21 @@ compromised secondary must gain nothing). Instead:
   (SHA-256 of the token as the key; the raw token is never stored).
 - **Writes always end at the master** and are verified there per request —
   the cache is only ever about a secondary's own local reads.
-- **The ops routes never use the cache.** `/api/cqrs/events`, `/streams`,
-  `/deadletters/*`, `/admin/*`, `/catalog` re-verify against the master on
-  every request, so revoking an operator's token (rotating its `tokenKey`,
-  or — for a capability grant, see below — editing it away) bites
-  immediately, not after a TTL window.
+- **Every mutating or superuser-only ops route never uses the cache** —
+  `/deadletters/{id}/retry`, `/deadletters/retry`, `/deadletters/{id}/dismiss`,
+  and `POST /admin/mode` re-verify against the master on every request, so
+  revoking an operator's token (rotating its `tokenKey`, or — for a
+  capability grant, see below — editing it away) bites immediately, not
+  after a TTL window.
+- **The five read-only, capability-gated ops routes DO use the cache** —
+  `GET /events`, `GET /streams`, `GET /deadletters`, `GET /admin/mode`,
+  `GET /catalog` — but with their own, shorter `--cqrsOpsVerifyCacheTTL`
+  (default `30s`) rather than the general `--cqrsVerifyCacheTTL`, and the
+  same opt-in `--cqrsVerifyGrace` outage tolerance
+  (`capability-verify-shape-decision.md`, 2026-09-28): the whole point of
+  these routes is staying usable when the master is having a bad day, so a
+  per-request master round trip would defeat that. Serving on a stale,
+  within-grace verdict logs a warning rather than doing so silently.
 - **Master unreachable**: a live cached verdict keeps serving; anything
   else answers `503` (not `401` — a re-login cannot work either while the
   master is down), unless `--cqrsVerifyGrace` opts into serving expired
@@ -348,19 +359,21 @@ One capability string per route, deliberately, not one shared grant — a
 future role can be scoped to a subset with no schema or gate change, the
 actual point of building a general per-capability model (the accepted
 `pocketcqrs-futures` decision) instead of a single fixed tier. The gate is
-collection-agnostic (`authverify.RequireCapability`): it does not know
+collection-agnostic (`authverify.RequireCapabilityCached`): it does not know
 about the `roles` collection by name, only about a `capabilities` field on
 whichever record authenticated — so a future role/permission field on a
 different collection (e.g. an end-user `users` collection) composes with
 zero gate changes.
 
-Multi-node: `RequireCapability` mirrors the superuser gate's remote-verify
-behavior exactly (`v == nil` uses the request's already-loaded auth record;
-with a `--cqrsVerifyAuth` `Verifier`, it re-verifies fresh against the
-master on every request, no cache). The `pocketcqrs-dashboard` UI itself is
-not capability-aware yet — a role session can reach these five routes
-directly, but the dashboard's own nav/panels are not filtered per role
-(tracked as follow-up work, not part of this build).
+Multi-node: these five routes use `RequireCapabilityCached` (`v == nil`
+uses the request's already-loaded auth record; with a `--cqrsVerifyAuth`
+`Verifier`, it verifies against `--cqrsOpsVerifyCacheTTL`'s cache — see
+"How auth works across nodes" above). `RequireCapability` itself (fresh,
+no cache) still exists for any future mutating or otherwise
+revocation-sensitive capability-gated route. The `pocketcqrs-dashboard` UI
+itself is not capability-aware yet — a role session can reach these five
+routes directly, but the dashboard's own nav/panels are not filtered per
+role (tracked as follow-up work, not part of this build).
 
 ### The `users` collection (Item 12, end-user identity)
 

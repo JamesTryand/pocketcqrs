@@ -38,12 +38,17 @@ func (s *State) BuildCatalog(ctx context.Context) (*catalog.Catalog, error) {
 //
 //	GET /api/cqrs/catalog
 //
-// Item 11: gated by authverify.RequireCapability (capOpsCatalogRead), not a
-// bare superuser check — a "roles" record with that capability can reach
-// it, and it is remote-verify-aware on a --cqrsVerifyAuth secondary. For an
-// ordinary single-node superuser (s.Verifier == nil, the common case),
-// RequireCapability(nil, ...) behaves identically to a plain superuser
-// check — proven by authverify's own TestRequireCapabilityLocal.
+// Item 11: gated by authverify.RequireCapabilityCached (capOpsCatalogRead),
+// not a bare superuser check — a "roles" record with that capability can
+// reach it, and it is remote-verify-aware on a --cqrsVerifyAuth secondary.
+// For an ordinary single-node superuser (s.Verifier == nil, the common
+// case), RequireCapabilityCached(nil, ...) behaves identically to a plain
+// superuser check — proven by authverify's own
+// TestRequireCapabilityCachedLocal. Shape C′ (cached, TTL-bounded, opt-in
+// grace), not Shape C: capability-verify-shape-decision.md, 2026-09-28 —
+// catalog is one of the five read-only ops routes whose whole purpose is
+// staying usable during a master outage, the opposite of a bare
+// RequireCapability's per-request master round trip.
 func RegisterCatalogRoute(e *core.ServeEvent, s *State) {
 	e.Router.GET("/api/cqrs/catalog", func(re *core.RequestEvent) error {
 		cat, err := s.BuildCatalog(re.Request.Context())
@@ -51,5 +56,5 @@ func RegisterCatalogRoute(e *core.ServeEvent, s *State) {
 			return apis.NewBadRequestError(err.Error(), err)
 		}
 		return re.JSON(http.StatusOK, cat)
-	}).Bind(authverify.RequireCapability(s.Verifier, capOpsCatalogRead))
+	}).Bind(authverify.RequireCapabilityCached(s.Verifier, capOpsCatalogRead))
 }

@@ -225,6 +225,117 @@ func TestVerifyCachedFailsClosedOnMissWithMasterDown(t *testing.T) {
 	}
 }
 
+// TestVerifyCachedOpsTierUsesItsOwnShorterTTL proves the whole point of
+// WithOpsTTL: a row saved under the general (longer) ttl still goes stale
+// for the ops tier at its OWN, shorter cutoff, judged from the same row's
+// VerifiedAt, not the general ttl's stored ExpiresAt.
+func TestVerifyCachedOpsTierUsesItsOwnShorterTTL(t *testing.T) {
+	master := newFakeMaster(t)
+	v := New(master.url(t), openTestCache(t), 5*time.Minute, 0, WithOpsTTL(30*time.Second))
+	token := mintToken(t, time.Hour)
+	ctx := context.Background()
+
+	// warms the cache under the GENERAL 5m ttl
+	if _, err := v.VerifyCached(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 1 {
+		t.Fatalf("expected 1 round-trip warming the cache, got %d", got)
+	}
+
+	// still within the ops tier's 30s: served from the same row, no round-trip
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 1 {
+		t.Fatalf("expected the ops tier to reuse the warm cache row, got %d calls", got)
+	}
+
+	// 1 minute on: past the ops tier's 30s cutoff, but nowhere near the
+	// general 5m ttl -- VerifyCached still serves the cached row untouched,
+	// while VerifyCachedOpsTier must re-verify
+	v.now = func() time.Time { return time.Now().Add(time.Minute) }
+	if _, err := v.VerifyCached(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 1 {
+		t.Fatalf("expected VerifyCached to still trust the row under the general ttl, got %d calls", got)
+	}
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 2 {
+		t.Fatalf("expected the ops tier's shorter TTL to force a re-verify, got %d calls", got)
+	}
+}
+
+// TestVerifyCachedOpsTierFallsBackToGeneralTTL proves a Verifier built
+// without WithOpsTTL makes VerifyCachedOpsTier behave exactly like
+// VerifyCached -- no silent behavior change for a caller that never opts in.
+func TestVerifyCachedOpsTierFallsBackToGeneralTTL(t *testing.T) {
+	master := newFakeMaster(t)
+	v := New(master.url(t), openTestCache(t), 5*time.Minute, 0)
+	token := mintToken(t, time.Hour)
+	ctx := context.Background()
+
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.VerifyCached(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 1 {
+		t.Fatalf("expected VerifyCachedOpsTier with no WithOpsTTL to share the general ttl's cache hit, got %d calls",
+			got)
+	}
+}
+
+// TestVerifyCachedOpsTierLogsOnlyWhenServingStale proves
+// capability-verify-shape-decision.md's "must be observable, not silent"
+// requirement: the stale logger fires exactly on the grace path, not on a
+// fresh cache hit, not on a fresh remote verify, and not on VerifyCached
+// (out of this decision's scope).
+func TestVerifyCachedOpsTierLogsOnlyWhenServingStale(t *testing.T) {
+	master := newFakeMaster(t)
+	var logs []string
+	v := New(master.url(t), openTestCache(t), 5*time.Minute, 30*time.Minute,
+		WithOpsTTL(30*time.Second),
+		WithStaleLogger(func(msg string, args ...any) { logs = append(logs, msg) }))
+	token := mintToken(t, time.Hour)
+	ctx := context.Background()
+
+	// cold: a fresh remote verify, not stale
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("expected no stale-logger calls on a fresh remote verify, got %v", logs)
+	}
+
+	master.srv.Close()
+
+	// 1 minute on: past the ops tier's 30s cutoff (forcing a re-verify that
+	// fails, then grace) but nowhere near the general 5m ttl -- this is the
+	// signal's one required path
+	v.now = func() time.Time { return time.Now().Add(time.Minute) }
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected exactly 1 stale-logger call, got %v", logs)
+	}
+
+	// 10 minutes on: now past the GENERAL 5m ttl too, so VerifyCached takes
+	// its own grace path -- still must not log, out of this decision's scope
+	v.now = func() time.Time { return time.Now().Add(10 * time.Minute) }
+	if _, err := v.VerifyCached(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected VerifyCached's own grace path to never invoke the stale logger, got %v", logs)
+	}
+}
+
 func TestVerifyFreshIgnoresTheCache(t *testing.T) {
 	master := newFakeMaster(t)
 	v := newTestVerifier(t, master.url(t), 5*time.Minute, 30*time.Minute)
