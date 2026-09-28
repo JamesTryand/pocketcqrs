@@ -20,6 +20,7 @@ type Verifier struct {
 	client *Client
 	cache  *Cache
 	ttl    time.Duration
+	opsTTL time.Duration
 	grace  time.Duration
 	group  singleflight.Group
 
@@ -32,14 +33,34 @@ type Verifier struct {
 // each token's own exp claim); grace is how far past expiry a stale
 // verdict may still be served when the master is unreachable — 0 means
 // fail closed the moment a verdict expires.
-func New(base *url.URL, cache *Cache, ttl, grace time.Duration) *Verifier {
-	return &Verifier{
+func New(base *url.URL, cache *Cache, ttl, grace time.Duration, opts ...Option) *Verifier {
+	v := &Verifier{
 		client: NewClient(base),
 		cache:  cache,
 		ttl:    ttl,
 		grace:  grace,
 		now:    time.Now,
 	}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
+}
+
+// Option configures a Verifier beyond New's required base/cache/ttl/grace
+// quartet.
+type Option func(*Verifier)
+
+// WithOpsTTL gives the read-only, capability-gated ops tier
+// (VerifyCachedOpsTier) its own, independently-tunable freshness bound —
+// capability-verify-shape-decision.md's "dedicated, tunable cache TTL for
+// this tier, distinct from whatever TTL is configured for general end-user
+// business reads." d <= 0 (the default, if this option is never applied)
+// falls back to New's own ttl, making a Verifier with no WithOpsTTL
+// behaviorally identical to one where VerifyCachedOpsTier and VerifyCached
+// agree exactly.
+func WithOpsTTL(d time.Duration) Option {
+	return func(v *Verifier) { v.opsTTL = d }
 }
 
 // tokenExp reads the token's own exp claim, rejecting a token that is
@@ -66,6 +87,34 @@ func tokenExp(token string) (time.Time, error) {
 // when no verdict could be had: master down, cache empty or past expiry,
 // and past any grace window.
 func (v *Verifier) VerifyCached(ctx context.Context, token string) (*Verdict, error) {
+	return v.verifyCached(ctx, token, v.ttl)
+}
+
+// VerifyCachedOpsTier is VerifyCached judged against opsTTL (New's
+// WithOpsTTL, falling back to the general ttl if that option was never
+// given) instead of the general ttl — the read-only ops tier's own,
+// independently-tunable freshness bound (capability-verify-shape-
+// decision.md). It shares VerifyCached's cache and grace policy rather
+// than needing a second cache file: a cache row's VerifiedAt column is
+// TTL-agnostic ground truth, so either method can judge the SAME row
+// against its own TTL regardless of which one last wrote it — a superuser
+// token used for both a business read and an ops read hits one cache row,
+// not two independently-expiring copies.
+func (v *Verifier) VerifyCachedOpsTier(ctx context.Context, token string) (*Verdict, error) {
+	ttl := v.opsTTL
+	if ttl <= 0 {
+		ttl = v.ttl
+	}
+	return v.verifyCached(ctx, token, ttl)
+}
+
+// verifyCached is VerifyCached and VerifyCachedOpsTier's shared
+// implementation, differing only in which TTL judges the cached entry's
+// VerifiedAt. Deriving the cutoff from VerifiedAt at read time, rather than
+// trusting the entry's own stored ExpiresAt, is what makes the two methods
+// safe to share one cache: ExpiresAt reflects whichever TTL last wrote the
+// row, but VerifiedAt does not depend on which caller wrote it.
+func (v *Verifier) verifyCached(ctx context.Context, token string, ttl time.Duration) (*Verdict, error) {
 	exp, err := tokenExp(token)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidToken, err)
@@ -78,15 +127,22 @@ func (v *Verifier) VerifyCached(ctx context.Context, token string) (*Verdict, er
 		entry = nil
 	}
 	now := v.now()
-	if entry != nil && now.Before(entry.ExpiresAt) {
-		return &entry.Verdict, nil
+	var cutoff time.Time
+	if entry != nil {
+		cutoff = entry.VerifiedAt.Add(ttl)
+		if entry.TokenExp.Before(cutoff) {
+			cutoff = entry.TokenExp
+		}
+		if now.Before(cutoff) {
+			return &entry.Verdict, nil
+		}
 	}
 
 	verdict, err := v.remoteVerify(ctx, token, hash, exp)
 	if err != nil && errors.Is(err, ErrUnreachable) && entry != nil && v.grace > 0 {
 		// the operator opted into serving stale verdicts during an outage,
 		// bounded twice over: by the grace window, and by the token's own exp
-		graceUntil := entry.ExpiresAt.Add(v.grace)
+		graceUntil := cutoff.Add(v.grace)
 		if entry.TokenExp.Before(graceUntil) {
 			graceUntil = entry.TokenExp
 		}

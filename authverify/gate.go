@@ -148,10 +148,10 @@ func requireCapabilityLocal(capability, idPrefix string) *hook.Handler[*core.Req
 
 // RequireCapabilityCached is capability-verify-shape-decision.md's Shape C′
 // gate for the read-only ops tier (2026-09-28): on a --cqrsVerifyAuth
-// secondary, it accepts a cached verdict within its TTL, and — with
+// secondary, it accepts a cached verdict within its own, dedicated
+// --cqrsOpsVerifyCacheTTL (VerifyCachedOpsTier), and — with
 // --cqrsVerifyGrace configured — a stale one through a master outage,
-// exactly like the general end-user Shape C′ path (VerifyCached) rather
-// than RequireCapability's per-request master round trip. It is otherwise
+// rather than RequireCapability's per-request master round trip. It is otherwise
 // structurally identical to RequireCapability: same superuser parity, same
 // IP check, same hasCapability check, same Materialize round trip — only
 // VerifyFresh becomes VerifyCached. RequireCapability itself is UNCHANGED
@@ -173,7 +173,7 @@ func RequireCapabilityCached(v *Verifier, capability string) *hook.Handler[*core
 			if token == "" {
 				return re.UnauthorizedError("The request requires a valid authorization token.", nil)
 			}
-			verdict, err := v.VerifyCached(re.Request.Context(), token)
+			verdict, err := v.VerifyCachedOpsTier(re.Request.Context(), token)
 			switch {
 			case errors.Is(err, ErrInvalidToken):
 				return re.UnauthorizedError("The request requires a valid authorization token.", nil)

@@ -225,6 +225,71 @@ func TestVerifyCachedFailsClosedOnMissWithMasterDown(t *testing.T) {
 	}
 }
 
+// TestVerifyCachedOpsTierUsesItsOwnShorterTTL proves the whole point of
+// WithOpsTTL: a row saved under the general (longer) ttl still goes stale
+// for the ops tier at its OWN, shorter cutoff, judged from the same row's
+// VerifiedAt, not the general ttl's stored ExpiresAt.
+func TestVerifyCachedOpsTierUsesItsOwnShorterTTL(t *testing.T) {
+	master := newFakeMaster(t)
+	v := New(master.url(t), openTestCache(t), 5*time.Minute, 0, WithOpsTTL(30*time.Second))
+	token := mintToken(t, time.Hour)
+	ctx := context.Background()
+
+	// warms the cache under the GENERAL 5m ttl
+	if _, err := v.VerifyCached(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 1 {
+		t.Fatalf("expected 1 round-trip warming the cache, got %d", got)
+	}
+
+	// still within the ops tier's 30s: served from the same row, no round-trip
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 1 {
+		t.Fatalf("expected the ops tier to reuse the warm cache row, got %d calls", got)
+	}
+
+	// 1 minute on: past the ops tier's 30s cutoff, but nowhere near the
+	// general 5m ttl -- VerifyCached still serves the cached row untouched,
+	// while VerifyCachedOpsTier must re-verify
+	v.now = func() time.Time { return time.Now().Add(time.Minute) }
+	if _, err := v.VerifyCached(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 1 {
+		t.Fatalf("expected VerifyCached to still trust the row under the general ttl, got %d calls", got)
+	}
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 2 {
+		t.Fatalf("expected the ops tier's shorter TTL to force a re-verify, got %d calls", got)
+	}
+}
+
+// TestVerifyCachedOpsTierFallsBackToGeneralTTL proves a Verifier built
+// without WithOpsTTL makes VerifyCachedOpsTier behave exactly like
+// VerifyCached -- no silent behavior change for a caller that never opts in.
+func TestVerifyCachedOpsTierFallsBackToGeneralTTL(t *testing.T) {
+	master := newFakeMaster(t)
+	v := New(master.url(t), openTestCache(t), 5*time.Minute, 0)
+	token := mintToken(t, time.Hour)
+	ctx := context.Background()
+
+	if _, err := v.VerifyCachedOpsTier(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.VerifyCached(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if got := master.calls.Load(); got != 1 {
+		t.Fatalf("expected VerifyCachedOpsTier with no WithOpsTTL to share the general ttl's cache hit, got %d calls",
+			got)
+	}
+}
+
 func TestVerifyFreshIgnoresTheCache(t *testing.T) {
 	master := newFakeMaster(t)
 	v := newTestVerifier(t, master.url(t), 5*time.Minute, 30*time.Minute)

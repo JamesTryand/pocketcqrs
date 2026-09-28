@@ -96,6 +96,7 @@ provide) — a stated incompatibility, not a scale-dependent risk.
 | `--cqrsVerifyAuth` | `false` | verify bearer tokens against the master with a bounded local verdict cache, so a secondary's own authenticated **local** reads work; implies `--cqrsForwardAuth` |
 | `--cqrsVerifyCacheTTL` | `5m` | how long a verdict is trusted before re-checking, always additionally capped by the token's own `exp`. Also the revocation-lag bound |
 | `--cqrsVerifyGrace` | `0` | opt-in: how far past expiry a stale verdict may still serve while the master is **unreachable** (never past the token's `exp`). `0` fails closed |
+| `--cqrsOpsVerifyCacheTTL` | `30s` | a shorter, independently-tunable `--cqrsVerifyCacheTTL` for the read-only, capability-gated ops routes (`capability-verify-shape-decision.md`); shares `--cqrsVerifyGrace`'s outage policy |
 
 A read-write-capable secondary is these three together:
 

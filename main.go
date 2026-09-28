@@ -352,6 +352,17 @@ func main() {
 			"unreachable master = 503. Opting in trades a bounded revocation lag for reads that "+
 			"keep working through a master outage.",
 	)
+	var opsVerifyCacheTTL time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&opsVerifyCacheTTL,
+		"cqrsOpsVerifyCacheTTL",
+		30*time.Second,
+		"a shorter, independently-tunable --cqrsVerifyCacheTTL for the read-only, capability-gated "+
+			"ops routes (capability-verify-shape-decision.md) — a tighter bound on the "+
+			"revocation-lag/information-disclosure window than reusing the general TTL, since these "+
+			"routes expose topology and internal names once a capability grant has been revoked. "+
+			"Shares --cqrsVerifyGrace's outage policy.",
+	)
 
 	// Command batching (item 4): ON by default -- F-5's fix (queue-depth
 	// admission control, --cqrsCommandQueueMaxDepth) is only built on this
@@ -441,7 +452,7 @@ func main() {
 		log.Print("--cqrsVerifyAuth implies --cqrsForwardAuth: auth flows forward to the master so every token is master-minted and remotely verifiable")
 	}
 	if !verifyAuth {
-		for _, name := range []string{"cqrsVerifyCacheTTL", "cqrsVerifyGrace"} {
+		for _, name := range []string{"cqrsVerifyCacheTTL", "cqrsVerifyGrace", "cqrsOpsVerifyCacheTTL"} {
 			if app.RootCmd.PersistentFlags().Changed(name) {
 				log.Printf("warning: --%s has no effect without --cqrsVerifyAuth", name)
 			}
@@ -565,7 +576,8 @@ func main() {
 				return err
 			}
 			c.verifyCache = cache
-			c.Verifier = authverify.New(masterURL, cache, verifyCacheTTL, verifyGrace)
+			c.Verifier = authverify.New(masterURL, cache, verifyCacheTTL, verifyGrace,
+				authverify.WithOpsTTL(opsVerifyCacheTTL))
 		}
 
 		// write side: deciders + command handling. The platform registers no
