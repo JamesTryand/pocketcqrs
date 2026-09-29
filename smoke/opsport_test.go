@@ -124,7 +124,7 @@ func TestOpsPortServesHealthzWithTheNodesIdentity(t *testing.T) {
 	}
 
 	// Section 5: the master heartbeats beside the event log, with its node id
-	// and its ops URL (default http://<hostname>:<ops port>).
+	// and its ops URL (the loopback address it binds, since CQRS_OPS_BIND is set).
 	store, err := events.OpenReadOnly(filepath.Join(dataDir, "events.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestOpsPortServesHealthzWithTheNodesIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if heartbeat == nil || heartbeat.WriterNodeID != want["node_id"] || !strings.HasSuffix(heartbeat.WriterOpsURL, ":"+opsPort) {
+	if heartbeat == nil || heartbeat.WriterNodeID != want["node_id"] || heartbeat.WriterOpsURL != "http://127.0.0.1:"+opsPort {
 		t.Errorf("heartbeat %+v, want node %v and ops port %s", heartbeat, want["node_id"], opsPort)
 	}
 }

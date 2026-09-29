@@ -33,6 +33,11 @@ All notable changes to PocketCQRS. Format loosely follows
   master's `/healthz`: `replication_stale` as `not_ready` (master up) or `degraded` (master
   down); no row is `replication_unknown`. `events.Store.WriteHeartbeat` / `ReadHeartbeat`;
   `opsport.ReplicationMonitor`, `RunWriterHeartbeat`, `AdvertisedURL`.
+- **Required dependencies, mode and functions in `/readyz`** (contract section 4.6; identical to
+  dotnetcqrs): `event_store` and, on a secondary, `writer`, checked every
+  `--cqrsDependencyCheckInterval` (5s), down after `--cqrsDependencyFailures` (3) failures in a
+  row; `event_store_unavailable` / `dependency_unavailable`; maintenance mode is `degraded`,
+  `maintenance`; skipped JS functions are `degraded`, `functions_skipped`. `opsport.Dependencies`.
 
 ## v0.12.0 — node identity, cached auth-verify for the read-only ops routes
 

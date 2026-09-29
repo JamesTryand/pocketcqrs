@@ -50,6 +50,11 @@ func TestSecondaryReportsReplicationFromTheMastersHeartbeat(t *testing.T) {
 		last = body
 		return code == http.StatusOK && body["status"] == "ready" && body["role"] == "reader"
 	})
+	// the master is a required dependency of every secondary, found through
+	// its heartbeat's ops URL (the loopback address it binds, here)
+	if deps, _ := last["checks"].(map[string]any)["dependencies"].(map[string]any); deps["writer"] != "up" || deps["event_store"] != "up" {
+		t.Errorf("dependencies: %v", last["checks"])
+	}
 	if checks, _ := last["checks"].(map[string]any); checks == nil || checks["write_lag_seconds"].(float64) > 2 {
 		t.Errorf("fresh write_lag_seconds: %v", last["checks"])
 	}
@@ -59,6 +64,8 @@ func TestSecondaryReportsReplicationFromTheMastersHeartbeat(t *testing.T) {
 	eventually(t, "the secondary to report a stale heartbeat with the master down as degraded", func() bool {
 		code, body := readyz()
 		last = body
-		return code == http.StatusOK && body["status"] == "degraded" && reasons(body) == "replication_stale"
+		// replication_stale first; dependency_unavailable joins it once the
+		// master has failed enough consecutive checks
+		return code == http.StatusOK && body["status"] == "degraded" && strings.HasPrefix(reasons(body), "replication_stale")
 	})
 }

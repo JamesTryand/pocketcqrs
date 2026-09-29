@@ -3,6 +3,7 @@ package opsport
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -27,11 +28,16 @@ const (
 )
 
 // AdvertisedURL is configured (CQRS_OPS_URL) if set, else
-// http://host:port. Anything but an absolute http or https URL is an error,
-// which fails the boot like any other invalid setting.
-func AdvertisedURL(configured, host string, port int) (string, error) {
+// http://<bind>:<port> when bind (CQRS_OPS_BIND) names a specific address,
+// since nothing else reaches it, else http://<host>:<port>. Anything but an
+// absolute http or https URL is an error, which fails the boot like any other
+// invalid setting.
+func AdvertisedURL(configured, bind, host string, port int) (string, error) {
 	if configured == "" {
-		return "http://" + host + ":" + strconv.Itoa(port), nil
+		if bind != "" && bind != "0.0.0.0" && bind != "::" {
+			host = bind
+		}
+		return "http://" + net.JoinHostPort(host, strconv.Itoa(port)), nil
 	}
 	u, err := url.Parse(configured)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -152,6 +158,22 @@ func (m *ReplicationMonitor) measure(ctx context.Context) ReplicationStatus {
 		return ReplicationStatus{State: StaleWriterUp, WriteLagSeconds: lag}
 	}
 	return ReplicationStatus{State: StaleWriterDown, WriteLagSeconds: lag}
+}
+
+// CheckWriter is the writer dependency's check (machine 3, on a secondary):
+// an error unless the heartbeat names a master and its /healthz answers.
+func (m *ReplicationMonitor) CheckWriter(ctx context.Context) error {
+	row, err := m.store.ReadHeartbeat(ctx)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return fmt.Errorf("no master heartbeat visible, so no master to check")
+	}
+	if !m.writerAnswers(ctx, row.WriterOpsURL) {
+		return fmt.Errorf("the master at %s did not answer /healthz", row.WriterOpsURL)
+	}
+	return nil
 }
 
 // Run measures every interval until ctx is done.

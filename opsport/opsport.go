@@ -111,8 +111,11 @@ type Health struct {
 	logf            func(string, ...any)
 	stopCatchUp     chan struct{}
 
-	metrics     *Metrics
-	replication atomic.Pointer[func() ReplicationStatus]
+	metrics          *Metrics
+	replication      atomic.Pointer[func() ReplicationStatus]
+	dependencies     atomic.Pointer[Dependencies]
+	mode             atomic.Pointer[func() string]
+	functionsPartial atomic.Bool
 }
 
 // New starts in Booting with no identity.
@@ -127,6 +130,19 @@ func (h *Health) Host() string { return h.host }
 // (machine 4), usually a ReplicationMonitor's Current. A reader without one
 // reports replication_unknown; a writer ignores it.
 func (h *Health) SetReplication(status func() ReplicationStatus) { h.replication.Store(&status) }
+
+// SetDependencies sets the node's required dependencies (machine 3). Without
+// them, dependencies is empty and none contributes.
+func (h *Health) SetDependencies(d *Dependencies) { h.dependencies.Store(d) }
+
+// SetMode sets where the system mode comes from (running or maintenance, the
+// events.db meta key); maintenance reports degraded. Unset means running.
+func (h *Health) SetMode(mode func() string) { h.mode.Store(&mode) }
+
+// SetFunctionsPartial records that some JS function failed validation at boot
+// and was skipped while the node serves anyway (without --cqrsStrictBoot);
+// that reports degraded, functions_skipped. Fixed at boot.
+func (h *Health) SetFunctionsPartial(partial bool) { h.functionsPartial.Store(partial) }
 
 // Metrics is the /metrics series (contract section 6); they exist from
 // process start.
@@ -293,8 +309,7 @@ type ReadyzChecks struct {
 // Readyz is the current /readyz status code and body: 200 when ready or
 // degraded, 503 when not_ready. The status is the most severe contribution of
 // the lifecycle and the read models (STATE-MACHINES.md, "Readiness:"
-// tables); reasons lists every non-ready one. Dependencies, mode and
-// functions are not reported yet (step 4 of the implementation plan).
+// tables); reasons lists every non-ready one.
 func (h *Health) Readyz() (int, ReadyzBody) {
 	h.Refresh()
 	id := h.identity.Load()
@@ -364,6 +379,40 @@ func (h *Health) Readyz() (int, ReadyzBody) {
 		}
 	}
 
+	// event_store: this node's own store is local, so not_ready on a reader;
+	// the sole writer stays in the pool as degraded. shared_dependencies (the
+	// master, on a secondary) fail every node at once, so degraded, one reason
+	// however many are down.
+	dependencies := map[string]string{}
+	if d := h.dependencies.Load(); d != nil {
+		sharedDown := false
+		for _, s := range d.States() {
+			state := "up"
+			if !s.Up {
+				state = "down"
+				if s.Name == DepEventStore {
+					severity := notReady
+					if id != nil && id.Role == "writer" {
+						severity = degraded
+					}
+					contributions = append(contributions, contribution{severity, "event_store_unavailable"})
+				} else {
+					sharedDown = true
+				}
+			}
+			dependencies[s.Name] = state
+		}
+		if sharedDown {
+			contributions = append(contributions, contribution{degraded, "dependency_unavailable"})
+		}
+	}
+	if f := h.mode.Load(); f != nil && (*f)() == "maintenance" {
+		contributions = append(contributions, contribution{degraded, "maintenance"})
+	}
+	if h.functionsPartial.Load() {
+		contributions = append(contributions, contribution{degraded, "functions_skipped"})
+	}
+
 	overall, reasons := ready, []string{}
 	for _, c := range contributions {
 		overall = max(overall, c.status)
@@ -376,7 +425,7 @@ func (h *Health) Readyz() (int, ReadyzBody) {
 		Checks: ReadyzChecks{
 			WriteLagSeconds:      float64(int64(writeLag*1000+0.5)) / 1000,
 			ProjectionLagSeconds: float64(int64(lag*1000+0.5)) / 1000,
-			Dependencies:         map[string]string{},
+			Dependencies:         dependencies,
 		},
 	}
 	if id != nil {

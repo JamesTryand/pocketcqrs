@@ -107,9 +107,11 @@ ever replicated — so a secondary never inherits the master's id.
 | `--cqrsOpsBind` / `CQRS_OPS_BIND` | every interface | the address it binds. A real node needs every interface so an orchestrator can reach it; `127.0.0.1` keeps it local (tests use this, which also avoids a Windows firewall prompt per test binary). |
 | `--cqrsLagThreshold` | `5s` | how old the oldest event a read model (a Go or JS projection) has not yet applied may be before `/readyz` counts it behind. |
 | `--cqrsCatchUpDeadline` | `60s` | how long the initial catch-up may take before a master serves anyway. |
-| `--cqrsOpsURL` / `CQRS_OPS_URL` | `http://<hostname>:<ops port>` | the ops port's base URL as other nodes reach it. A master writes it into its heartbeat so a stale secondary can ask whether the master is up; set it wherever the hostname is not reachable (NAT, containers). Anything but an absolute http(s) URL stops the node from starting. |
+| `--cqrsOpsURL` / `CQRS_OPS_URL` | `http://<hostname>:<ops port>` (the `--cqrsOpsBind` address instead of the hostname when that names one) | the ops port's base URL as other nodes reach it. A master writes it into its heartbeat so a stale secondary can ask whether the master is up; set it wherever the hostname is not reachable (NAT, containers). Anything but an absolute http(s) URL stops the node from starting. |
 | `--cqrsHeartbeatInterval` | `1s` | how often a master upserts its heartbeat row, and a secondary measures it. |
 | `--cqrsStaleThreshold` | `5s` | how old a secondary's view of the heartbeat may be before `/readyz` reports `replication_stale`. |
+| `--cqrsDependencyCheckInterval` | `5s` | how often the required dependencies are checked. |
+| `--cqrsDependencyFailures` | `3` | consecutive failed checks before a required dependency counts as down. |
 
 - `GET /healthz` there answers `200` whenever the process can answer at all, with `status`,
   `contract_version`, `node_id`, `identity`, `instance`, `host`, `stack`, `role` and `started_at`.
@@ -131,6 +133,12 @@ ever replicated — so a secondary never inherits the master's id.
   `replication_stale`); master unreachable means a shared outage, so it keeps serving visibly stale
   reads (`degraded`, `replication_stale`). A secondary that has never seen a heartbeat is
   `not_ready`, `replication_unknown`.
+- **Required dependencies** are listed under `checks.dependencies`: `event_store` on every node,
+  and `writer` (the master, found through its heartbeat) on a secondary. The event store down is
+  `event_store_unavailable` (`degraded` on the master, `not_ready` on a secondary); the master down
+  is `dependency_unavailable`, `degraded`. Maintenance mode reports `degraded`, `maintenance`; JS
+  deciders or reactors skipped at boot (without `--cqrsStrictBoot`) report `degraded`,
+  `functions_skipped`.
 - `GET /metrics` there serves the contract's `cqrs_` series in the Prometheus text format, every
   one present from the first scrape: identity, readiness, commands by outcome (`accepted`,
   `rejected`, `conflict`, `unavailable`, `error`) with a duration histogram, events appended,

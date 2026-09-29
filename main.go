@@ -340,6 +340,20 @@ func main() {
 		"how old a secondary's view of the master's heartbeat may be before /readyz reports "+
 			"replication_stale",
 	)
+	var dependencyCheckInterval time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&dependencyCheckInterval,
+		"cqrsDependencyCheckInterval",
+		opsport.DefaultDependencyCheckInterval,
+		"how often /readyz's required dependencies (the event store; the master, on a secondary) are checked",
+	)
+	var dependencyFailures int
+	app.RootCmd.PersistentFlags().IntVar(
+		&dependencyFailures,
+		"cqrsDependencyFailures",
+		opsport.DefaultDependencyFailures,
+		"consecutive failed checks before a required dependency counts as down",
+	)
 	// Readiness thresholds (the contract leaves their values to each stack).
 	var lagThreshold time.Duration
 	app.RootCmd.PersistentFlags().DurationVar(
@@ -549,7 +563,7 @@ func main() {
 		if addr, ok := ops.Addr().(*net.TCPAddr); ok {
 			boundPort = addr.Port
 		}
-		if opsURL, err = opsport.AdvertisedURL(opsURLFlag, c.health.Host(), boundPort); err != nil {
+		if opsURL, err = opsport.AdvertisedURL(opsURLFlag, opsBind, c.health.Host(), boundPort); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -837,6 +851,8 @@ func main() {
 		// refused loudly — the rest of the system keeps serving, unless
 		// --cqrsStrictBoot is set (boot aborts instead).
 		var validatedDeciders []*functions.DeciderSpec
+		// set when a JS decider or reactor is skipped (not under --cqrsStrictBoot)
+		functionsSkipped := false
 		for _, spec := range loaded.Deciders {
 			if c.Registry.Has(spec.Aggregate) {
 				if strictBoot {
@@ -844,6 +860,7 @@ func main() {
 				}
 				logger.Error("JS decider aggregate collides with an existing decider, skipped",
 					"aggregate", spec.Aggregate)
+				functionsSkipped = true
 				continue
 			}
 			if err := functions.ValidateDeciderSpec(store, spec); err != nil {
@@ -852,6 +869,7 @@ func main() {
 				}
 				logger.Error("JS decider failed validation, NOT registered",
 					"aggregate", spec.Aggregate, "error", err)
+				functionsSkipped = true
 				continue
 			}
 			c.Registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
@@ -924,9 +942,15 @@ func main() {
 				}
 				logger.Error("JS reactor failed validation, NOT registered",
 					"reactor", spec.Reactor, "error", err)
+				functionsSkipped = true
 				continue
 			}
 			activeReactors = append(activeReactors, spec)
+		}
+		// health/telemetry: a node serving with skipped functions reports
+		// degraded, functions_skipped (fixed at boot)
+		if functionsSkipped && c.health != nil {
+			c.health.SetFunctionsPartial(true)
 		}
 		c.JSReactors = activeReactors
 		for _, spec := range activeReactors {
@@ -1052,15 +1076,37 @@ func main() {
 		// upserts it beside the event log; a secondary measures its age and,
 		// when stale, asks the master's /healthz whether the master is up.
 		if c.health != nil {
+			// required dependencies (contract section 4.6): the event store,
+			// and the master on a secondary; checked once now, so none is
+			// unknown once the node serves, then on a loop. The mode is read
+			// from the (replicated) event store on each /readyz.
+			deps := opsport.NewDependencies(dependencyFailures, log.Printf)
+			deps.Add(opsport.DepEventStore, func(ctx context.Context) error {
+				_, err := c.Store.MaxPosition(ctx)
+				return err
+			})
+			c.health.SetMode(func() string {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				mode, err := c.Store.Mode(ctx)
+				if err != nil {
+					return events.ModeRunning // unreadable: the event store check reports it
+				}
+				return mode
+			})
 			if c.role == roleSecondary {
 				monitor := opsport.NewReplicationMonitor(c.Store, &http.Client{Timeout: 2 * time.Second}, staleThreshold)
 				c.health.SetReplication(monitor.Current)
+				deps.Add(opsport.DepWriter, monitor.CheckWriter)
 				bg.Go(func(ctx context.Context) { monitor.Run(ctx, heartbeatInterval) })
 			} else {
 				bg.Go(func(ctx context.Context) {
 					opsport.RunWriterHeartbeat(ctx, c.Store, identity.NodeID, opsURL, heartbeatInterval, log.Printf)
 				})
 			}
+			deps.CheckAll(context.Background())
+			c.health.SetDependencies(deps)
+			bg.Go(func(ctx context.Context) { deps.Run(ctx, dependencyCheckInterval) })
 		}
 		if c.batchWriter != nil {
 			bg.Go(c.batchWriter.Run)

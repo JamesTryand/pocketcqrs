@@ -184,8 +184,18 @@ func TestAWriterHasNoReplicationAndZeroWriteLag(t *testing.T) {
 // --- CQRS_OPS_URL ---
 
 func TestTheOpsURLDefaultsToTheHostAndOpsPort(t *testing.T) {
-	if got, err := AdvertisedURL("", "node-3", 10056); err != nil || got != "http://node-3:10056" {
+	if got, err := AdvertisedURL("", "", "node-3", 10056); err != nil || got != "http://node-3:10056" {
 		t.Errorf("got %q, %v", got, err)
+	}
+}
+
+func TestTheOpsURLDefaultsToASpecificBindAddress(t *testing.T) {
+	for bind, want := range map[string]string{
+		"127.0.0.1": "http://127.0.0.1:10056", "::1": "http://[::1]:10056", "0.0.0.0": "http://node-3:10056",
+	} {
+		if got, err := AdvertisedURL("", bind, "node-3", 10056); err != nil || got != want {
+			t.Errorf("bind %s: got %q, %v; want %s", bind, got, err, want)
+		}
 	}
 }
 
@@ -194,7 +204,7 @@ func TestAConfiguredOpsURLIsUsedAsGiven(t *testing.T) {
 		"http://writer.internal:9000": "http://writer.internal:9000",
 		"https://writer.example/ops/": "https://writer.example/ops",
 	} {
-		if got, err := AdvertisedURL(configured, "node-3", 10056); err != nil || got != want {
+		if got, err := AdvertisedURL(configured, "", "node-3", 10056); err != nil || got != want {
 			t.Errorf("%s: got %q, %v", configured, got, err)
 		}
 	}
@@ -202,7 +212,7 @@ func TestAConfiguredOpsURLIsUsedAsGiven(t *testing.T) {
 
 func TestAnInvalidOpsURLFailsTheBoot(t *testing.T) {
 	for _, configured := range []string{"writer:10056", "ftp://writer", "/relative"} {
-		_, err := AdvertisedURL(configured, "node-3", 10056)
+		_, err := AdvertisedURL(configured, "", "node-3", 10056)
 		if err == nil || !strings.Contains(err.Error(), EnvURL) {
 			t.Errorf("%s: %v", configured, err)
 		}
