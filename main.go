@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -313,6 +315,31 @@ func main() {
 		"the address the ops port binds (default $"+opsport.EnvBind+", else every interface, so an "+
 			"orchestrator can reach it); 127.0.0.1 keeps it local",
 	)
+	var opsURLFlag string
+	app.RootCmd.PersistentFlags().StringVar(
+		&opsURLFlag,
+		"cqrsOpsURL",
+		os.Getenv(opsport.EnvURL),
+		"the ops port's base URL as other nodes reach it (default $"+opsport.EnvURL+", else "+
+			"http://<hostname>:<ops port>); a master puts it in its heartbeat so a stale secondary "+
+			"can ask whether the master is up. Set it wherever the hostname is not reachable (NAT, containers)",
+	)
+	var heartbeatInterval time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&heartbeatInterval,
+		"cqrsHeartbeatInterval",
+		opsport.DefaultHeartbeatInterval,
+		"how often a master upserts its heartbeat row beside the event log, and a secondary measures "+
+			"it; keep it well under --cqrsStaleThreshold",
+	)
+	var staleThreshold time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&staleThreshold,
+		"cqrsStaleThreshold",
+		opsport.DefaultStaleThreshold,
+		"how old a secondary's view of the master's heartbeat may be before /readyz reports "+
+			"replication_stale",
+	)
 	// Readiness thresholds (the contract leaves their values to each stack).
 	var lagThreshold time.Duration
 	app.RootCmd.PersistentFlags().DurationVar(
@@ -498,6 +525,9 @@ func main() {
 	app.RootCmd.AddCommand(newSkillCommand())
 	app.RootCmd.ParseFlags(os.Args[1:])
 
+	// opsURL is --cqrsOpsURL resolved once the ops port is bound (its default
+	// needs the bound port); a master writes it into its heartbeat.
+	var opsURL string
 	// The ops port binds first: before any flag is validated or PocketBase
 	// bootstraps (app.Start does that before any cobra hook runs), so a
 	// booting node answers /healthz instead of refusing connections. Only
@@ -515,6 +545,13 @@ func main() {
 			log.Fatal(err)
 		}
 		log.Printf("ops port listening on %s", ops.Addr())
+		boundPort := port
+		if addr, ok := ops.Addr().(*net.TCPAddr); ok {
+			boundPort = addr.Port
+		}
+		if opsURL, err = opsport.AdvertisedURL(opsURLFlag, c.health.Host(), boundPort); err != nil {
+			log.Fatal(err)
+		}
 	}
 	c.Tutorial = tutorial
 	c.SchemaDefaultRule = schemaDefaultRule
@@ -1011,6 +1048,20 @@ func main() {
 		// background loops run on bg's shared context so the termination
 		// hook below can stop them and wait for them
 		bg.Go(c.Engine.Run)
+		// The writer heartbeat (health/telemetry contract section 5): a master
+		// upserts it beside the event log; a secondary measures its age and,
+		// when stale, asks the master's /healthz whether the master is up.
+		if c.health != nil {
+			if c.role == roleSecondary {
+				monitor := opsport.NewReplicationMonitor(c.Store, &http.Client{Timeout: 2 * time.Second}, staleThreshold)
+				c.health.SetReplication(monitor.Current)
+				bg.Go(func(ctx context.Context) { monitor.Run(ctx, heartbeatInterval) })
+			} else {
+				bg.Go(func(ctx context.Context) {
+					opsport.RunWriterHeartbeat(ctx, c.Store, identity.NodeID, opsURL, heartbeatInterval, log.Printf)
+				})
+			}
+		}
 		if c.batchWriter != nil {
 			bg.Go(c.batchWriter.Run)
 		}

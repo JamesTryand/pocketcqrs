@@ -40,6 +40,10 @@ func newNode(t *testing.T, role string) *node {
 		NodeID: "0192b5c4-7e1a-7c3e-9f00-5b2d8a1c4e77", Kind: nodeidentity.Persistent,
 		Instance: "timesheets", Host: "node-3", Stack: nodeidentity.Stack, Role: role, StartedAt: started,
 	})
+	// a reader's replication is fresh here; replication_test.go covers the rest
+	if role == "reader" {
+		n.health.SetReplication(func() ReplicationStatus { return ReplicationStatus{State: ReplicationFresh} })
+	}
 	return n
 }
 

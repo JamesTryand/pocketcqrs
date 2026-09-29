@@ -271,7 +271,12 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 
-	_, err := db.Exec(`PRAGMA user_version = 4`)
+	// v5: the writer heartbeat table (health/telemetry contract section 5)
+	if _, err := db.Exec(heartbeatSchema); err != nil {
+		return err
+	}
+
+	_, err := db.Exec(`PRAGMA user_version = 5`)
 	return err
 }
 

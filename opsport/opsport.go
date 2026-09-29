@@ -111,13 +111,22 @@ type Health struct {
 	logf            func(string, ...any)
 	stopCatchUp     chan struct{}
 
-	metrics *Metrics
+	metrics     *Metrics
+	replication atomic.Pointer[func() ReplicationStatus]
 }
 
 // New starts in Booting with no identity.
 func New(host string, startedAt time.Time) *Health {
 	return &Health{host: host, startedAt: startedAt.UTC(), now: time.Now, logf: func(string, ...any) {}, metrics: newMetrics()}
 }
+
+// Host is the hostname reported in /healthz (the default ops URL's host).
+func (h *Health) Host() string { return h.host }
+
+// SetReplication sets where a reader's replication freshness comes from
+// (machine 4), usually a ReplicationMonitor's Current. A reader without one
+// reports replication_unknown; a writer ignores it.
+func (h *Health) SetReplication(status func() ReplicationStatus) { h.replication.Store(&status) }
 
 // Metrics is the /metrics series (contract section 6); they exist from
 // process start.
@@ -275,8 +284,7 @@ type ReadyzBody struct {
 
 // ReadyzChecks is /readyz's checks object.
 type ReadyzChecks struct {
-	// WriteLagSeconds is 0 on a writer; a reader's heartbeat age is step 5
-	// of the implementation plan.
+	// WriteLagSeconds is 0 on a writer; on a reader, the heartbeat's age.
 	WriteLagSeconds      float64           `json:"write_lag_seconds"`
 	ProjectionLagSeconds float64           `json:"projection_lag_seconds"`
 	Dependencies         map[string]string `json:"dependencies"`
@@ -285,8 +293,8 @@ type ReadyzChecks struct {
 // Readyz is the current /readyz status code and body: 200 when ready or
 // degraded, 503 when not_ready. The status is the most severe contribution of
 // the lifecycle and the read models (STATE-MACHINES.md, "Readiness:"
-// tables); reasons lists every non-ready one. Dependencies, replication, mode
-// and functions are not reported yet (steps 4-5 of the implementation plan).
+// tables); reasons lists every non-ready one. Dependencies, mode and
+// functions are not reported yet (step 4 of the implementation plan).
 func (h *Health) Readyz() (int, ReadyzBody) {
 	h.Refresh()
 	id := h.identity.Load()
@@ -336,6 +344,26 @@ func (h *Health) Readyz() (int, ReadyzBody) {
 		contributions = append(contributions, contribution{severity, reason})
 	}
 
+	// replication (readers only): stale because this reader is behind is
+	// local, not_ready; stale because the writer is down is shared, degraded;
+	// never having seen a heartbeat leaves nothing trustworthy to serve.
+	writeLag := 0.0
+	if id != nil && id.Role == "reader" {
+		r := ReplicationStatus{State: ReplicationUnknown}
+		if f := h.replication.Load(); f != nil {
+			r = (*f)()
+		}
+		writeLag = r.WriteLagSeconds
+		switch r.State {
+		case ReplicationUnknown:
+			contributions = append(contributions, contribution{notReady, "replication_unknown"})
+		case StaleWriterUp:
+			contributions = append(contributions, contribution{notReady, "replication_stale"})
+		case StaleWriterDown:
+			contributions = append(contributions, contribution{degraded, "replication_stale"})
+		}
+	}
+
 	overall, reasons := ready, []string{}
 	for _, c := range contributions {
 		overall = max(overall, c.status)
@@ -346,6 +374,7 @@ func (h *Health) Readyz() (int, ReadyzBody) {
 		ContractVersion: ContractVersion,
 		Reasons:         reasons,
 		Checks: ReadyzChecks{
+			WriteLagSeconds:      float64(int64(writeLag*1000+0.5)) / 1000,
 			ProjectionLagSeconds: float64(int64(lag*1000+0.5)) / 1000,
 			Dependencies:         map[string]string{},
 		},

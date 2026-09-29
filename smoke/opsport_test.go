@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jamestryand/pocketcqrs/events"
 )
 
 // The health/telemetry contract's ops port, sections 2-4: `serve` binds it
@@ -118,5 +121,22 @@ func TestOpsPortServesHealthzWithTheNodesIdentity(t *testing.T) {
 		if !strings.Contains(string(metrics), line) {
 			t.Errorf("/metrics lacks %s:\n%s", line, metrics)
 		}
+	}
+
+	// Section 5: the master heartbeats beside the event log, with its node id
+	// and its ops URL (default http://<hostname>:<ops port>).
+	store, err := events.OpenReadOnly(filepath.Join(dataDir, "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var heartbeat *events.Heartbeat
+	for deadline := time.Now().Add(10 * time.Second); heartbeat == nil && time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+		if heartbeat, err = store.ReadHeartbeat(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if heartbeat == nil || heartbeat.WriterNodeID != want["node_id"] || !strings.HasSuffix(heartbeat.WriterOpsURL, ":"+opsPort) {
+		t.Errorf("heartbeat %+v, want node %v and ops port %s", heartbeat, want["node_id"], opsPort)
 	}
 }

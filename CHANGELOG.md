@@ -26,6 +26,13 @@ All notable changes to PocketCQRS. Format loosely follows
   the Prometheus text format from the first scrape, outcome counters zero-initialised, the fixed
   duration buckets. `gateway.Config.Metrics` (a `CommandRecorder`, nil records nothing) counts
   each command by the status it answered, 401s included; `opsport.Metrics` renders the series.
+- **Writer heartbeat and replication freshness** (contract section 5; identical to dotnetcqrs):
+  a master upserts a `writer_heartbeat` row in `events.db` (schema v5; never an event) every
+  `--cqrsHeartbeatInterval` (1s) with its node id and `--cqrsOpsURL` / `CQRS_OPS_URL`. A secondary
+  reports the row's age as `write_lag_seconds` and, past `--cqrsStaleThreshold` (5s), asks the
+  master's `/healthz`: `replication_stale` as `not_ready` (master up) or `degraded` (master
+  down); no row is `replication_unknown`. `events.Store.WriteHeartbeat` / `ReadHeartbeat`;
+  `opsport.ReplicationMonitor`, `RunWriterHeartbeat`, `AdvertisedURL`.
 
 ## v0.12.0 — node identity, cached auth-verify for the read-only ops routes
 
