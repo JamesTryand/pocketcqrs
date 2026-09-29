@@ -225,6 +225,11 @@ func serve(t *testing.T, bin, dir, label string, args ...string) (stop func()) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bin, args...)
+	// Every node gets its own ops port unless the test passes --cqrsOpsPort
+	// (several nodes run at once, and only one process can bind the default),
+	// bound to loopback: every interface is what a real node needs, and on
+	// Windows it raises a firewall prompt for each new test binary.
+	cmd.Env = append(os.Environ(), "CQRS_OPS_PORT=0", "CQRS_OPS_BIND=127.0.0.1")
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting %s: %v", label, err)

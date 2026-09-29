@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/idempotency"
 	"github.com/jamestryand/pocketcqrs/migrations"
 	"github.com/jamestryand/pocketcqrs/nodeidentity"
+	"github.com/jamestryand/pocketcqrs/opsport"
 	"github.com/jamestryand/pocketcqrs/outbound"
 	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/reactors"
@@ -88,9 +90,13 @@ type components struct {
 	verifyCache *authverify.Cache
 
 	// identity is who this node is (the node-identity contract), resolved
-	// once at the start of serve, before the node listens. The health and
-	// telemetry endpoints will report it; nothing reads it yet.
+	// once at the start of serve, before the node listens. The ops port
+	// reports it through health.
 	identity nodeidentity.Identity
+
+	// health is what the ops port reports (the health/telemetry contract);
+	// nil except under `serve`, the only command that has an ops port.
+	health *opsport.Health
 }
 
 // contractRole is --cqrsRole in the runtime contracts' vocabulary: the
@@ -287,6 +293,25 @@ func main() {
 		"this node's workload name as identity reports it (default $"+nodeidentity.EnvInstance+
 			"; when unset, the application name from Settings)",
 	)
+	// The ops port (the health/telemetry contract): /healthz on a port of its
+	// own, bound by `serve` before anything else. The env var always works;
+	// the flag is this binary's own convention for the same setting.
+	var opsPort string
+	app.RootCmd.PersistentFlags().StringVar(
+		&opsPort,
+		"cqrsOpsPort",
+		os.Getenv(opsport.EnvPort),
+		"the ops port for /healthz (default $"+opsport.EnvPort+", else "+strconv.Itoa(opsport.DefaultPort)+
+			"); several nodes on one machine must each set their own",
+	)
+	var opsBind string
+	app.RootCmd.PersistentFlags().StringVar(
+		&opsBind,
+		"cqrsOpsBind",
+		os.Getenv(opsport.EnvBind),
+		"the address the ops port binds (default $"+opsport.EnvBind+", else every interface, so an "+
+			"orchestrator can reach it); 127.0.0.1 keeps it local",
+	)
 	var vfs string
 	app.RootCmd.PersistentFlags().StringVar(
 		&vfs,
@@ -454,6 +479,25 @@ func main() {
 	app.RootCmd.AddCommand(newSchemaCommand(c))
 	app.RootCmd.AddCommand(newSkillCommand())
 	app.RootCmd.ParseFlags(os.Args[1:])
+
+	// The ops port binds first: before any flag is validated or PocketBase
+	// bootstraps (app.Start does that before any cobra hook runs), so a
+	// booting node answers /healthz instead of refusing connections. Only
+	// `serve` has one, and like `skill` and `schema import` above it is
+	// recognised as the first argument. A node that cannot bind it does not
+	// start: several nodes on one machine must each set their own port.
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		port, err := opsport.ParsePort(opsPort)
+		if err != nil {
+			log.Fatal(err)
+		}
+		c.health = opsport.New(nodeidentity.Hostname(log.Printf), processStart)
+		ops, err := opsport.Start(c.health, opsBind, port)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("ops port listening on %s", ops.Addr())
+	}
 	c.Tutorial = tutorial
 	c.SchemaDefaultRule = schemaDefaultRule
 	if role != roleMaster && role != roleSecondary {
@@ -902,6 +946,9 @@ func main() {
 			return err
 		}
 		c.identity = identity
+		if c.health != nil {
+			c.health.SetIdentity(identity)
+		}
 		log.Printf("node identity: node_id=%s identity=%s instance=%q host=%s role=%s started_at=%s",
 			identity.NodeID, identity.Kind, identity.Instance, identity.Host, identity.Role, identity.StartedAtRFC3339())
 

@@ -96,6 +96,26 @@ ever replicated — so a secondary never inherits the master's id.
   `secondary`; `started_at` is process start, so it changes on every restart
   while `node_id` does not.
 
+### Ops port (health and telemetry)
+
+`serve` binds an **ops port** before anything else, per the cross-stack health/telemetry contract
+(identical to dotnetcqrs), so a booting node answers instead of refusing connections:
+
+| Flag / env | Default | Meaning |
+|---|---|---|
+| `--cqrsOpsPort` / `CQRS_OPS_PORT` | `10056` (provisional) | the ops port (the flag defaults to the env var). A value outside 0-65535, or a port already taken, stops the node from starting. |
+| `--cqrsOpsBind` / `CQRS_OPS_BIND` | every interface | the address it binds. A real node needs every interface so an orchestrator can reach it; `127.0.0.1` keeps it local (tests use this, which also avoids a Windows firewall prompt per test binary). |
+
+- `GET /healthz` there answers `200` whenever the process can answer at all, with `status`,
+  `contract_version`, `node_id`, `identity`, `instance`, `host`, `stack`, `role` and `started_at`.
+  The identity fields are `null` while the node boots, then match "Node identity" above.
+  `/readyz` and `/metrics` follow on the same port.
+- It is **not** the traffic port (`--http`), and never belongs behind an ingress: it is
+  unauthenticated, so the network path is the security boundary.
+- Several nodes on one machine must each set their own ops port; only one can bind the default.
+- `serve` must be the first argument (`pocketcqrs serve --http ...`), as everywhere in these docs:
+  that is how the binary knows to bind the ops port before PocketBase bootstraps.
+
 ## Multi-node (single writer, multiple readers)
 
 One master appends to `events.db`; any number of secondaries poll a

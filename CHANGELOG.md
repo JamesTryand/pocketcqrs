@@ -3,6 +3,18 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased
+
+### Added
+
+- **Ops port and `GET /healthz`** (cross-stack health/telemetry contract 1.0, sections 2-3;
+  identical to dotnetcqrs). `serve` binds `--cqrsOpsPort` / `CQRS_OPS_PORT` (default `10056`,
+  provisional; `--cqrsOpsBind` / `CQRS_OPS_BIND` sets the address, default every interface) before
+  anything else and answers `/healthz` there: `status`, `contract_version`
+  and the node-identity fields, `null` while booting. An invalid or taken port stops the node from
+  starting. New package `opsport`; `nodeidentity.Hostname` exposes the `unknown` fallback. See
+  `docs/reference/cli.md`, "Ops port". `/readyz` and `/metrics` follow.
+
 ## v0.12.0 — node identity, cached auth-verify for the read-only ops routes
 
 Node identity per the cross-stack node-identity contract 1.0 (identical to dotnetcqrs v0.16.0),
