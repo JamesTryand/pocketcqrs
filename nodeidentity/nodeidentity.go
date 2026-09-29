@@ -194,7 +194,6 @@ func Resolve(o Options) (Identity, error) {
 	return id, nil
 }
 
-// newUUIDv7 is a canonical, lowercase, hyphenated UUIDv7 (RFC 9562).
 // Hostname is this machine's hostname, or UnknownHost with a warning when it
 // cannot be read (contract I7). It is never an error: host describes the
 // node, it does not identify it. For callers that need the host before
@@ -215,6 +214,7 @@ func hostnameOr(read func() (string, error), logf func(format string, args ...an
 	return host
 }
 
+// newUUIDv7 is a canonical, lowercase, hyphenated UUIDv7 (RFC 9562).
 func newUUIDv7() (string, error) {
 	u, err := uuid.NewV7()
 	if err != nil {
