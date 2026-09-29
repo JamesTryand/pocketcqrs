@@ -22,6 +22,13 @@ All notable changes to PocketCQRS. Format loosely follows
   `consumers.Engine.Status` reports each consumer as current / behind / blocked with its lag in
   positions and seconds; `consumers.ReadModel` / `IsReadModel` say which consumers count (any
   that own collections, i.e. every projection).
+- **Telemetry push** (health/telemetry contract section 8; identical to dotnetcqrs). `--cqrsTelemetryURL` /
+  `CQRS_TELEMETRY_URL` (the scheme selects the transport; unset is off) and `--cqrsTelemetryInterval` /
+  `CQRS_TELEMETRY_INTERVAL` (seconds, default 15) switch on a best-effort push of the section-6 series as JSON
+  to the subject `cqrs.telemetry.metrics.<node_id>`: on connect, on the interval, and once as draining begins.
+  Package `telemetry` holds the transport interface, settings, payload and publisher; the NATS client is
+  `telemetry/natstransport` (new dependency `nats.go` v1.50.0, kept at the version that leaves the module on Go 1.25).
+  `/metrics` and the push render one `opsport.Snapshot`. A failing bus never touches `/healthz` or `/readyz`.
 - **Drain on shutdown** (health/telemetry contract 4.7; identical to dotnetcqrs). On `SIGTERM`/Ctrl+C
   `/readyz` goes `not_ready` / `draining` first (`opsport.Health.BeginDraining`), the HTTP server
   finishes in-flight requests (PocketBase's own handler would cut them off after 1s), then the

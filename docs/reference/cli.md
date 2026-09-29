@@ -112,6 +112,8 @@ ever replicated — so a secondary never inherits the master's id.
 | `--cqrsStaleThreshold` | `5s` | how old a secondary's view of the heartbeat may be before `/readyz` reports `replication_stale`. |
 | `--cqrsDependencyCheckInterval` | `5s` | how often the required dependencies are checked. |
 | `--cqrsDependencyFailures` | `3` | consecutive failed checks before a required dependency counts as down. |
+| `--cqrsTelemetryURL` / `CQRS_TELEMETRY_URL` | unset (no push) | the bus the node pushes a JSON snapshot of its `cqrs_` series to; the scheme selects the transport (`nats://host:4222`). Best-effort and never a dependency of `/healthz` or `/readyz`. An invalid URL, or a scheme with no transport in this binary, stops the node from starting; an unreachable bus does not. |
+| `--cqrsTelemetryInterval` / `CQRS_TELEMETRY_INTERVAL` | `15` | seconds between snapshots, decimals allowed (a Go duration such as `15s` also works as a flag value). |
 | `--cqrsDrainDeadline` | `5s` | how long a node may spend draining on shutdown (in-flight requests, then the consumers' event in hand, together) before the stores are closed under whatever is left. Keep it inside your supervisor's stop grace period (Docker's is 10s). |
 
 - `GET /healthz` there answers `200` whenever the process can answer at all, with `status`,
@@ -127,6 +129,12 @@ ever replicated — so a secondary never inherits the master's id.
   `not_ready` on a secondary. For the same reason a master still catching up after
   `--cqrsCatchUpDeadline` serves anyway; a secondary keeps catching up. Reactors and effect
   functions never affect readiness.
+- **Telemetry push.** With `--cqrsTelemetryURL` set, the node publishes each snapshot as JSON (the same
+  figures `/metrics` returns) to the subject `cqrs.telemetry.metrics.<node_id>`: once it has an identity, then
+  every `--cqrsTelemetryInterval`, and once more as draining begins so a monitor sees `draining`, not silence.
+  A snapshot the bus cannot take within a second is dropped, never queued, and the log says so once per outage.
+  The transport sits behind an interface (package `telemetry`); the NATS client is its own package
+  (`telemetry/natstransport`).
 - **Draining.** On `SIGTERM`/Ctrl+C `/readyz` goes `503` `draining` first, so whatever routes to
   this node stops; the HTTP server then finishes its in-flight requests; then each consumer finishes
   the event it is applying, checkpoints it and stops (the next start resumes from the next event; it

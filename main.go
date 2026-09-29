@@ -40,6 +40,8 @@ import (
 	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/reactors"
 	"github.com/jamestryand/pocketcqrs/roles"
+	"github.com/jamestryand/pocketcqrs/telemetry"
+	"github.com/jamestryand/pocketcqrs/telemetry/natstransport"
 	"github.com/jamestryand/pocketcqrs/users"
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
@@ -381,6 +383,23 @@ func main() {
 		"how long a node may spend draining on shutdown (SIGTERM/Ctrl+C) for in-flight requests and the "+
 			"consumers' event in hand together; /readyz reports draining from the moment shutdown starts",
 	)
+	// The optional telemetry push (contract section 8). Both flags default to the
+	// contract's environment names.
+	var telemetryURL, telemetryInterval string
+	app.RootCmd.PersistentFlags().StringVar(
+		&telemetryURL,
+		"cqrsTelemetryURL",
+		os.Getenv(telemetry.URLName),
+		"push a JSON snapshot of the cqrs_ series to this message bus (env "+telemetry.URLName+"); the scheme "+
+			"selects the transport, e.g. nats://host:4222; empty means no push. Best-effort, never a dependency "+
+			"of /healthz or /readyz",
+	)
+	app.RootCmd.PersistentFlags().StringVar(
+		&telemetryInterval,
+		"cqrsTelemetryInterval",
+		os.Getenv(telemetry.IntervalName),
+		"seconds between telemetry snapshots (env "+telemetry.IntervalName+"), decimals allowed; default 15",
+	)
 	var vfs string
 	app.RootCmd.PersistentFlags().StringVar(
 		&vfs,
@@ -552,6 +571,9 @@ func main() {
 	// opsURL is --cqrsOpsURL resolved once the ops port is bound (its default
 	// needs the bound port); a master writes it into its heartbeat.
 	var opsURL string
+	// telemetryPub is the optional push, built with the ops port so a bad
+	// setting stops the node before anything else starts.
+	var telemetryPub *telemetry.Publisher
 	// The ops port binds first: before any flag is validated or PocketBase
 	// bootstraps (app.Start does that before any cobra hook runs), so a
 	// booting node answers /healthz instead of refusing connections. Only
@@ -575,6 +597,17 @@ func main() {
 		}
 		if opsURL, err = opsport.AdvertisedURL(opsURLFlag, opsBind, c.health.Host(), boundPort); err != nil {
 			log.Fatal(err)
+		}
+		tsettings, err := telemetry.ParseSettings(telemetryURL, telemetryInterval)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if tsettings.Enabled() {
+			transport, err := natstransport.Register(telemetry.NewTransports()).Open(tsettings.URL, log.Printf)
+			if err != nil {
+				log.Fatal(err)
+			}
+			telemetryPub = telemetry.NewPublisher(c.health, transport, tsettings.Interval, log.Printf)
 		}
 	}
 	c.Tutorial = tutorial
@@ -1084,6 +1117,9 @@ func main() {
 		// background loops run on bg's shared context so the termination
 		// hook below can stop them and wait for them
 		bg.Go(c.Engine.Run)
+		if telemetryPub != nil {
+			bg.Go(telemetryPub.Run)
+		}
 		// The writer heartbeat (health/telemetry contract section 5): a master
 		// upserts it beside the event log; a secondary measures its age and,
 		// when stale, asks the master's /healthz whether the master is up.
@@ -1167,6 +1203,9 @@ func main() {
 			if c.health != nil {
 				c.health.BeginDraining(log.Printf)
 			}
+			if telemetryPub != nil {
+				telemetryPub.NotifyDraining() // the final snapshot says draining
+			}
 			if srv := httpServer.Load(); srv != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), drainDeadline)
 				defer cancel()
@@ -1193,6 +1232,11 @@ func main() {
 		if !bg.Stop(max(left, 0)) {
 			log.Printf("shutdown: drain deadline of %s reached with background loops still running "+
 				"(an interrupted event is redone on restart); closing stores anyway", drainDeadline)
+		}
+		if telemetryPub != nil {
+			// the loop has stopped with the others; this waits for the final
+			// snapshot still going out (one second at most) and closes the bus
+			_ = telemetryPub.Close()
 		}
 		c.closeStores()
 		return e.Next()

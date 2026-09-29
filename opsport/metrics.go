@@ -103,26 +103,67 @@ func (m *Metrics) SetDeadLetterDepth(depth func(context.Context) (int64, error))
 	m.deadLetters.Store(&depth)
 }
 
+// Label is one label of a sample.
+type Label struct{ Name, Value string }
+
+// Sample is one gauge or counter value with its labels in order; NaN means
+// not known.
+type Sample struct {
+	Labels []Label
+	Value  float64
+}
+
+// HistogramSample is one label set of a histogram family: cumulative counts
+// per DurationBuckets boundary, then the total count and the sum.
+type HistogramSample struct {
+	Labels  []Label
+	Buckets []int64
+	Count   int64
+	Sum     float64
+}
+
+// Family is one series of the contract's section 6: gauges and counters
+// carry Samples, a histogram carries Histograms.
+type Family struct {
+	Name, Type, Help string
+	Samples          []Sample
+	Histograms       []HistogramSample
+}
+
+// Snapshot is every section-6 series at one moment, in the contract's order:
+// what /metrics renders as text and the telemetry push serialises as JSON, so
+// the two cannot disagree.
+type Snapshot struct{ Families []Family }
+
 // Render is the /metrics body. h supplies identity, readiness and the
 // consumers; nothing here writes anything.
 func (m *Metrics) Render(ctx context.Context, h *Health) string {
-	var b strings.Builder
+	return RenderSnapshot(m.Snapshot(ctx, h))
+}
+
+// Snapshot reads every section-6 series. h supplies identity, readiness and
+// the consumers; nothing here writes anything.
+func (m *Metrics) Snapshot(ctx context.Context, h *Health) Snapshot {
 	id := h.Identity()
 	_, readyz := h.Readyz()
 	consumers := h.Consumers()
+	var families []Family
+	s := func(value float64, labels ...Label) Sample { return Sample{Labels: labels, Value: value} }
 
-	family(&b, "cqrs_node_info", "gauge", "Node identity (node-identity contract); always 1.")
 	var nodeID, instance, role string
 	if id != nil {
 		nodeID, instance, role = id.NodeID, id.Instance, id.Role
 	}
-	sample(&b, "cqrs_node_info", 1, "node_id", nodeID, "instance", instance, "host", h.host,
-		"role", role, "stack", nodeidentity.Stack, "contract_version", ContractVersion)
+	families = append(families, Family{Name: "cqrs_node_info", Type: "gauge",
+		Help: "Node identity (node-identity contract); always 1.",
+		Samples: []Sample{s(1, Label{"node_id", nodeID}, Label{"instance", instance}, Label{"host", h.host},
+			Label{"role", role}, Label{"stack", nodeidentity.Stack}, Label{"contract_version", ContractVersion})}})
 
-	family(&b, "cqrs_readiness_status", "gauge", "Current /readyz status, one-hot.")
-	for _, s := range readinessStatuses {
-		sample(&b, "cqrs_readiness_status", oneHot(s == readyz.Status), "status", s)
+	ready := Family{Name: "cqrs_readiness_status", Type: "gauge", Help: "Current /readyz status, one-hot."}
+	for _, status := range readinessStatuses {
+		ready.Samples = append(ready.Samples, s(oneHot(status == readyz.Status), Label{"status", status}))
 	}
+	families = append(families, ready)
 
 	m.mu.Lock()
 	commands := map[string]histogram{}
@@ -131,67 +172,95 @@ func (m *Metrics) Render(ctx context.Context, h *Health) string {
 	}
 	m.mu.Unlock()
 
-	family(&b, "cqrs_commands_total", "counter", "Commands decided on this node, by outcome.")
+	total := Family{Name: "cqrs_commands_total", Type: "counter", Help: "Commands decided on this node, by outcome."}
+	duration := Family{Name: "cqrs_command_duration_seconds", Type: "histogram",
+		Help: "Command receipt to response, on the node that decides."}
 	for _, o := range Outcomes {
-		sample(&b, "cqrs_commands_total", float64(commands[o].count), "status", o)
+		total.Samples = append(total.Samples, s(float64(commands[o].count), Label{"status", o}))
+		duration.Histograms = append(duration.Histograms, HistogramSample{Labels: []Label{{"status", o}},
+			Buckets: commands[o].buckets, Count: commands[o].count, Sum: commands[o].sum})
 	}
-	family(&b, "cqrs_command_duration_seconds", "histogram", "Command receipt to response, on the node that decides.")
-	for _, o := range Outcomes {
-		hist := commands[o]
-		for i, le := range DurationBuckets {
-			sample(&b, "cqrs_command_duration_seconds_bucket", float64(hist.buckets[i]), "status", o, "le", number(le))
-		}
-		sample(&b, "cqrs_command_duration_seconds_bucket", float64(hist.count), "status", o, "le", "+Inf")
-		sample(&b, "cqrs_command_duration_seconds_sum", hist.sum, "status", o)
-		sample(&b, "cqrs_command_duration_seconds_count", float64(hist.count), "status", o)
-	}
+	families = append(families, total, duration)
 
-	family(&b, "cqrs_events_appended_total", "counter", "Events appended by this node.")
-	sample(&b, "cqrs_events_appended_total", float64(m.eventsAppended.Load()))
+	families = append(families,
+		Family{Name: "cqrs_events_appended_total", Type: "counter", Help: "Events appended by this node.",
+			Samples: []Sample{s(float64(m.eventsAppended.Load()))}},
+		Family{Name: "cqrs_write_lag_seconds", Type: "gauge",
+			Help:    "Age of the writer heartbeat this node sees; 0 on a writer.",
+			Samples: []Sample{s(readyz.Checks.WriteLagSeconds)}})
 
-	family(&b, "cqrs_write_lag_seconds", "gauge", "Age of the writer heartbeat this node sees; 0 on a writer.")
-	sample(&b, "cqrs_write_lag_seconds", readyz.Checks.WriteLagSeconds)
-
-	family(&b, "cqrs_projection_lag_seconds", "gauge", "Age of the oldest event each read model has not applied.")
+	projection := Family{Name: "cqrs_projection_lag_seconds", Type: "gauge",
+		Help: "Age of the oldest event each read model has not applied."}
+	lag := Family{Name: "cqrs_consumer_lag", Type: "gauge", Help: "Positions each consumer is behind the log head."}
+	state := Family{Name: "cqrs_consumer_state", Type: "gauge", Help: "Each consumer's state, one-hot."}
 	for _, c := range consumers {
 		if c.ReadModel {
-			sample(&b, "cqrs_projection_lag_seconds", orNaN(c.LagSeconds), "read_model", c.Name)
+			projection.Samples = append(projection.Samples, s(orNaN(c.LagSeconds), Label{"read_model", c.Name}))
 		}
 	}
-	family(&b, "cqrs_consumer_lag", "gauge", "Positions each consumer is behind the log head.")
 	for _, c := range consumers {
-		lag := math.NaN()
+		l := math.NaN()
 		if c.LagPositions != nil {
-			lag = float64(*c.LagPositions)
+			l = float64(*c.LagPositions)
 		}
-		sample(&b, "cqrs_consumer_lag", lag, "consumer", c.Name)
+		lag.Samples = append(lag.Samples, s(l, Label{"consumer", c.Name}))
 	}
-	family(&b, "cqrs_consumer_state", "gauge", "Each consumer's state, one-hot.")
 	for _, c := range consumers {
-		for _, s := range consumerStates {
-			sample(&b, "cqrs_consumer_state", oneHot(s == c.State.String()), "consumer", c.Name, "state", s)
+		for _, st := range consumerStates {
+			state.Samples = append(state.Samples, s(oneHot(st == c.State.String()), Label{"consumer", c.Name}, Label{"state", st}))
 		}
 	}
+	families = append(families, projection, lag, state)
 
-	family(&b, "cqrs_dependency_up", "gauge", "Each required dependency: 1 up, 0 down.")
+	dependency := Family{Name: "cqrs_dependency_up", Type: "gauge", Help: "Each required dependency: 1 up, 0 down."}
 	names := make([]string, 0, len(readyz.Checks.Dependencies))
 	for name := range readyz.Checks.Dependencies {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		sample(&b, "cqrs_dependency_up", oneHot(readyz.Checks.Dependencies[name] == "up"), "dependency", name)
+		dependency.Samples = append(dependency.Samples, s(oneHot(readyz.Checks.Dependencies[name] == "up"), Label{"dependency", name}))
 	}
+	families = append(families, dependency)
 
-	family(&b, "cqrs_deadletter_depth", "gauge", "Unresolved dead letters.")
 	depth := math.NaN()
 	if f := m.deadLetters.Load(); f != nil {
 		if n, err := (*f)(ctx); err == nil {
 			depth = float64(n)
 		}
 	}
-	sample(&b, "cqrs_deadletter_depth", depth)
+	families = append(families, Family{Name: "cqrs_deadletter_depth", Type: "gauge", Help: "Unresolved dead letters.",
+		Samples: []Sample{s(depth)}})
+	return Snapshot{Families: families}
+}
+
+// RenderSnapshot is the Prometheus text exposition of a snapshot.
+func RenderSnapshot(snap Snapshot) string {
+	var b strings.Builder
+	for _, f := range snap.Families {
+		family(&b, f.Name, f.Type, f.Help)
+		for _, smp := range f.Samples {
+			sample(&b, f.Name, smp.Value, flatten(smp.Labels)...)
+		}
+		for _, h := range f.Histograms {
+			base := flatten(h.Labels)
+			for i, le := range DurationBuckets {
+				sample(&b, f.Name+"_bucket", float64(h.Buckets[i]), append(append([]string(nil), base...), "le", Number(le))...)
+			}
+			sample(&b, f.Name+"_bucket", float64(h.Count), append(append([]string(nil), base...), "le", "+Inf")...)
+			sample(&b, f.Name+"_sum", h.Sum, base...)
+			sample(&b, f.Name+"_count", float64(h.Count), base...)
+		}
+	}
 	return b.String()
+}
+
+func flatten(labels []Label) []string {
+	out := make([]string, 0, 2*len(labels))
+	for _, l := range labels {
+		out = append(out, l.Name, l.Value)
+	}
+	return out
 }
 
 func family(b *strings.Builder, name, kind, help string) {
@@ -215,11 +284,12 @@ func sample(b *strings.Builder, name string, value float64, labels ...string) {
 		b.WriteByte('}')
 	}
 	b.WriteByte(' ')
-	b.WriteString(number(value))
+	b.WriteString(Number(value))
 	b.WriteByte('\n')
 }
 
-func number(v float64) string {
+// Number is a number as Prometheus text and the push's bucket keys write it.
+func Number(v float64) string {
 	switch {
 	case math.IsNaN(v):
 		return "NaN"
