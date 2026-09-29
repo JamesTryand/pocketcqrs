@@ -293,15 +293,16 @@ func main() {
 		"this node's workload name as identity reports it (default $"+nodeidentity.EnvInstance+
 			"; when unset, the application name from Settings)",
 	)
-	// The ops port (the health/telemetry contract): /healthz on a port of its
-	// own, bound by `serve` before anything else. The env var always works;
-	// the flag is this binary's own convention for the same setting.
+	// The ops port (the health/telemetry contract): /healthz and /readyz on a
+	// port of their own, bound by `serve` before anything else. The env var
+	// always works; the flag is this binary's own convention for the same
+	// setting.
 	var opsPort string
 	app.RootCmd.PersistentFlags().StringVar(
 		&opsPort,
 		"cqrsOpsPort",
 		os.Getenv(opsport.EnvPort),
-		"the ops port for /healthz (default $"+opsport.EnvPort+", else "+strconv.Itoa(opsport.DefaultPort)+
+		"the ops port for /healthz and /readyz (default $"+opsport.EnvPort+", else "+strconv.Itoa(opsport.DefaultPort)+
 			"); several nodes on one machine must each set their own",
 	)
 	var opsBind string
@@ -311,6 +312,23 @@ func main() {
 		os.Getenv(opsport.EnvBind),
 		"the address the ops port binds (default $"+opsport.EnvBind+", else every interface, so an "+
 			"orchestrator can reach it); 127.0.0.1 keeps it local",
+	)
+	// Readiness thresholds (the contract leaves their values to each stack).
+	var lagThreshold time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&lagThreshold,
+		"cqrsLagThreshold",
+		consumers.DefaultLagThreshold,
+		"how old the oldest event a read model has not yet applied may be before /readyz reports "+
+			"it behind (projection_behind)",
+	)
+	var catchUpDeadline time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&catchUpDeadline,
+		"cqrsCatchUpDeadline",
+		opsport.DefaultCatchUpDeadline,
+		"how long the initial catch-up may take before a master serves anyway, reporting what is "+
+			"still behind as degraded; a secondary keeps catching up (/readyz stays not_ready)",
 	)
 	var vfs string
 	app.RootCmd.PersistentFlags().StringVar(
@@ -701,6 +719,7 @@ func main() {
 		} else {
 			c.Engine = consumers.NewEngine(store, engineLogger)
 		}
+		c.Engine.LagThreshold = lagThreshold
 
 		// command batching (item 4): on by default, and never on a
 		// secondary -- it has no writable store to enqueue into or commit
@@ -993,7 +1012,20 @@ func main() {
 					func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
 			})
 		}
-		return e.Next()
+		// PocketBase binds the traffic port at the end of this hook chain, so
+		// once Next returns the node is listening and its consumers run:
+		// boot is complete (machine 1's BootCompleted), and /readyz moves
+		// from starting to catching_up, opening when every read model is
+		// within --cqrsLagThreshold (or --cqrsCatchUpDeadline passes).
+		if err := e.Next(); err != nil {
+			return err
+		}
+		if c.health != nil {
+			if err := c.health.BeginCatchUp(c.Engine.Status, catchUpDeadline, log.Printf); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 
 	// Termination: PocketBase's own graceful-shutdown handler (priority

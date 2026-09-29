@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-// The health/telemetry contract's ops port, sections 2 and 3: `serve` binds
-// it before anything else, /healthz there reports the node's identity, and
-// /healthz is never on the traffic port.
+// The health/telemetry contract's ops port, sections 2-4: `serve` binds it
+// before anything else, /healthz there reports the node's identity, /healthz
+// is never on the traffic port, and /readyz opens once the node has booted
+// and caught up.
 func TestOpsPortServesHealthzWithTheNodesIdentity(t *testing.T) {
 	t.Setenv("CQRS_NODE_ID", "")
 	dir := t.TempDir()
@@ -73,5 +75,29 @@ func TestOpsPortServesHealthzWithTheNodesIdentity(t *testing.T) {
 	traffic.Body.Close()
 	if traffic.StatusCode == http.StatusOK {
 		t.Errorf("/healthz answered on the traffic port; it belongs on the ops port only")
+	}
+
+	// Section 4: the traffic port answers, so boot has completed; with
+	// nothing to catch up on, /readyz opens promptly (it re-checks every
+	// 250ms), with no reasons.
+	var ready map[string]any
+	code := 0
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+		resp, err := http.Get("http://127.0.0.1:" + opsPort + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, ready = resp.StatusCode, nil
+		_ = json.NewDecoder(resp.Body).Decode(&ready)
+		resp.Body.Close()
+		if code == http.StatusOK {
+			break
+		}
+	}
+	if code != http.StatusOK || ready["status"] != "ready" || ready["node_id"] != want["node_id"] {
+		t.Fatalf("/readyz = %d %v, want 200 ready", code, ready)
+	}
+	if reasons, _ := ready["reasons"].([]any); reasons == nil || len(reasons) != 0 {
+		t.Errorf("/readyz reasons = %v, want []", ready["reasons"])
 	}
 }

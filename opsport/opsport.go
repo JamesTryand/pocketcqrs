@@ -1,7 +1,7 @@
 // Package opsport is the ops port of the cross-stack health/telemetry
 // contract (platform/cqrs-runtime-contract/contracts/health-telemetry.md,
-// 1.0, sections 2 and 3), identical to dotnetcqrs's OpsServer: /healthz, and
-// later /readyz and /metrics, on a port of their own, never the traffic port.
+// 1.0, sections 2-4), identical to dotnetcqrs's OpsServer: /healthz and
+// /readyz, and later /metrics, on a port of their own, never the traffic port.
 //
 // It binds first, before configuration is validated or PocketBase
 // bootstraps, so a booting node answers instead of refusing connections.
@@ -10,6 +10,12 @@
 // one machine must each set it: a node that cannot bind its ops port does
 // not start. The endpoints are unauthenticated; the network path is the
 // security boundary, so the ops port must never be an ingress target.
+//
+// /readyz follows the lifecycle: starting while booting; BeginCatchUp once the
+// traffic port listens and the consumers run; serving once every read model is
+// within threshold, or, on a writer, once the catch-up deadline passes. The
+// reporting tables in STATE-MACHINES.md are the spec for every status and
+// reason.
 package opsport
 
 import (
@@ -19,9 +25,12 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/jamestryand/pocketcqrs/consumers"
 	"github.com/jamestryand/pocketcqrs/nodeidentity"
 )
 
@@ -39,6 +48,14 @@ const (
 
 	// ContractVersion is the health/telemetry contract version implemented.
 	ContractVersion = "1.0"
+
+	// DefaultCatchUpDeadline is --cqrsCatchUpDeadline's default.
+	DefaultCatchUpDeadline = 60 * time.Second
+
+	// catchUpCheckInterval is how often a catching-up node re-checks its
+	// read models, so it opens readiness (and logs a passed deadline) without
+	// waiting for a probe to ask.
+	catchUpCheckInterval = 250 * time.Millisecond
 )
 
 // Lifecycle is where the node is in its life, as the contract names it
@@ -58,6 +75,19 @@ const (
 	Draining
 )
 
+func (l Lifecycle) String() string {
+	switch l {
+	case Booting:
+		return "booting"
+	case CatchingUp:
+		return "catching up"
+	case Serving:
+		return "serving"
+	default:
+		return "draining"
+	}
+}
+
 // Health is what the node reports on its ops port. host, stack and
 // started_at are known at process start; the identity is nil until
 // SetIdentity. Safe for concurrent use: the ops server reads it while boot
@@ -67,11 +97,24 @@ type Health struct {
 	startedAt time.Time
 	identity  atomic.Pointer[nodeidentity.Identity]
 	lifecycle atomic.Int32
+
+	// now is the clock the catch-up deadline is measured against (tests
+	// replace it).
+	now func() time.Time
+
+	// mu guards the catch-up state below and serialises lifecycle moves out
+	// of CatchingUp.
+	mu              sync.Mutex
+	consumers       func() []consumers.Status
+	catchUpDeadline time.Time
+	deadlineLogged  bool
+	logf            func(string, ...any)
+	stopCatchUp     chan struct{}
 }
 
 // New starts in Booting with no identity.
 func New(host string, startedAt time.Time) *Health {
-	return &Health{host: host, startedAt: startedAt.UTC()}
+	return &Health{host: host, startedAt: startedAt.UTC(), now: time.Now, logf: func(string, ...any) {}}
 }
 
 // SetIdentity records the resolved identity; /healthz reports it from then on.
@@ -85,6 +128,219 @@ func (h *Health) SetLifecycle(l Lifecycle) { h.lifecycle.Store(int32(l)) }
 
 // Lifecycle is where the node is in its life.
 func (h *Health) Lifecycle() Lifecycle { return Lifecycle(h.lifecycle.Load()) }
+
+// BeginCatchUp is boot completing (machine 1, BootCompleted): the traffic
+// port listens and the consumers have started, so the node moves to catching
+// up. status is the consumer engine's Status; only read models count. The
+// node starts serving when every read model is current; if it is a writer and
+// catchUpDeadline passes first, it starts serving anyway and reports what is
+// still behind as degraded. A reader keeps catching up. logf (may be nil)
+// hears when readiness opens and when the deadline passes. An error means
+// boot had already completed.
+func (h *Health) BeginCatchUp(status func() []consumers.Status, catchUpDeadline time.Duration, logf func(string, ...any)) error {
+	h.mu.Lock()
+	if l := h.Lifecycle(); l != Booting {
+		h.mu.Unlock()
+		return fmt.Errorf("boot already completed: the node is %s", l)
+	}
+	h.consumers = status
+	h.catchUpDeadline = h.now().Add(catchUpDeadline)
+	if logf != nil {
+		h.logf = logf
+	}
+	h.stopCatchUp = make(chan struct{})
+	h.SetLifecycle(CatchingUp)
+	stop := h.stopCatchUp
+	h.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(catchUpCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				h.Refresh()
+			}
+		}
+	}()
+	h.Refresh()
+	return nil
+}
+
+// Refresh, while catching up, moves to serving if every read model is
+// current or, on a writer, the catch-up deadline has passed (machine 1's
+// InitialCatchUpCompleted and CatchUpDeadlineReached). It runs on a ticker
+// and before every /readyz; in any other state it does nothing.
+func (h *Health) Refresh() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.Lifecycle() != CatchingUp || h.consumers == nil {
+		return
+	}
+	var notCurrent []consumers.Status
+	for _, s := range h.consumers() {
+		if s.ReadModel && s.State != consumers.Current {
+			notCurrent = append(notCurrent, s)
+		}
+	}
+	if len(notCurrent) == 0 {
+		h.openReadiness("readiness opened: every read model is within its lag threshold")
+		return
+	}
+	if h.now().Before(h.catchUpDeadline) {
+		return
+	}
+	id := h.identity.Load()
+	isWriter := id != nil && id.Role == "writer"
+	if !h.deadlineLogged {
+		h.deadlineLogged = true
+		still := make([]string, len(notCurrent))
+		for i, s := range notCurrent {
+			still[i] = fmt.Sprintf("%s (%s)", s.Name, s.State)
+		}
+		if isWriter {
+			h.logf("catch-up deadline reached; serving anyway as the writer, still catching up: %s", strings.Join(still, ", "))
+		} else {
+			h.logf("catch-up deadline reached; a reader keeps catching up before it serves: %s", strings.Join(still, ", "))
+		}
+	}
+	if isWriter {
+		h.openReadiness("")
+	}
+}
+
+// openReadiness moves to Serving; h.mu is held.
+func (h *Health) openReadiness(message string) {
+	h.SetLifecycle(Serving)
+	if h.stopCatchUp != nil {
+		close(h.stopCatchUp)
+		h.stopCatchUp = nil
+	}
+	if message != "" {
+		h.logf("%s", message)
+	}
+}
+
+// readiness is a /readyz status, in order of severity, so the most severe
+// contribution is the maximum.
+type readiness int
+
+const (
+	ready readiness = iota
+	degraded
+	notReady
+)
+
+func (r readiness) String() string {
+	switch r {
+	case ready:
+		return "ready"
+	case degraded:
+		return "degraded"
+	default:
+		return "not_ready"
+	}
+}
+
+// ReadyzBody is the GET /readyz body (contract section 4), fields in the
+// contract's order. role and node_id are null while booting.
+type ReadyzBody struct {
+	Status          string       `json:"status"`
+	Role            *string      `json:"role"`
+	NodeID          *string      `json:"node_id"`
+	ContractVersion string       `json:"contract_version"`
+	Reasons         []string     `json:"reasons"`
+	Checks          ReadyzChecks `json:"checks"`
+}
+
+// ReadyzChecks is /readyz's checks object.
+type ReadyzChecks struct {
+	// WriteLagSeconds is 0 on a writer; a reader's heartbeat age is step 5
+	// of the implementation plan.
+	WriteLagSeconds      float64           `json:"write_lag_seconds"`
+	ProjectionLagSeconds float64           `json:"projection_lag_seconds"`
+	Dependencies         map[string]string `json:"dependencies"`
+}
+
+// Readyz is the current /readyz status code and body: 200 when ready or
+// degraded, 503 when not_ready. The status is the most severe contribution of
+// the lifecycle and the read models (STATE-MACHINES.md, "Readiness:"
+// tables); reasons lists every non-ready one. Dependencies, replication, mode
+// and functions are not reported yet (steps 4-5 of the implementation plan).
+func (h *Health) Readyz() (int, ReadyzBody) {
+	h.Refresh()
+	id := h.identity.Load()
+	type contribution struct {
+		status readiness
+		reason string
+	}
+	var contributions []contribution
+
+	switch h.Lifecycle() {
+	case Booting:
+		contributions = append(contributions, contribution{notReady, "starting"})
+	case CatchingUp:
+		contributions = append(contributions, contribution{notReady, "catching_up"})
+	case Draining:
+		contributions = append(contributions, contribution{notReady, "draining"})
+	}
+
+	// read_models: the worst state across the node's read models. Behind or
+	// blocked is local to this node, so not_ready on a reader; on the sole
+	// writer it is degraded, so that a stuck projection never removes the
+	// only write authority from the pool.
+	h.mu.Lock()
+	status := h.consumers
+	h.mu.Unlock()
+	worst, lag := consumers.Current, 0.0
+	if status != nil {
+		for _, s := range status() {
+			if !s.ReadModel {
+				continue
+			}
+			worst = max(worst, s.State)
+			if s.LagSeconds != nil {
+				lag = max(lag, *s.LagSeconds)
+			}
+		}
+	}
+	if worst != consumers.Current {
+		severity := notReady
+		if id != nil && id.Role == "writer" {
+			severity = degraded
+		}
+		reason := "projection_behind"
+		if worst == consumers.Blocked {
+			reason = "projection_blocked"
+		}
+		contributions = append(contributions, contribution{severity, reason})
+	}
+
+	overall, reasons := ready, []string{}
+	for _, c := range contributions {
+		overall = max(overall, c.status)
+		reasons = append(reasons, c.reason)
+	}
+	body := ReadyzBody{
+		Status:          overall.String(),
+		ContractVersion: ContractVersion,
+		Reasons:         reasons,
+		Checks: ReadyzChecks{
+			ProjectionLagSeconds: float64(int64(lag*1000+0.5)) / 1000,
+			Dependencies:         map[string]string{},
+		},
+	}
+	if id != nil {
+		role, nodeID := id.Role, id.NodeID
+		body.Role, body.NodeID = &role, &nodeID
+	}
+	if overall == notReady {
+		return http.StatusServiceUnavailable, body
+	}
+	return http.StatusOK, body
+}
 
 // HealthzBody is the GET /healthz body (contract section 3), fields in the
 // contract's order. node_id, identity, instance and role are null while
@@ -149,6 +405,12 @@ func Start(h *Health, bind string, port int) (*Server, error) {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(h.Healthz())
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		code, body := h.Readyz()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(body)
 	})
 	s := &Server{listener: listener, server: &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}}
 	// Serve returns only when the server is shut down or the listener fails;

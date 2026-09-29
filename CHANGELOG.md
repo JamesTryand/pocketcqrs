@@ -13,7 +13,15 @@ All notable changes to PocketCQRS. Format loosely follows
   anything else and answers `/healthz` there: `status`, `contract_version`
   and the node-identity fields, `null` while booting. An invalid or taken port stops the node from
   starting. New package `opsport`; `nodeidentity.Hostname` exposes the `unknown` fallback. See
-  `docs/reference/cli.md`, "Ops port". `/readyz` and `/metrics` follow.
+  `docs/reference/cli.md`, "Ops port". `/metrics` follows.
+- **`GET /readyz`** (health/telemetry contract section 4, lifecycle and read models; identical
+  to dotnetcqrs): `503` `starting` while booting, `503` `catching_up` until every projection is
+  within `--cqrsLagThreshold` (default `5s`), then `200` `ready`. Projections behind or blocked
+  report `projection_behind` / `projection_blocked`, `degraded` on a master and `not_ready` on a
+  secondary; a master past `--cqrsCatchUpDeadline` (default `60s`) serves anyway.
+  `consumers.Engine.Status` reports each consumer as current / behind / blocked with its lag in
+  positions and seconds; `consumers.ReadModel` / `IsReadModel` say which consumers count (any
+  that own collections, i.e. every projection).
 
 ## v0.12.0 — node identity, cached auth-verify for the read-only ops routes
 

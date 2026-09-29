@@ -105,11 +105,22 @@ ever replicated — so a secondary never inherits the master's id.
 |---|---|---|
 | `--cqrsOpsPort` / `CQRS_OPS_PORT` | `10056` (provisional) | the ops port (the flag defaults to the env var). A value outside 0-65535, or a port already taken, stops the node from starting. |
 | `--cqrsOpsBind` / `CQRS_OPS_BIND` | every interface | the address it binds. A real node needs every interface so an orchestrator can reach it; `127.0.0.1` keeps it local (tests use this, which also avoids a Windows firewall prompt per test binary). |
+| `--cqrsLagThreshold` | `5s` | how old the oldest event a read model (a Go or JS projection) has not yet applied may be before `/readyz` counts it behind. |
+| `--cqrsCatchUpDeadline` | `60s` | how long the initial catch-up may take before a master serves anyway. |
 
 - `GET /healthz` there answers `200` whenever the process can answer at all, with `status`,
   `contract_version`, `node_id`, `identity`, `instance`, `host`, `stack`, `role` and `started_at`.
   The identity fields are `null` while the node boots, then match "Node identity" above.
-  `/readyz` and `/metrics` follow on the same port.
+- `GET /readyz` there says whether to route traffic to this node: `200` for `ready` or
+  `degraded`, `503` for `not_ready`, with `status`, `role`, `node_id`, `contract_version`,
+  `reasons` and `checks` (`write_lag_seconds`, `projection_lag_seconds`, `dependencies`). It is
+  `not_ready` with reason `starting` while booting, then `catching_up` once the traffic port
+  listens, until every projection is within `--cqrsLagThreshold`; then `ready`, with `reasons`
+  empty. A projection that later falls behind or blocks reports `projection_behind` /
+  `projection_blocked`: `degraded` on the master (so the only writer never leaves the pool),
+  `not_ready` on a secondary. For the same reason a master still catching up after
+  `--cqrsCatchUpDeadline` serves anyway; a secondary keeps catching up. Reactors and effect
+  functions never affect readiness. `/metrics` follows on the same port.
 - It is **not** the traffic port (`--http`), and never belongs behind an ingress: it is
   unauthenticated, so the network path is the security boundary.
 - Several nodes on one machine must each set their own ops port; only one can bind the default.
