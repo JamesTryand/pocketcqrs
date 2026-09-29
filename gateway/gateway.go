@@ -12,6 +12,8 @@ import (
 
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/hook"
+	"github.com/pocketbase/pocketbase/tools/router"
 
 	"github.com/jamestryand/pocketcqrs/batching"
 	"github.com/jamestryand/pocketcqrs/decider"
@@ -54,6 +56,12 @@ type Config struct {
 	// request carries the caller's original Authorization header; the
 	// destination's own gateway is what actually authenticates it.
 	Forward http.Handler
+	// Metrics, when set, counts and times every command this node decides,
+	// by the HTTP status it answered (health/telemetry contract section 7;
+	// opsport.Metrics satisfies it). It wraps the auth check too, so a 401
+	// counts as rejected. Not bound when Forward is set: a forwarded command
+	// is counted by the master that decides it. Nil records nothing.
+	Metrics CommandRecorder
 	// Batching, when set, routes commands through the durable intake queue
 	// + batching event writer (item 4) instead of deciding inline: the
 	// handler enqueues the command then blocks until its own command's
@@ -335,6 +343,42 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 	if !cfg.AllowAnonymous && cfg.Forward == nil {
 		route.Bind(apis.RequireAuth())
 	}
+	if cfg.Metrics != nil && cfg.Forward == nil {
+		route.Bind(&hook.Handler[*core.RequestEvent]{
+			Id: "cqrsCommandMetrics",
+			// before RequireAuth (priority 0), so it times and counts a 401 too
+			Priority: -1,
+			Func: func(re *core.RequestEvent) error {
+				started := time.Now()
+				err := re.Next()
+				cfg.Metrics.RecordCommand(responseStatus(re, err), time.Since(started))
+				return err
+			},
+		})
+	}
+}
+
+// CommandRecorder receives each decided command's HTTP status and duration,
+// from receipt to response.
+type CommandRecorder interface {
+	RecordCommand(httpStatus int, d time.Duration)
+}
+
+// responseStatus is the status a handler answered: the one it wrote, or, when
+// it returned an error for PocketBase to render, that error's (500 for an
+// error that carries none).
+func responseStatus(re *core.RequestEvent, err error) int {
+	if err != nil {
+		var apiErr *router.ApiError
+		if errors.As(err, &apiErr) {
+			return apiErr.Status
+		}
+		return http.StatusInternalServerError
+	}
+	if status := re.Status(); status != 0 {
+		return status
+	}
+	return http.StatusOK
 }
 
 // errBatchTimeout is handleViaBatching's sentinel for "the batch never

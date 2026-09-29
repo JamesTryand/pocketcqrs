@@ -4,6 +4,7 @@ package smoke
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -99,5 +100,23 @@ func TestOpsPortServesHealthzWithTheNodesIdentity(t *testing.T) {
 	}
 	if reasons, _ := ready["reasons"].([]any); reasons == nil || len(reasons) != 0 {
 		t.Errorf("/readyz reasons = %v, want []", ready["reasons"])
+	}
+
+	// Section 6: /metrics there, in the Prometheus text format, with the
+	// node's identity and readiness and every outcome counter at zero.
+	mresp, err := http.Get("http://127.0.0.1:" + opsPort + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics, _ := io.ReadAll(mresp.Body)
+	mresp.Body.Close()
+	for _, line := range []string{
+		`cqrs_readiness_status{status="ready"} 1`,
+		`cqrs_commands_total{status="accepted"} 0`,
+		`node_id="` + want["node_id"].(string) + `"`,
+	} {
+		if !strings.Contains(string(metrics), line) {
+			t.Errorf("/metrics lacks %s:\n%s", line, metrics)
+		}
 	}
 }

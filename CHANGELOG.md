@@ -22,6 +22,10 @@ All notable changes to PocketCQRS. Format loosely follows
   `consumers.Engine.Status` reports each consumer as current / behind / blocked with its lag in
   positions and seconds; `consumers.ReadModel` / `IsReadModel` say which consumers count (any
   that own collections, i.e. every projection).
+- **`GET /metrics`** (contract sections 6-7; identical to dotnetcqrs): every `cqrs_` series in
+  the Prometheus text format from the first scrape, outcome counters zero-initialised, the fixed
+  duration buckets. `gateway.Config.Metrics` (a `CommandRecorder`, nil records nothing) counts
+  each command by the status it answered, 401s included; `opsport.Metrics` renders the series.
 
 ## v0.12.0 — node identity, cached auth-verify for the read-only ops routes
 

@@ -662,6 +662,18 @@ func main() {
 			return err
 		}
 		c.Store = store
+		if c.health != nil {
+			// /metrics: every event this node appends counts toward
+			// cqrs_events_appended_total (a secondary appends none), and the
+			// dead-letter depth is read on each scrape (reads only)
+			metrics := c.health.Metrics()
+			store.Subscribe(func(events.Event) { metrics.EventAppended() })
+			metrics.SetDeadLetterDepth(func(ctx context.Context) (int64, error) {
+				open, err := store.DeadLetters(ctx, false)
+				return int64(len(open)), err
+			})
+			gatewayCfg.Metrics = metrics
+		}
 
 		// idempotency records for the command gateway: a separate small
 		// SQLite file, deliberately off events.db's hot append path.

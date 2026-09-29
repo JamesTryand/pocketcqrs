@@ -1,7 +1,7 @@
 // Package opsport is the ops port of the cross-stack health/telemetry
 // contract (platform/cqrs-runtime-contract/contracts/health-telemetry.md,
-// 1.0, sections 2-4), identical to dotnetcqrs's OpsServer: /healthz and
-// /readyz, and later /metrics, on a port of their own, never the traffic port.
+// 1.0, sections 2-7), identical to dotnetcqrs's OpsServer: /healthz, /readyz
+// and /metrics, on a port of their own, never the traffic port.
 //
 // It binds first, before configuration is validated or PocketBase
 // bootstraps, so a booting node answers instead of refusing connections.
@@ -110,11 +110,29 @@ type Health struct {
 	deadlineLogged  bool
 	logf            func(string, ...any)
 	stopCatchUp     chan struct{}
+
+	metrics *Metrics
 }
 
 // New starts in Booting with no identity.
 func New(host string, startedAt time.Time) *Health {
-	return &Health{host: host, startedAt: startedAt.UTC(), now: time.Now, logf: func(string, ...any) {}}
+	return &Health{host: host, startedAt: startedAt.UTC(), now: time.Now, logf: func(string, ...any) {}, metrics: newMetrics()}
+}
+
+// Metrics is the /metrics series (contract section 6); they exist from
+// process start.
+func (h *Health) Metrics() *Metrics { return h.metrics }
+
+// Consumers is the consumer engine's status once boot has completed; empty
+// while booting.
+func (h *Health) Consumers() []consumers.Status {
+	h.mu.Lock()
+	status := h.consumers
+	h.mu.Unlock()
+	if status == nil {
+		return nil
+	}
+	return status()
 }
 
 // SetIdentity records the resolved identity; /healthz reports it from then on.
@@ -405,6 +423,11 @@ func Start(h *Health, bind string, port int) (*Server, error) {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(h.Healthz())
+	})
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		body := h.metrics.Render(r.Context(), h)
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		_, _ = w.Write([]byte(body))
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
 		code, body := h.Readyz()

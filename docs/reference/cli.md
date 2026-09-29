@@ -120,7 +120,12 @@ ever replicated — so a secondary never inherits the master's id.
   `projection_blocked`: `degraded` on the master (so the only writer never leaves the pool),
   `not_ready` on a secondary. For the same reason a master still catching up after
   `--cqrsCatchUpDeadline` serves anyway; a secondary keeps catching up. Reactors and effect
-  functions never affect readiness. `/metrics` follows on the same port.
+  functions never affect readiness.
+- `GET /metrics` there serves the contract's `cqrs_` series in the Prometheus text format, every
+  one present from the first scrape: identity, readiness, commands by outcome (`accepted`,
+  `rejected`, `conflict`, `unavailable`, `error`) with a duration histogram, events appended,
+  each consumer's lag and state, and the dead-letter depth. A secondary counts no commands (it
+  forwards them) and appends no events.
 - It is **not** the traffic port (`--http`), and never belongs behind an ingress: it is
   unauthenticated, so the network path is the security boundary.
 - Several nodes on one machine must each set their own ops port; only one can bind the default.
