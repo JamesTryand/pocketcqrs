@@ -153,12 +153,64 @@ func TestANodeWithNoReadModelsServesAsSoonAsBootCompletes(t *testing.T) {
 }
 
 func TestDrainingIsNotReadyDraining(t *testing.T) {
+	for _, role := range []string{"writer", "reader"} {
+		t.Run(role, func(t *testing.T) {
+			n := newNode(t, role)
+			n.beginCatchUp()
+			if n.health.Lifecycle() != Serving {
+				t.Fatalf("lifecycle %s before draining", n.health.Lifecycle())
+			}
+
+			n.health.BeginDraining(nil)
+
+			if n.health.Lifecycle() != Draining {
+				t.Errorf("lifecycle %s, want draining", n.health.Lifecycle())
+			}
+			expect(t, n.readyz(), "503 not_ready [draining]")
+			if n.logged("draining") != 1 {
+				t.Errorf("log %v, want one draining line", n.log)
+			}
+		})
+	}
+}
+
+func TestANodeDrainingWhileCatchingUpNeverOpensReadiness(t *testing.T) {
+	n := newNode(t, "writer")
+	n.set("orders", consumers.Behind, true, 30)
+	n.beginCatchUp()
+
+	n.health.BeginDraining(nil)
+	n.set("orders", consumers.Current, true, 0)
+	n.at(10 * time.Minute) // past the catch-up deadline too
+
+	if n.health.Lifecycle() != Draining {
+		t.Errorf("lifecycle %s, want draining", n.health.Lifecycle())
+	}
+	expect(t, n.readyz(), "503 not_ready [draining]")
+}
+
+func TestDrainingIsIdempotentAndStaysDraining(t *testing.T) {
 	n := newNode(t, "writer")
 	n.beginCatchUp()
 
-	n.health.SetLifecycle(Draining)
+	n.health.BeginDraining(nil)
+	n.health.BeginDraining(nil)
 
+	if got := n.logged("draining"); got != 1 {
+		t.Errorf("logged %d draining lines, want 1", got)
+	}
 	expect(t, n.readyz(), "503 not_ready [draining]")
+}
+
+func TestANodeStillBootingHasNothingToDrain(t *testing.T) {
+	n := newNode(t, "writer")
+	var lines []string
+
+	n.health.BeginDraining(func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) })
+
+	if n.health.Lifecycle() != Booting || len(lines) != 0 {
+		t.Errorf("lifecycle %s, log %v; want booting and silent", n.health.Lifecycle(), lines)
+	}
 }
 
 // --- Readiness: read_models ---

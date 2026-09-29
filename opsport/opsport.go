@@ -212,6 +212,30 @@ func (h *Health) BeginCatchUp(status func() []consumers.Status, catchUpDeadline 
 	return nil
 }
 
+// BeginDraining is shutdown being requested (machine 1, ShutdownRequested):
+// /readyz closes (not_ready, draining) before anything else stops, so the
+// pool stops routing here while in-flight work finishes. Idempotent, and the
+// node stays draining until the process ends. A node still booting has no
+// traffic to drain and just exits, so this does nothing. logf (may be nil)
+// hears that draining began; nil uses the logger BeginCatchUp was given.
+func (h *Health) BeginDraining(logf func(string, ...any)) {
+	h.mu.Lock()
+	if l := h.Lifecycle(); l == Booting || l == Draining {
+		h.mu.Unlock()
+		return
+	}
+	h.SetLifecycle(Draining)
+	if h.stopCatchUp != nil {
+		close(h.stopCatchUp)
+		h.stopCatchUp = nil
+	}
+	if logf == nil {
+		logf = h.logf
+	}
+	h.mu.Unlock()
+	logf("draining: /readyz is not_ready; finishing in-flight work")
+}
+
 // Refresh, while catching up, moves to serving if every read model is
 // current or, on a writer, the catch-up deadline has passed (machine 1's
 // InitialCatchUpCompleted and CatchUpDeadlineReached). It runs on a ticker

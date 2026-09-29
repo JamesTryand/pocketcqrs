@@ -22,6 +22,11 @@ All notable changes to PocketCQRS. Format loosely follows
   `consumers.Engine.Status` reports each consumer as current / behind / blocked with its lag in
   positions and seconds; `consumers.ReadModel` / `IsReadModel` say which consumers count (any
   that own collections, i.e. every projection).
+- **Drain on shutdown** (health/telemetry contract 4.7; identical to dotnetcqrs). On `SIGTERM`/Ctrl+C
+  `/readyz` goes `not_ready` / `draining` first (`opsport.Health.BeginDraining`), the HTTP server
+  finishes in-flight requests (PocketBase's own handler would cut them off after 1s), then the
+  consumers finish the event in hand and stop. `--cqrsDrainDeadline` (default `5s`, replacing a fixed
+  constant) bounds all of it. See `docs/reference/cli.md`, "Draining".
 - **`GET /metrics`** (contract sections 6-7; identical to dotnetcqrs): every `cqrs_` series in
   the Prometheus text format from the first scrape, outcome counters zero-initialised, the fixed
   duration buckets. `gateway.Config.Metrics` (a `CommandRecorder`, nil records nothing) counts

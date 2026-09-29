@@ -14,10 +14,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/hook"
 
 	"github.com/jamestryand/pocketcqrs/adminapi"
 	"github.com/jamestryand/pocketcqrs/aggregates"
@@ -370,6 +372,14 @@ func main() {
 		opsport.DefaultCatchUpDeadline,
 		"how long the initial catch-up may take before a master serves anyway, reporting what is "+
 			"still behind as degraded; a secondary keeps catching up (/readyz stays not_ready)",
+	)
+	var drainDeadline time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&drainDeadline,
+		"cqrsDrainDeadline",
+		defaultDrainDeadline,
+		"how long a node may spend draining on shutdown (SIGTERM/Ctrl+C) for in-flight requests and the "+
+			"consumers' event in hand together; /readyz reports draining from the moment shutdown starts",
 	)
 	var vfs string
 	app.RootCmd.PersistentFlags().StringVar(
@@ -1015,7 +1025,9 @@ func main() {
 	})
 
 	bg := newBackground()
+	var httpServer atomic.Pointer[http.Server]
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		httpServer.Store(e.Server)
 		// Resolve identity before anything else the node serves. The data
 		// dir is node-local and never replicated (only events.db is), so a
 		// secondary never inherits the master's id. `instance` is
@@ -1137,16 +1149,50 @@ func main() {
 		return nil
 	})
 
-	// Termination: PocketBase's own graceful-shutdown handler (priority
-	// -9999) has already stopped the HTTP server when this runs. Tell the
-	// background loops to stop — each finishes its in-flight unit (an event
-	// delivery, a batch) and returns — wait for them, bounded, then close
-	// this binary's own stores. PocketBase closes its own DBs after this
-	// hook chain (ResetBootstrapState). Also runs after one-shot CLI
-	// commands, where there is nothing to wait for.
+	// Draining (health/telemetry contract 4.7), in two hooks around
+	// PocketBase's own graceful-shutdown handler (priority -9999), which
+	// cancels in-flight requests' context and gives the server only 1s.
+	//
+	// First, before it: /readyz closes (not_ready, draining), so the pool
+	// stops routing here, and the HTTP server stops accepting and waits for
+	// in-flight requests up to --cqrsDrainDeadline. PocketBase's handler then
+	// finds the server already shut down. drainStartedAt lets the second hook
+	// spend only what is left of the one deadline.
+	var drainStartedAt atomic.Int64
+	app.OnTerminate().Bind(&hook.Handler[*core.TerminateEvent]{
+		Id:       "cqrsDrain",
+		Priority: -10000,
+		Func: func(e *core.TerminateEvent) error {
+			drainStartedAt.Store(time.Now().UnixNano())
+			if c.health != nil {
+				c.health.BeginDraining(log.Printf)
+			}
+			if srv := httpServer.Load(); srv != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), drainDeadline)
+				defer cancel()
+				if err := srv.Shutdown(ctx); err != nil {
+					log.Printf("shutdown: in-flight requests still running after %s; cutting them off", drainDeadline)
+				}
+			}
+			return e.Next()
+		},
+	})
+
+	// Second, after it (the traffic port has drained): tell the background
+	// loops to stop — each finishes its in-flight unit (an event delivery,
+	// a batch), checkpoints it and returns — wait for them within what is
+	// left of the drain deadline, then close this binary's own stores.
+	// PocketBase closes its own DBs after this hook chain
+	// (ResetBootstrapState). Also runs after one-shot CLI commands, where
+	// there is nothing to drain and the whole deadline is available.
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
-		if !bg.Stop(shutdownDrainTimeout) {
-			log.Printf("shutdown: background loops still running after %s; closing stores anyway", shutdownDrainTimeout)
+		left := drainDeadline
+		if started := drainStartedAt.Load(); started != 0 {
+			left -= time.Since(time.Unix(0, started))
+		}
+		if !bg.Stop(max(left, 0)) {
+			log.Printf("shutdown: drain deadline of %s reached with background loops still running "+
+				"(an interrupted event is redone on restart); closing stores anyway", drainDeadline)
 		}
 		c.closeStores()
 		return e.Next()

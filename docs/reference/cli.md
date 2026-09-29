@@ -112,6 +112,7 @@ ever replicated — so a secondary never inherits the master's id.
 | `--cqrsStaleThreshold` | `5s` | how old a secondary's view of the heartbeat may be before `/readyz` reports `replication_stale`. |
 | `--cqrsDependencyCheckInterval` | `5s` | how often the required dependencies are checked. |
 | `--cqrsDependencyFailures` | `3` | consecutive failed checks before a required dependency counts as down. |
+| `--cqrsDrainDeadline` | `5s` | how long a node may spend draining on shutdown (in-flight requests, then the consumers' event in hand, together) before the stores are closed under whatever is left. Keep it inside your supervisor's stop grace period (Docker's is 10s). |
 
 - `GET /healthz` there answers `200` whenever the process can answer at all, with `status`,
   `contract_version`, `node_id`, `identity`, `instance`, `host`, `stack`, `role` and `started_at`.
@@ -126,6 +127,12 @@ ever replicated — so a secondary never inherits the master's id.
   `not_ready` on a secondary. For the same reason a master still catching up after
   `--cqrsCatchUpDeadline` serves anyway; a secondary keeps catching up. Reactors and effect
   functions never affect readiness.
+- **Draining.** On `SIGTERM`/Ctrl+C `/readyz` goes `503` `draining` first, so whatever routes to
+  this node stops; the HTTP server then finishes its in-flight requests; then each consumer finishes
+  the event it is applying, checkpoints it and stops (the next start resumes from the next event; it
+  does not catch up first). The ops port answers until the process exits. `--cqrsDrainDeadline`
+  bounds all of it: past it the node closes its stores anyway, logs that it did, and an interrupted
+  event is redone on restart.
 - **Replication freshness.** A master upserts one heartbeat row (`writer_heartbeat`, beside the
   event log in `events.db`, never an event) every `--cqrsHeartbeatInterval`. A secondary reports
   that row's age as `write_lag_seconds`. Older than `--cqrsStaleThreshold`, it asks the master's

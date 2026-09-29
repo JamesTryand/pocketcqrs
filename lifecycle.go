@@ -7,15 +7,17 @@ import (
 	"time"
 )
 
-// shutdownDrainTimeout bounds how long the termination hook waits for the
-// background loops (consumer engine, batch writer, pruners) to finish their
-// in-flight work before closing the stores under them anyway. Kept well
-// inside a typical supervisor's stop grace period (Docker's is 10s).
-const shutdownDrainTimeout = 5 * time.Second
+// defaultDrainDeadline is --cqrsDrainDeadline's default: how long a node may
+// spend draining on shutdown (in-flight requests, then the background loops:
+// consumer engine, batch writer, pruners, finishing their in-flight unit)
+// before the stores are closed under whatever is left. One deadline covers
+// both. Kept well inside a typical supervisor's stop grace period (Docker's
+// is 10s).
+const defaultDrainDeadline = 5 * time.Second
 
 // background owns the long-running loops main starts on serve, so the
-// termination hook can tell them to stop and wait for them. Groundwork for
-// a later "draining" node state: today it is just stop + bounded wait.
+// termination hook can tell them to stop and wait for them (the second half
+// of the drain: readiness has closed and requests have finished by then).
 type background struct {
 	ctx    context.Context
 	cancel context.CancelFunc
