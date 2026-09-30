@@ -62,14 +62,13 @@ func startSecondaryWith(t *testing.T, master *harness, eventsPath string, functi
 		t.Fatalf("seeding the secondary's superuser failed: %v\n%s", err, out)
 	}
 
-	addr := freeAddr(t)
-	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: master.Bin, client: newClient(t)}
-	args := append([]string{
-		"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir, "--tutorial",
-		"--cqrsRole", "secondary", "--cqrsEventsPath", eventsPath,
-	}, extra...)
-	h.stop = serve(t, master.Bin, dir, "secondary", args...)
-	waitFor(t, h.BackendURL+"/api/health")
+	addr, stop := serveOnFreeAddr(t, master.Bin, dir, "secondary", "/api/health", func(addr string) []string {
+		return append([]string{
+			"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir, "--tutorial",
+			"--cqrsRole", "secondary", "--cqrsEventsPath", eventsPath,
+		}, extra...)
+	})
+	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: master.Bin, client: newClient(t), stop: stop}
 
 	h.Token = h.authenticate()
 	return h
