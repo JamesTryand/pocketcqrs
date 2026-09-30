@@ -153,12 +153,7 @@ func Resolve(o Options) (Identity, error) {
 	if started.IsZero() {
 		started = time.Now()
 	}
-	host, err := hostname()
-	if err != nil || host == "" {
-		// never a boot failure: host describes the node, it does not identify it
-		logf("warning: node identity: cannot read the hostname (%v); reporting host=%s", err, UnknownHost)
-		host = UnknownHost
-	}
+	host := hostnameOr(hostname, logf)
 	id := Identity{Instance: o.Instance, Host: host, Stack: Stack, Role: o.Role, StartedAt: started.UTC()}
 
 	if o.Assigned != "" {
@@ -197,6 +192,26 @@ func Resolve(o Options) (Identity, error) {
 	}
 	id.NodeID, id.Kind = fresh, Ephemeral
 	return id, nil
+}
+
+// Hostname is this machine's hostname, or UnknownHost with a warning when it
+// cannot be read (contract I7). It is never an error: host describes the
+// node, it does not identify it. For callers that need the host before
+// identity is resolved, such as the ops port.
+func Hostname(logf func(format string, args ...any)) string {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	return hostnameOr(os.Hostname, logf)
+}
+
+func hostnameOr(read func() (string, error), logf func(format string, args ...any)) string {
+	host, err := read()
+	if err != nil || host == "" {
+		logf("warning: node identity: cannot read the hostname (%v); reporting host=%s", err, UnknownHost)
+		return UnknownHost
+	}
+	return host
 }
 
 // newUUIDv7 is a canonical, lowercase, hyphenated UUIDv7 (RFC 9562).

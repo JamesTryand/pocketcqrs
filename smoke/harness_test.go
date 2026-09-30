@@ -103,13 +103,10 @@ func startBackendFlags(t *testing.T, functions map[string]string, extra ...strin
 		t.Fatalf("seeding the superuser failed: %v\n%s", err, out)
 	}
 
-	addr := freeAddr(t)
-	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: bin, client: newClient(t)}
-	args := append([]string{
-		"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir,
-	}, extra...)
-	h.stop = serve(t, bin, dir, "backend", args...)
-	waitFor(t, h.BackendURL+"/api/health")
+	addr, stop := serveOnFreeAddr(t, bin, dir, "backend", "/api/health", func(addr string) []string {
+		return append([]string{"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir}, extra...)
+	})
+	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: bin, client: newClient(t), stop: stop}
 
 	h.Token = h.authenticate()
 	return h
@@ -122,10 +119,10 @@ func (h *harness) startDashboard() {
 	bin := build(h.t, "github.com/jamestryand/pocketcqrs/pocketcqrs-dashboard",
 		filepath.Join(dir, "pocketcqrs-dashboard"))
 
-	addr := freeAddr(h.t)
+	addr, _ := serveOnFreeAddr(h.t, bin, dir, "dashboard", "/login", func(addr string) []string {
+		return []string{"--backend", h.BackendURL, "--listen", addr}
+	})
 	h.DashboardURL = "http://" + addr
-	serve(h.t, bin, dir, "dashboard", "--backend", h.BackendURL, "--listen", addr)
-	waitFor(h.t, h.DashboardURL+"/login")
 }
 
 // Every smoke test runs the same binaries, and linking them is most of a
@@ -219,21 +216,39 @@ func goBuild(t *testing.T, pkg, out string) string {
 // still leave the cleanup registered.
 func serve(t *testing.T, bin, dir, label string, args ...string) (stop func()) {
 	t.Helper()
+	stop, _ = serveProcess(t, bin, dir, label, args...)
+	return stop
+}
+
+// serveProcess is serve plus a channel closed when the process exits, so a
+// caller can tell a node that died at boot from one still starting.
+func serveProcess(t *testing.T, bin, dir, label string, args ...string) (stop func(), exited <-chan struct{}) {
+	t.Helper()
 	logPath := filepath.Join(dir, label+".log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bin, args...)
+	// Every node gets its own ops port unless the test passes --cqrsOpsPort
+	// (several nodes run at once, and only one process can bind the default),
+	// bound to loopback: every interface is what a real node needs, and on
+	// Windows it raises a firewall prompt for each new test binary.
+	cmd.Env = append(os.Environ(), "CQRS_OPS_PORT=0", "CQRS_OPS_BIND=127.0.0.1")
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting %s: %v", label, err)
 	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
 	var once sync.Once
 	stop = func() {
 		once.Do(func() {
 			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+			<-done
 			logFile.Close()
 		})
 	}
@@ -245,7 +260,71 @@ func serve(t *testing.T, bin, dir, label string, args ...string) (stop func()) {
 			}
 		}
 	})
-	return stop
+	return stop, done
+}
+
+// serveOnFreeAddr starts a node on a freeAddr port and waits until path
+// answers there. freeAddr releases its port before the node binds it, and in
+// that gap anything on the host (an outgoing connection's ephemeral port,
+// most often) can take it; the node then exits with "address already in
+// use". That, and only that, is retried on a fresh port. args builds the
+// command line for a given address.
+func serveOnFreeAddr(t *testing.T, bin, dir, label, path string, args func(addr string) []string) (addr string, stop func()) {
+	t.Helper()
+	const attempts = 3
+	for i := 1; ; i++ {
+		addr = pickAddr(t)
+		name := label
+		if i > 1 {
+			name = fmt.Sprintf("%s-attempt%d", label, i)
+		}
+		var exited <-chan struct{}
+		stop, exited = serveProcess(t, bin, dir, name, args(addr)...)
+		if waitForOrExit(t, "http://"+addr+path, exited) {
+			return addr, stop
+		}
+		raw, _ := os.ReadFile(filepath.Join(dir, name+".log"))
+		if i < attempts && portTaken(string(raw)) {
+			t.Logf("%s: port %s was taken before it could bind; retrying on another", label, addr)
+			continue
+		}
+		t.Fatalf("%s exited before %s answered:\n%s", label, path, raw)
+	}
+}
+
+// portTaken is a node's boot failing to bind its port, in Linux's or
+// Windows' words.
+func portTaken(log string) bool {
+	return strings.Contains(log, "address already in use") ||
+		strings.Contains(log, "Only one usage of each socket address")
+}
+
+// pickAddr is where serveOnFreeAddr gets its ports; a test can replace it to
+// hand out a port it knows is taken.
+var pickAddr = freeAddr
+
+// waitForOrExit is waitFor that gives up early, returning false, if the
+// process behind url exits first.
+func waitForOrExit(t *testing.T, url string, exited <-chan struct{}) bool {
+	t.Helper()
+	// a short per-request timeout: whatever holds a taken port may accept a
+	// connection and never answer
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			return true
+		}
+		select {
+		case <-exited:
+			return false
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+	t.Fatalf("%s never became ready", url)
+	return false
 }
 
 // freeAddr reserves a loopback port by binding and releasing it.

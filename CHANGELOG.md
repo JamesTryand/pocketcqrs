@@ -3,6 +3,54 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased
+
+### Added
+
+- **Ops port and `GET /healthz`** (cross-stack health/telemetry contract 1.0, sections 2-3;
+  identical to dotnetcqrs). `serve` binds `--cqrsOpsPort` / `CQRS_OPS_PORT` (default `10056`,
+  provisional; `--cqrsOpsBind` / `CQRS_OPS_BIND` sets the address, default every interface) before
+  anything else and answers `/healthz` there: `status`, `contract_version`
+  and the node-identity fields, `null` while booting. An invalid or taken port stops the node from
+  starting. New package `opsport`; `nodeidentity.Hostname` exposes the `unknown` fallback. See
+  `docs/reference/cli.md`, "Ops port". `/metrics` follows.
+- **`GET /readyz`** (health/telemetry contract section 4, lifecycle and read models; identical
+  to dotnetcqrs): `503` `starting` while booting, `503` `catching_up` until every projection is
+  within `--cqrsLagThreshold` (default `5s`), then `200` `ready`. Projections behind or blocked
+  report `projection_behind` / `projection_blocked`, `degraded` on a master and `not_ready` on a
+  secondary; a master past `--cqrsCatchUpDeadline` (default `60s`) serves anyway.
+  `consumers.Engine.Status` reports each consumer as current / behind / blocked with its lag in
+  positions and seconds; `consumers.ReadModel` / `IsReadModel` say which consumers count (any
+  that own collections, i.e. every projection).
+- **Telemetry push** (health/telemetry contract section 8; identical to dotnetcqrs). `--cqrsTelemetryURL` /
+  `CQRS_TELEMETRY_URL` (the scheme selects the transport; unset is off) and `--cqrsTelemetryInterval` /
+  `CQRS_TELEMETRY_INTERVAL` (seconds, default 15) switch on a best-effort push of the section-6 series as JSON
+  to the subject `cqrs.telemetry.metrics.<node_id>`: on connect, on the interval, and once as draining begins.
+  Package `telemetry` holds the transport interface, settings, payload and publisher; the NATS client is
+  `telemetry/natstransport` (new dependency `nats.go` v1.50.0, kept at the version that leaves the module on Go 1.25).
+  `/metrics` and the push render one `opsport.Snapshot`. A failing bus never touches `/healthz` or `/readyz`.
+- **Drain on shutdown** (health/telemetry contract 4.7; identical to dotnetcqrs). On `SIGTERM`/Ctrl+C
+  `/readyz` goes `not_ready` / `draining` first (`opsport.Health.BeginDraining`), the HTTP server
+  finishes in-flight requests (PocketBase's own handler would cut them off after 1s), then the
+  consumers finish the event in hand and stop. `--cqrsDrainDeadline` (default `5s`, replacing a fixed
+  constant) bounds all of it. See `docs/reference/cli.md`, "Draining".
+- **`GET /metrics`** (contract sections 6-7; identical to dotnetcqrs): every `cqrs_` series in
+  the Prometheus text format from the first scrape, outcome counters zero-initialised, the fixed
+  duration buckets. `gateway.Config.Metrics` (a `CommandRecorder`, nil records nothing) counts
+  each command by the status it answered, 401s included; `opsport.Metrics` renders the series.
+- **Writer heartbeat and replication freshness** (contract section 5; identical to dotnetcqrs):
+  a master upserts a `writer_heartbeat` row in `events.db` (schema v5; never an event) every
+  `--cqrsHeartbeatInterval` (1s) with its node id and `--cqrsOpsURL` / `CQRS_OPS_URL`. A secondary
+  reports the row's age as `write_lag_seconds` and, past `--cqrsStaleThreshold` (5s), asks the
+  master's `/healthz`: `replication_stale` as `not_ready` (master up) or `degraded` (master
+  down); no row is `replication_unknown`. `events.Store.WriteHeartbeat` / `ReadHeartbeat`;
+  `opsport.ReplicationMonitor`, `RunWriterHeartbeat`, `AdvertisedURL`.
+- **Required dependencies, mode and functions in `/readyz`** (contract section 4.6; identical to
+  dotnetcqrs): `event_store` and, on a secondary, `writer`, checked every
+  `--cqrsDependencyCheckInterval` (5s), down after `--cqrsDependencyFailures` (3) failures in a
+  row; `event_store_unavailable` / `dependency_unavailable`; maintenance mode is `degraded`,
+  `maintenance`; skipped JS functions are `degraded`, `functions_skipped`. `opsport.Dependencies`.
+
 ## v0.12.0 — node identity, cached auth-verify for the read-only ops routes
 
 Node identity per the cross-stack node-identity contract 1.0 (identical to dotnetcqrs v0.16.0),

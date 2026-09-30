@@ -5,16 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/hook"
 
 	"github.com/jamestryand/pocketcqrs/adminapi"
 	"github.com/jamestryand/pocketcqrs/aggregates"
@@ -30,10 +35,13 @@ import (
 	"github.com/jamestryand/pocketcqrs/idempotency"
 	"github.com/jamestryand/pocketcqrs/migrations"
 	"github.com/jamestryand/pocketcqrs/nodeidentity"
+	"github.com/jamestryand/pocketcqrs/opsport"
 	"github.com/jamestryand/pocketcqrs/outbound"
 	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/reactors"
 	"github.com/jamestryand/pocketcqrs/roles"
+	"github.com/jamestryand/pocketcqrs/telemetry"
+	"github.com/jamestryand/pocketcqrs/telemetry/natstransport"
 	"github.com/jamestryand/pocketcqrs/users"
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
@@ -88,9 +96,13 @@ type components struct {
 	verifyCache *authverify.Cache
 
 	// identity is who this node is (the node-identity contract), resolved
-	// once at the start of serve, before the node listens. The health and
-	// telemetry endpoints will report it; nothing reads it yet.
+	// once at the start of serve, before the node listens. The ops port
+	// reports it through health.
 	identity nodeidentity.Identity
+
+	// health is what the ops port reports (the health/telemetry contract);
+	// nil except under `serve`, the only command that has an ops port.
+	health *opsport.Health
 }
 
 // contractRole is --cqrsRole in the runtime contracts' vocabulary: the
@@ -287,6 +299,107 @@ func main() {
 		"this node's workload name as identity reports it (default $"+nodeidentity.EnvInstance+
 			"; when unset, the application name from Settings)",
 	)
+	// The ops port (the health/telemetry contract): /healthz and /readyz on a
+	// port of their own, bound by `serve` before anything else. The env var
+	// always works; the flag is this binary's own convention for the same
+	// setting.
+	var opsPort string
+	app.RootCmd.PersistentFlags().StringVar(
+		&opsPort,
+		"cqrsOpsPort",
+		os.Getenv(opsport.EnvPort),
+		"the ops port for /healthz and /readyz (default $"+opsport.EnvPort+", else "+strconv.Itoa(opsport.DefaultPort)+
+			"); several nodes on one machine must each set their own",
+	)
+	var opsBind string
+	app.RootCmd.PersistentFlags().StringVar(
+		&opsBind,
+		"cqrsOpsBind",
+		os.Getenv(opsport.EnvBind),
+		"the address the ops port binds (default $"+opsport.EnvBind+", else every interface, so an "+
+			"orchestrator can reach it); 127.0.0.1 keeps it local",
+	)
+	var opsURLFlag string
+	app.RootCmd.PersistentFlags().StringVar(
+		&opsURLFlag,
+		"cqrsOpsURL",
+		os.Getenv(opsport.EnvURL),
+		"the ops port's base URL as other nodes reach it (default $"+opsport.EnvURL+", else "+
+			"http://<hostname>:<ops port>); a master puts it in its heartbeat so a stale secondary "+
+			"can ask whether the master is up. Set it wherever the hostname is not reachable (NAT, containers)",
+	)
+	var heartbeatInterval time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&heartbeatInterval,
+		"cqrsHeartbeatInterval",
+		opsport.DefaultHeartbeatInterval,
+		"how often a master upserts its heartbeat row beside the event log, and a secondary measures "+
+			"it; keep it well under --cqrsStaleThreshold",
+	)
+	var staleThreshold time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&staleThreshold,
+		"cqrsStaleThreshold",
+		opsport.DefaultStaleThreshold,
+		"how old a secondary's view of the master's heartbeat may be before /readyz reports "+
+			"replication_stale",
+	)
+	var dependencyCheckInterval time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&dependencyCheckInterval,
+		"cqrsDependencyCheckInterval",
+		opsport.DefaultDependencyCheckInterval,
+		"how often /readyz's required dependencies (the event store; the master, on a secondary) are checked",
+	)
+	var dependencyFailures int
+	app.RootCmd.PersistentFlags().IntVar(
+		&dependencyFailures,
+		"cqrsDependencyFailures",
+		opsport.DefaultDependencyFailures,
+		"consecutive failed checks before a required dependency counts as down",
+	)
+	// Readiness thresholds (the contract leaves their values to each stack).
+	var lagThreshold time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&lagThreshold,
+		"cqrsLagThreshold",
+		consumers.DefaultLagThreshold,
+		"how old the oldest event a read model has not yet applied may be before /readyz reports "+
+			"it behind (projection_behind)",
+	)
+	var catchUpDeadline time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&catchUpDeadline,
+		"cqrsCatchUpDeadline",
+		opsport.DefaultCatchUpDeadline,
+		"how long the initial catch-up may take before a master serves anyway, reporting what is "+
+			"still behind as degraded; a secondary keeps catching up (/readyz stays not_ready)",
+	)
+	var drainDeadline time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&drainDeadline,
+		"cqrsDrainDeadline",
+		defaultDrainDeadline,
+		"how long a node may spend draining on shutdown (SIGTERM/Ctrl+C) for in-flight requests and the "+
+			"consumers' event in hand together; /readyz reports draining from the moment shutdown starts",
+	)
+	// The optional telemetry push (contract section 8). Both flags default to the
+	// contract's environment names.
+	var telemetryURL, telemetryInterval string
+	app.RootCmd.PersistentFlags().StringVar(
+		&telemetryURL,
+		"cqrsTelemetryURL",
+		os.Getenv(telemetry.URLName),
+		"push a JSON snapshot of the cqrs_ series to this message bus (env "+telemetry.URLName+"); the scheme "+
+			"selects the transport, e.g. nats://host:4222; empty means no push. Best-effort, never a dependency "+
+			"of /healthz or /readyz",
+	)
+	app.RootCmd.PersistentFlags().StringVar(
+		&telemetryInterval,
+		"cqrsTelemetryInterval",
+		os.Getenv(telemetry.IntervalName),
+		"seconds between telemetry snapshots (env "+telemetry.IntervalName+"), decimals allowed; default 15",
+	)
 	var vfs string
 	app.RootCmd.PersistentFlags().StringVar(
 		&vfs,
@@ -454,6 +567,49 @@ func main() {
 	app.RootCmd.AddCommand(newSchemaCommand(c))
 	app.RootCmd.AddCommand(newSkillCommand())
 	app.RootCmd.ParseFlags(os.Args[1:])
+
+	// opsURL is --cqrsOpsURL resolved once the ops port is bound (its default
+	// needs the bound port); a master writes it into its heartbeat.
+	var opsURL string
+	// telemetryPub is the optional push, built with the ops port so a bad
+	// setting stops the node before anything else starts.
+	var telemetryPub *telemetry.Publisher
+	// The ops port binds first: before any flag is validated or PocketBase
+	// bootstraps (app.Start does that before any cobra hook runs), so a
+	// booting node answers /healthz instead of refusing connections. Only
+	// `serve` has one, and like `skill` and `schema import` above it is
+	// recognised as the first argument. A node that cannot bind it does not
+	// start: several nodes on one machine must each set their own port.
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		port, err := opsport.ParsePort(opsPort)
+		if err != nil {
+			log.Fatal(err)
+		}
+		c.health = opsport.New(nodeidentity.Hostname(log.Printf), processStart)
+		ops, err := opsport.Start(c.health, opsBind, port)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("ops port listening on %s", ops.Addr())
+		boundPort := port
+		if addr, ok := ops.Addr().(*net.TCPAddr); ok {
+			boundPort = addr.Port
+		}
+		if opsURL, err = opsport.AdvertisedURL(opsURLFlag, opsBind, c.health.Host(), boundPort); err != nil {
+			log.Fatal(err)
+		}
+		tsettings, err := telemetry.ParseSettings(telemetryURL, telemetryInterval)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if tsettings.Enabled() {
+			transport, err := natstransport.Register(telemetry.NewTransports()).Open(tsettings.URL, log.Printf)
+			if err != nil {
+				log.Fatal(err)
+			}
+			telemetryPub = telemetry.NewPublisher(c.health, transport, tsettings.Interval, log.Printf)
+		}
+	}
 	c.Tutorial = tutorial
 	c.SchemaDefaultRule = schemaDefaultRule
 	if role != roleMaster && role != roleSecondary {
@@ -600,6 +756,18 @@ func main() {
 			return err
 		}
 		c.Store = store
+		if c.health != nil {
+			// /metrics: every event this node appends counts toward
+			// cqrs_events_appended_total (a secondary appends none), and the
+			// dead-letter depth is read on each scrape (reads only)
+			metrics := c.health.Metrics()
+			store.Subscribe(func(events.Event) { metrics.EventAppended() })
+			metrics.SetDeadLetterDepth(func(ctx context.Context) (int64, error) {
+				open, err := store.DeadLetters(ctx, false)
+				return int64(len(open)), err
+			})
+			gatewayCfg.Metrics = metrics
+		}
 
 		// idempotency records for the command gateway: a separate small
 		// SQLite file, deliberately off events.db's hot append path.
@@ -657,6 +825,7 @@ func main() {
 		} else {
 			c.Engine = consumers.NewEngine(store, engineLogger)
 		}
+		c.Engine.LagThreshold = lagThreshold
 
 		// command batching (item 4): on by default, and never on a
 		// secondary -- it has no writable store to enqueue into or commit
@@ -725,6 +894,8 @@ func main() {
 		// refused loudly — the rest of the system keeps serving, unless
 		// --cqrsStrictBoot is set (boot aborts instead).
 		var validatedDeciders []*functions.DeciderSpec
+		// set when a JS decider or reactor is skipped (not under --cqrsStrictBoot)
+		functionsSkipped := false
 		for _, spec := range loaded.Deciders {
 			if c.Registry.Has(spec.Aggregate) {
 				if strictBoot {
@@ -732,6 +903,7 @@ func main() {
 				}
 				logger.Error("JS decider aggregate collides with an existing decider, skipped",
 					"aggregate", spec.Aggregate)
+				functionsSkipped = true
 				continue
 			}
 			if err := functions.ValidateDeciderSpec(store, spec); err != nil {
@@ -740,6 +912,7 @@ func main() {
 				}
 				logger.Error("JS decider failed validation, NOT registered",
 					"aggregate", spec.Aggregate, "error", err)
+				functionsSkipped = true
 				continue
 			}
 			c.Registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
@@ -812,9 +985,15 @@ func main() {
 				}
 				logger.Error("JS reactor failed validation, NOT registered",
 					"reactor", spec.Reactor, "error", err)
+				functionsSkipped = true
 				continue
 			}
 			activeReactors = append(activeReactors, spec)
+		}
+		// health/telemetry: a node serving with skipped functions reports
+		// degraded, functions_skipped (fixed at boot)
+		if functionsSkipped && c.health != nil {
+			c.health.SetFunctionsPartial(true)
 		}
 		c.JSReactors = activeReactors
 		for _, spec := range activeReactors {
@@ -879,7 +1058,9 @@ func main() {
 	})
 
 	bg := newBackground()
+	var httpServer atomic.Pointer[http.Server]
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		httpServer.Store(e.Server)
 		// Resolve identity before anything else the node serves. The data
 		// dir is node-local and never replicated (only events.db is), so a
 		// secondary never inherits the master's id. `instance` is
@@ -902,6 +1083,9 @@ func main() {
 			return err
 		}
 		c.identity = identity
+		if c.health != nil {
+			c.health.SetIdentity(identity)
+		}
 		log.Printf("node identity: node_id=%s identity=%s instance=%q host=%s role=%s started_at=%s",
 			identity.NodeID, identity.Kind, identity.Instance, identity.Host, identity.Role, identity.StartedAtRFC3339())
 
@@ -933,6 +1117,45 @@ func main() {
 		// background loops run on bg's shared context so the termination
 		// hook below can stop them and wait for them
 		bg.Go(c.Engine.Run)
+		if telemetryPub != nil {
+			bg.Go(telemetryPub.Run)
+		}
+		// The writer heartbeat (health/telemetry contract section 5): a master
+		// upserts it beside the event log; a secondary measures its age and,
+		// when stale, asks the master's /healthz whether the master is up.
+		if c.health != nil {
+			// required dependencies (contract section 4.6): the event store,
+			// and the master on a secondary; checked once now, so none is
+			// unknown once the node serves, then on a loop. The mode is read
+			// from the (replicated) event store on each /readyz.
+			deps := opsport.NewDependencies(dependencyFailures, log.Printf)
+			deps.Add(opsport.DepEventStore, func(ctx context.Context) error {
+				_, err := c.Store.MaxPosition(ctx)
+				return err
+			})
+			c.health.SetMode(func() string {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				mode, err := c.Store.Mode(ctx)
+				if err != nil {
+					return events.ModeRunning // unreadable: the event store check reports it
+				}
+				return mode
+			})
+			if c.role == roleSecondary {
+				monitor := opsport.NewReplicationMonitor(c.Store, &http.Client{Timeout: 2 * time.Second}, staleThreshold)
+				c.health.SetReplication(monitor.Current)
+				deps.Add(opsport.DepWriter, monitor.CheckWriter)
+				bg.Go(func(ctx context.Context) { monitor.Run(ctx, heartbeatInterval) })
+			} else {
+				bg.Go(func(ctx context.Context) {
+					opsport.RunWriterHeartbeat(ctx, c.Store, identity.NodeID, opsURL, heartbeatInterval, log.Printf)
+				})
+			}
+			deps.CheckAll(context.Background())
+			c.health.SetDependencies(deps)
+			bg.Go(func(ctx context.Context) { deps.Run(ctx, dependencyCheckInterval) })
+		}
 		if c.batchWriter != nil {
 			bg.Go(c.batchWriter.Run)
 		}
@@ -946,19 +1169,74 @@ func main() {
 					func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
 			})
 		}
-		return e.Next()
+		// PocketBase binds the traffic port at the end of this hook chain, so
+		// once Next returns the node is listening and its consumers run:
+		// boot is complete (machine 1's BootCompleted), and /readyz moves
+		// from starting to catching_up, opening when every read model is
+		// within --cqrsLagThreshold (or --cqrsCatchUpDeadline passes).
+		if err := e.Next(); err != nil {
+			return err
+		}
+		if c.health != nil {
+			if err := c.health.BeginCatchUp(c.Engine.Status, catchUpDeadline, log.Printf); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 
-	// Termination: PocketBase's own graceful-shutdown handler (priority
-	// -9999) has already stopped the HTTP server when this runs. Tell the
-	// background loops to stop — each finishes its in-flight unit (an event
-	// delivery, a batch) and returns — wait for them, bounded, then close
-	// this binary's own stores. PocketBase closes its own DBs after this
-	// hook chain (ResetBootstrapState). Also runs after one-shot CLI
-	// commands, where there is nothing to wait for.
+	// Draining (health/telemetry contract 4.7), in two hooks around
+	// PocketBase's own graceful-shutdown handler (priority -9999), which
+	// cancels in-flight requests' context and gives the server only 1s.
+	//
+	// First, before it: /readyz closes (not_ready, draining), so the pool
+	// stops routing here, and the HTTP server stops accepting and waits for
+	// in-flight requests up to --cqrsDrainDeadline. PocketBase's handler then
+	// finds the server already shut down. drainStartedAt lets the second hook
+	// spend only what is left of the one deadline.
+	var drainStartedAt atomic.Int64
+	app.OnTerminate().Bind(&hook.Handler[*core.TerminateEvent]{
+		Id:       "cqrsDrain",
+		Priority: -10000,
+		Func: func(e *core.TerminateEvent) error {
+			drainStartedAt.Store(time.Now().UnixNano())
+			if c.health != nil {
+				c.health.BeginDraining(log.Printf)
+			}
+			if telemetryPub != nil {
+				telemetryPub.NotifyDraining() // the final snapshot says draining
+			}
+			if srv := httpServer.Load(); srv != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), drainDeadline)
+				defer cancel()
+				if err := srv.Shutdown(ctx); err != nil {
+					log.Printf("shutdown: in-flight requests still running after %s; cutting them off", drainDeadline)
+				}
+			}
+			return e.Next()
+		},
+	})
+
+	// Second, after it (the traffic port has drained): tell the background
+	// loops to stop — each finishes its in-flight unit (an event delivery,
+	// a batch), checkpoints it and returns — wait for them within what is
+	// left of the drain deadline, then close this binary's own stores.
+	// PocketBase closes its own DBs after this hook chain
+	// (ResetBootstrapState). Also runs after one-shot CLI commands, where
+	// there is nothing to drain and the whole deadline is available.
 	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
-		if !bg.Stop(shutdownDrainTimeout) {
-			log.Printf("shutdown: background loops still running after %s; closing stores anyway", shutdownDrainTimeout)
+		left := drainDeadline
+		if started := drainStartedAt.Load(); started != 0 {
+			left -= time.Since(time.Unix(0, started))
+		}
+		if !bg.Stop(max(left, 0)) {
+			log.Printf("shutdown: drain deadline of %s reached with background loops still running "+
+				"(an interrupted event is redone on restart); closing stores anyway", drainDeadline)
+		}
+		if telemetryPub != nil {
+			// the loop has stopped with the others; this waits for the final
+			// snapshot still going out (one second at most) and closes the bus
+			_ = telemetryPub.Close()
 		}
 		c.closeStores()
 		return e.Next()

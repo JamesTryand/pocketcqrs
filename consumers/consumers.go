@@ -29,6 +29,89 @@ type Consumer interface {
 	Apply(ctx context.Context, ev events.Event) error
 }
 
+// ReadModel is an optional interface a Consumer implements to say whether
+// queries read its output. A read model's lag, and whether it is blocked,
+// count toward the node's readiness (health/telemetry contract section 4.5);
+// reactors and effect functions only delay side effects, so they are reported
+// as metrics instead. A consumer without it is a read model exactly when it
+// owns collections (Collections() []string, as every Go and JS projection
+// does).
+type ReadModel interface {
+	IsReadModel() bool
+}
+
+// IsReadModel reports whether c counts toward readiness (see ReadModel).
+func IsReadModel(c Consumer) bool {
+	if r, ok := c.(ReadModel); ok {
+		return r.IsReadModel()
+	}
+	_, owns := c.(interface{ Collections() []string })
+	return owns
+}
+
+// HeadSource is an optional interface a PollSource implements to report the
+// newest committed position, for each consumer's lag in positions.
+// *events.Store satisfies it. Without it that lag is unknown.
+type HeadSource interface {
+	MaxPosition(ctx context.Context) (int64, error)
+}
+
+// State is a consumer's state, as the health/telemetry contract names it
+// (STATE-MACHINES.md, machine 2, ReadModelConsumer). Stopped needs no value:
+// an unregistered consumer is simply not listed.
+type State int
+
+const (
+	// Current: lag within the engine's LagThreshold.
+	Current State = iota
+	// Behind: lag over the threshold, or not yet measured (the consumer has
+	// not run a pass).
+	Behind
+	// Blocked: stuck on a failing event (or failing to read), retrying
+	// every pass.
+	Blocked
+)
+
+func (s State) String() string {
+	switch s {
+	case Current:
+		return "current"
+	case Behind:
+		return "behind"
+	default:
+		return "blocked"
+	}
+}
+
+// Status is one consumer's progress, from Engine.Status.
+type Status struct {
+	Name string
+	// ReadModel: counts toward readiness (see ReadModel).
+	ReadModel bool
+	State     State
+	// Checkpoint is the last position it applied; nil before its first pass.
+	Checkpoint *int64
+	// LagPositions is how far behind the log head it was as of its last
+	// pass; nil when the source has no HeadSource, or before its first pass.
+	LagPositions *int64
+	// LagSeconds is the age of the oldest event it has not yet applied (0
+	// when caught up); nil before its first pass.
+	LagSeconds *float64
+}
+
+// DefaultLagThreshold is Engine.LagThreshold's default.
+const DefaultLagThreshold = 5 * time.Second
+
+// progress is a consumer's progress as of its latest pass: its checkpoint,
+// the log head that pass saw (nil: unknown), when the oldest event it has not
+// applied was committed (zero: caught up), and whether it is blocked.
+type progress struct {
+	checkpoint   int64
+	head         *int64
+	pendingSince time.Time
+	blocked      bool
+}
+
 // PollSource is the event feed an Engine follows: Poll for catch-up batches,
 // Subscribe for the in-process nudge that shortens the usual tick latency.
 // *events.Store satisfies this whether opened with Open or OpenReadOnly.
@@ -61,6 +144,16 @@ type Engine struct {
 	nudge  chan struct{}
 	tick   time.Duration
 	logger func(msg string, args ...any)
+
+	// LagThreshold is how old the oldest unapplied event may be before a
+	// consumer counts as Behind rather than Current. Set it before Start.
+	LagThreshold time.Duration
+
+	// progressMu guards progress: each consumer's progress as of its latest
+	// pass, for Status. Written only by the pass.
+	progressMu sync.Mutex
+	progress   map[string]progress
+	now        func() time.Time
 }
 
 // NewEngine creates an Engine that both polls store and checkpoints
@@ -82,11 +175,14 @@ func NewEngineWithCheckpoints(source PollSource, checkpoints CheckpointStore, lo
 		logger = func(string, ...any) {}
 	}
 	return &Engine{
-		source:      source,
-		checkpoints: checkpoints,
-		nudge:       make(chan struct{}, 1),
-		tick:        time.Second,
-		logger:      logger,
+		source:       source,
+		checkpoints:  checkpoints,
+		nudge:        make(chan struct{}, 1),
+		tick:         time.Second,
+		logger:       logger,
+		LagThreshold: DefaultLagThreshold,
+		progress:     map[string]progress{},
+		now:          time.Now,
 	}
 }
 
@@ -105,9 +201,78 @@ func (e *Engine) Unregister(name string) {
 	for i, c := range e.consumers {
 		if c.Name() == name {
 			e.consumers = append(e.consumers[:i], e.consumers[i+1:]...)
-			return
+			break
 		}
 	}
+	e.progressMu.Lock()
+	delete(e.progress, name)
+	e.progressMu.Unlock()
+}
+
+// Status returns every registered consumer's state and lag
+// (health/telemetry contract sections 4.4 and 4.5), sorted by name. It is
+// read from what the passes last recorded, so it never touches the store: the
+// lag in seconds is measured now, against the oldest event each consumer has
+// not yet applied. A consumer that has not run a pass yet is Behind with
+// unknown lag.
+func (e *Engine) Status() []Status {
+	e.mu.RLock()
+	consumers := append([]Consumer(nil), e.consumers...)
+	e.mu.RUnlock()
+
+	now := e.now()
+	e.progressMu.Lock()
+	defer e.progressMu.Unlock()
+	out := make([]Status, 0, len(consumers))
+	for _, c := range consumers {
+		s := Status{Name: c.Name(), ReadModel: IsReadModel(c), State: Behind}
+		if p, ok := e.progress[c.Name()]; ok {
+			checkpoint, lag := p.checkpoint, 0.0
+			if !p.pendingSince.IsZero() {
+				lag = max(0, now.Sub(p.pendingSince).Seconds())
+			}
+			s.Checkpoint, s.LagSeconds = &checkpoint, &lag
+			if p.head != nil {
+				behind := max(0, *p.head-p.checkpoint)
+				s.LagPositions = &behind
+			}
+			switch {
+			case p.blocked:
+				s.State = Blocked
+			case lag <= e.LagThreshold.Seconds():
+				s.State = Current
+			}
+		}
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func (e *Engine) record(name string, p progress) {
+	e.progressMu.Lock()
+	e.progress[name] = p
+	e.progressMu.Unlock()
+}
+
+func (e *Engine) recorded(name string) (progress, bool) {
+	e.progressMu.Lock()
+	defer e.progressMu.Unlock()
+	p, ok := e.progress[name]
+	return p, ok
+}
+
+// createdAt is when ev was committed. A timestamp that does not parse counts
+// from now, so its lag still grows while it waits.
+func (e *Engine) createdAt(ev events.Event) time.Time {
+	// the store writes "2006-01-02 15:04:05.000Z"; imported events may carry
+	// RFC 3339
+	for _, layout := range []string{"2006-01-02 15:04:05Z07:00", time.RFC3339Nano} {
+		if t, err := time.Parse(layout, ev.Created); err == nil {
+			return t
+		}
+	}
+	return e.now()
 }
 
 // Names returns the registered consumer names, sorted (a snapshot).
@@ -199,12 +364,21 @@ func (e *Engine) runOnce(ctx, stop context.Context) error {
 	e.mu.RLock()
 	consumers := append([]Consumer(nil), e.consumers...)
 	e.mu.RUnlock()
+	// read once per pass, for each consumer's lag in positions; a failure
+	// here is the store being unreachable, which every consumer is about to
+	// report as blocked anyway
+	var head *int64
+	if hs, ok := e.source.(HeadSource); ok {
+		if h, err := hs.MaxPosition(ctx); err == nil {
+			head = &h
+		}
+	}
 	var errs []error
 	for _, c := range consumers {
 		if stop.Err() != nil {
 			break
 		}
-		if err := e.runOnceFor(ctx, stop, c); err != nil {
+		if err := e.runOnceFor(ctx, stop, c, head); err != nil {
 			errs = append(errs, fmt.Errorf("consumer %s: %w", c.Name(), err))
 		}
 	}
@@ -212,34 +386,52 @@ func (e *Engine) runOnce(ctx, stop context.Context) error {
 }
 
 // runOnceFor applies every pending event to a single consumer until caught
-// up, or until the consumer's own checkpoint/poll/apply fails.
-func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer) error {
-	pos, err := e.checkpoints.Checkpoint(ctx, c.Name())
-	if err != nil {
+// up, or until the consumer's own checkpoint/poll/apply fails, recording its
+// progress for Status as it goes.
+func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer, head *int64) error {
+	name := c.Name()
+	before, _ := e.recorded(name)
+	// a blocked consumer stays blocked while it retries, until an event applies
+	blocked, pendingSince := before.blocked, before.pendingSince
+	var pos int64
+	fail := func(err error) error {
+		if pendingSince.IsZero() {
+			pendingSince = e.now()
+		}
+		e.record(name, progress{checkpoint: pos, head: head, pendingSince: pendingSince, blocked: true})
 		return err
+	}
+	pos, err := e.checkpoints.Checkpoint(ctx, name)
+	if err != nil {
+		return fail(err)
 	}
 	for {
 		batch, err := e.source.Poll(ctx, pos, 100)
 		if err != nil {
-			return err
+			return fail(err)
 		}
 		if len(batch) == 0 {
 			break
 		}
 		for _, ev := range batch {
+			// the event about to be applied is the oldest one not yet applied
+			pendingSince = e.createdAt(ev)
+			e.record(name, progress{checkpoint: pos, head: head, pendingSince: pendingSince, blocked: blocked})
 			if err := c.Apply(ctx, ev); err != nil {
 				e.logger("consumer apply error",
-					"consumer", c.Name(), "position", ev.Position, "error", err)
-				return err
+					"consumer", name, "position", ev.Position, "error", err)
+				return fail(err)
 			}
-			if err := e.checkpoints.SaveCheckpoint(ctx, c.Name(), ev.Position); err != nil {
-				return err
+			if err := e.checkpoints.SaveCheckpoint(ctx, name, ev.Position); err != nil {
+				return fail(err)
 			}
 			pos = ev.Position
+			blocked = false
 			if stop.Err() != nil {
 				return nil
 			}
 		}
 	}
+	e.record(name, progress{checkpoint: pos, head: head})
 	return nil
 }

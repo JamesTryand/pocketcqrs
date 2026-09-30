@@ -96,6 +96,75 @@ ever replicated — so a secondary never inherits the master's id.
   `secondary`; `started_at` is process start, so it changes on every restart
   while `node_id` does not.
 
+### Ops port (health and telemetry)
+
+`serve` binds an **ops port** before anything else, per the cross-stack health/telemetry contract
+(identical to dotnetcqrs), so a booting node answers instead of refusing connections:
+
+| Flag / env | Default | Meaning |
+|---|---|---|
+| `--cqrsOpsPort` / `CQRS_OPS_PORT` | `10056` (provisional) | the ops port (the flag defaults to the env var). A value outside 0-65535, or a port already taken, stops the node from starting. |
+| `--cqrsOpsBind` / `CQRS_OPS_BIND` | every interface | the address it binds. A real node needs every interface so an orchestrator can reach it; `127.0.0.1` keeps it local (tests use this, which also avoids a Windows firewall prompt per test binary). |
+| `--cqrsLagThreshold` | `5s` | how old the oldest event a read model (a Go or JS projection) has not yet applied may be before `/readyz` counts it behind. |
+| `--cqrsCatchUpDeadline` | `60s` | how long the initial catch-up may take before a master serves anyway. |
+| `--cqrsOpsURL` / `CQRS_OPS_URL` | `http://<hostname>:<ops port>` (the `--cqrsOpsBind` address instead of the hostname when that names one) | the ops port's base URL as other nodes reach it. A master writes it into its heartbeat so a stale secondary can ask whether the master is up; set it wherever the hostname is not reachable (NAT, containers). Anything but an absolute http(s) URL stops the node from starting. |
+| `--cqrsHeartbeatInterval` | `1s` | how often a master upserts its heartbeat row, and a secondary measures it. |
+| `--cqrsStaleThreshold` | `5s` | how old a secondary's view of the heartbeat may be before `/readyz` reports `replication_stale`. |
+| `--cqrsDependencyCheckInterval` | `5s` | how often the required dependencies are checked. |
+| `--cqrsDependencyFailures` | `3` | consecutive failed checks before a required dependency counts as down. |
+| `--cqrsTelemetryURL` / `CQRS_TELEMETRY_URL` | unset (no push) | the bus the node pushes a JSON snapshot of its `cqrs_` series to; the scheme selects the transport (`nats://host:4222`). Best-effort and never a dependency of `/healthz` or `/readyz`. An invalid URL, or a scheme with no transport in this binary, stops the node from starting; an unreachable bus does not. |
+| `--cqrsTelemetryInterval` / `CQRS_TELEMETRY_INTERVAL` | `15` | seconds between snapshots, decimals allowed (a Go duration such as `15s` also works as a flag value). |
+| `--cqrsDrainDeadline` | `5s` | how long a node may spend draining on shutdown (in-flight requests, then the consumers' event in hand, together) before the stores are closed under whatever is left. Keep it inside your supervisor's stop grace period (Docker's is 10s). |
+
+- `GET /healthz` there answers `200` whenever the process can answer at all, with `status`,
+  `contract_version`, `node_id`, `identity`, `instance`, `host`, `stack`, `role` and `started_at`.
+  The identity fields are `null` while the node boots, then match "Node identity" above.
+- `GET /readyz` there says whether to route traffic to this node: `200` for `ready` or
+  `degraded`, `503` for `not_ready`, with `status`, `role`, `node_id`, `contract_version`,
+  `reasons` and `checks` (`write_lag_seconds`, `projection_lag_seconds`, `dependencies`). It is
+  `not_ready` with reason `starting` while booting, then `catching_up` once the traffic port
+  listens, until every projection is within `--cqrsLagThreshold`; then `ready`, with `reasons`
+  empty. A projection that later falls behind or blocks reports `projection_behind` /
+  `projection_blocked`: `degraded` on the master (so the only writer never leaves the pool),
+  `not_ready` on a secondary. For the same reason a master still catching up after
+  `--cqrsCatchUpDeadline` serves anyway; a secondary keeps catching up. Reactors and effect
+  functions never affect readiness.
+- **Telemetry push.** With `--cqrsTelemetryURL` set, the node publishes each snapshot as JSON (the same
+  figures `/metrics` returns) to the subject `cqrs.telemetry.metrics.<node_id>`: once it has an identity, then
+  every `--cqrsTelemetryInterval`, and once more as draining begins so a monitor sees `draining`, not silence.
+  A snapshot the bus cannot take within a second is dropped, never queued, and the log says so once per outage.
+  The transport sits behind an interface (package `telemetry`); the NATS client is its own package
+  (`telemetry/natstransport`).
+- **Draining.** On `SIGTERM`/Ctrl+C `/readyz` goes `503` `draining` first, so whatever routes to
+  this node stops; the HTTP server then finishes its in-flight requests; then each consumer finishes
+  the event it is applying, checkpoints it and stops (the next start resumes from the next event; it
+  does not catch up first). The ops port answers until the process exits. `--cqrsDrainDeadline`
+  bounds all of it: past it the node closes its stores anyway, logs that it did, and an interrupted
+  event is redone on restart.
+- **Replication freshness.** A master upserts one heartbeat row (`writer_heartbeat`, beside the
+  event log in `events.db`, never an event) every `--cqrsHeartbeatInterval`. A secondary reports
+  that row's age as `write_lag_seconds`. Older than `--cqrsStaleThreshold`, it asks the master's
+  `/healthz`: master up means this secondary's replication is behind (`not_ready`,
+  `replication_stale`); master unreachable means a shared outage, so it keeps serving visibly stale
+  reads (`degraded`, `replication_stale`). A secondary that has never seen a heartbeat is
+  `not_ready`, `replication_unknown`.
+- **Required dependencies** are listed under `checks.dependencies`: `event_store` on every node,
+  and `writer` (the master, found through its heartbeat) on a secondary. The event store down is
+  `event_store_unavailable` (`degraded` on the master, `not_ready` on a secondary); the master down
+  is `dependency_unavailable`, `degraded`. Maintenance mode reports `degraded`, `maintenance`; JS
+  deciders or reactors skipped at boot (without `--cqrsStrictBoot`) report `degraded`,
+  `functions_skipped`.
+- `GET /metrics` there serves the contract's `cqrs_` series in the Prometheus text format, every
+  one present from the first scrape: identity, readiness, commands by outcome (`accepted`,
+  `rejected`, `conflict`, `unavailable`, `error`) with a duration histogram, events appended,
+  each consumer's lag and state, and the dead-letter depth. A secondary counts no commands (it
+  forwards them) and appends no events.
+- It is **not** the traffic port (`--http`), and never belongs behind an ingress: it is
+  unauthenticated, so the network path is the security boundary.
+- Several nodes on one machine must each set their own ops port; only one can bind the default.
+- `serve` must be the first argument (`pocketcqrs serve --http ...`), as everywhere in these docs:
+  that is how the binary knows to bind the ops port before PocketBase bootstraps.
+
 ## Multi-node (single writer, multiple readers)
 
 One master appends to `events.db`; any number of secondaries poll a

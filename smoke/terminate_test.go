@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// TestInterruptStopsBackgroundLoopsCleanly: on SIGINT the termination hook
-// stops the consumer engine, batch writer and pruners, waits for them
+// TestInterruptStopsBackgroundLoopsCleanly: on SIGINT the node starts draining
+// (/readyz closes first), then the termination hook stops the consumer engine, batch writer and pruners, waits for them
 // (bounded) and closes the stores, and the process exits promptly without
 // reporting stragglers. Windows has no way to deliver os.Interrupt to a
 // child process, so this only runs elsewhere; the stop/wait mechanics are
@@ -67,5 +67,9 @@ func TestInterruptStopsBackgroundLoopsCleanly(t *testing.T) {
 	raw, _ := os.ReadFile(logPath)
 	if strings.Contains(string(raw), "still running") || strings.Contains(string(raw), "shutdown: closing") {
 		t.Fatalf("shutdown reported a problem:\n%s", raw)
+	}
+	// Health/telemetry 4.7: readiness closed first (the log says when).
+	if !strings.Contains(string(raw), "draining: /readyz is not_ready") {
+		t.Fatalf("shutdown did not report draining:\n%s", raw)
 	}
 }
