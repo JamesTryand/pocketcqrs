@@ -54,7 +54,7 @@ headers, instead of a raw, unlabeled record id.
 
 ## Status
 
-**`v0.12.0`.** Usable and dogfooded; the API is not frozen. Not affiliated with PocketBase; upstream (`pocketbase/pocketbase`) is an unmodified dependency pinned in `go.mod`.
+**`v0.13.0`.** Usable and dogfooded; the API is not frozen. Not affiliated with PocketBase; upstream (`pocketbase/pocketbase`) is an unmodified dependency pinned in `go.mod`.
 
 **It ships empty on purpose.** No aggregates, no collections, nothing you did not write — `--tutorial` opts into the example domains this repo uses to teach and to test itself.
 

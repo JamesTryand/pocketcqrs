@@ -5,6 +5,17 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ## Unreleased
 
+## v0.13.0 — the health/telemetry contract 1.0
+
+The cross-stack health/telemetry contract 1.0, identical to dotnetcqrs v0.17.0: an ops port with
+`/healthz`, `/readyz` and `/metrics`, drain on shutdown, the writer heartbeat and replication
+freshness, and the optional telemetry push. This is the first release with the ops port, so the
+contract is frozen from here (its section 11). Released on a hand-run conformance probe on Linux
+(m5): every launched and passive check passes, and the replication states are driven through real
+LiteFS and Litestream by the smoke suite (`TestReplicationStatesViaLiteFS`,
+`TestReplicationStatesViaLitestream`).
+
+
 ### Added
 
 - **Ops port and `GET /healthz`** (cross-stack health/telemetry contract 1.0, sections 2-3;
