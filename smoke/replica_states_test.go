@@ -232,7 +232,8 @@ func startStoppable(t *testing.T, dir, label string, onStop func(), name string,
 		stop()
 		// again: a stop mid-test can fail to unmount while a node still has
 		// the mount open, and by now (cleanups run in reverse) that node has
-		// exited
+		// exited. The unmounts are lazy (-z): a mount whose litefs was killed
+		// is disconnected, and a plain -u leaves it behind.
 		if onStop != nil {
 			onStop()
 		}
@@ -263,7 +264,7 @@ func TestReplicationStatesViaLiteFS(t *testing.T) {
 	_, primaryPort, _ := net.SplitHostPort(primaryHTTP)
 	primaryCfg := litefsConfig(t, workDir, primaryFuseDir, filepath.Join(workDir, "primary-litefs-data"),
 		":"+primaryPort, "http://"+primaryHTTP, true)
-	startStoppable(t, workDir, "litefs-primary", func() { _ = exec.Command("fusermount3", "-u", primaryFuseDir).Run() },
+	startStoppable(t, workDir, "litefs-primary", func() { _ = exec.Command("fusermount3", "-u", "-z", primaryFuseDir).Run() },
 		bin, "mount", "-config", primaryCfg)
 	waitForLogContains(t, filepath.Join(workDir, "litefs-primary.log"), "primary lease acquired")
 
@@ -293,7 +294,7 @@ func TestReplicationStatesViaLiteFS(t *testing.T) {
 	secondaryCfg := litefsConfig(t, secondaryDir, secondaryFuseDir, filepath.Join(secondaryDir, "litefs-data"),
 		freeAddr(t), "http://"+link.addr, false)
 	stopSecondaryLiteFS := startStoppable(t, secondaryDir, "litefs-secondary",
-		func() { _ = exec.Command("fusermount3", "-u", secondaryFuseDir).Run() },
+		func() { _ = exec.Command("fusermount3", "-u", "-z", secondaryFuseDir).Run() },
 		bin, "mount", "-config", secondaryCfg)
 	secondaryEvents := filepath.Join(secondaryFuseDir, "events.db")
 	waitForFile(t, secondaryEvents)
