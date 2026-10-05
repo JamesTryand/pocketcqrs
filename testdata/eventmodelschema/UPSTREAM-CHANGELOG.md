@@ -3,6 +3,78 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 3.1.1
+
+**Clarification (no schema shape change):**
+- The `match` normalizers are now defined exactly, with test vectors, in
+  `docs/design-notes.md` (v3.1.1). A hashed index only matches when every
+  implementation normalizes byte-identically, and v3.1.0's definitions were loose
+  enough for two implementations to disagree silently.
+- `caseFold`/`email`: NFKC, then invariant one-to-one lowercase per code point (not
+  full case folding, so `ß` stays `ß`; `U+0130` is left unchanged), then trim.
+- `personName`: `caseFold`, then NFD, drop non-spacing marks, collapse whitespace,
+  then NFC.
+- `phone`: keep a leading ASCII `+`, keep ASCII digits, drop everything else. No NFKC
+  and no country inference, so a local and an international form of one number don't
+  match. v3.1.0's "E.164 digits" wasn't implementable without a country.
+- Documents need no change: anything valid under 3.1.0 is valid under 3.1.1. The
+  `eventModelingSchemaVersion` default and both order-fulfillment examples are bumped.
+
+## 3.1.0
+
+**Additive (non-breaking):**
+- `readModel.filters` gains a second kind, `match`: a field that can be searched by
+  a query param. It takes a required `mode` (`exact`, `prefix`, `contains`) and
+  optionally `normalize` (`none`, `caseFold`, `email`, `phone`, `personName`;
+  default `caseFold`) and, for `prefix` only, `minPrefixLength` (at least 2;
+  default 3).
+- A document declares *how a field is matched*, never how it is stored. For a
+  `pii: true` field, generators choose the least-revealing index that satisfies the
+  mode: a keyed hash for `exact` and `prefix`, and normalized plaintext only for
+  `contains`. They delete a data subject's index entries when that subject is
+  erased. See `docs/design-notes.md`, v3.1.0.
+- `phonetic` matching is deliberately **not** in this version. It needs one
+  algorithm pinned identically across implementations, and will come in a later
+  minor version once a real document needs it.
+- Raised by `platform/eventmodeling-codegen`: a PII field is stored encrypted, and
+  the same value encrypts differently every time, so before this change it could
+  not be searched at all, and nothing in a document could say it should be.
+
+**Examples:** `pending-shipments` gains `orderId`, `customerId` and a PII
+`customerEmail`, plus an `exact` email match filter. Both order-fulfillment
+examples are bumped to `3.1.0`.
+
+**Not enforced here:** that `field` names a field of the same read model, and that
+`prefix`/`contains` target a `string` field. Both are reference checks for a
+generator/lint, like `piiSubject`.
+
+## 3.0.0
+
+**Breaking:**
+- `field` gains `piiSubject`: the name of a sibling field (same `fields`/`subfields`
+  array) whose value is the id of the data subject a PII value belongs to. The value
+  is encrypted under that subject's key, so destroying the key (erasure by
+  crypto-shredding) makes it unreadable. **Required whenever `pii: true`**, and
+  `piiSubject` without `pii: true` is rejected. A 2.x document with a bare
+  `pii: true` no longer validates, hence the major bump.
+- `piiSubject` names a field only. There are deliberately no sentinels (no
+  "aggregate id", no "acting user"). A subject is always a value you can see in the
+  payload. See `docs/design-notes.md`, v3.0.0.
+- Raised by `platform/eventmodeling-codegen`, which is building crypto-shredding on
+  top of `pii`. Until now `pii` was a bare flag, so nothing said *whose* key to use,
+  and no default is safe: the aggregate id is wrong whenever a stream holds someone
+  else's data.
+
+**Migrating a 2.x document:** for every `pii: true` field, add `piiSubject` naming the
+field that holds the owner's id. If the element doesn't carry that id yet, add it as
+a field. The worked example did exactly this: `order-placed` gains `customerId`
+(which its own scenario already emitted) and `customerEmail` names it.
+
+**Not enforced here:** that `piiSubject` names a field that actually exists on the
+same element, and that the named field isn't itself `pii` (a subject id has to stay
+readable to find the key). Both are reference checks JSON Schema can't express, so
+they belong to a generator/lint, which should error rather than guess.
+
 ## 2.7.0
 
 **Additive (non-breaking):**

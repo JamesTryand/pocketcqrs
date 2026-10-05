@@ -25,6 +25,32 @@
     "question": "Which orders are waiting to be shipped?",
     "builtFromEventIds": [
       "order-placed"
+    ],
+    "fields": [
+      {
+        "name": "orderId",
+        "type": "uuid",
+        "idAttribute": true
+      },
+      {
+        "name": "customerId",
+        "type": "uuid"
+      },
+      {
+        "name": "customerEmail",
+        "type": "string",
+        "pii": true,
+        "piiSubject": "customerId"
+      }
+    ],
+    "filters": [
+      {
+        "param": "email",
+        "field": "customerEmail",
+        "kind": "match",
+        "mode": "exact",
+        "normalize": "email"
+      }
     ]
   }
 }

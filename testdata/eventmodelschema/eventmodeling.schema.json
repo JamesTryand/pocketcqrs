@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "2.7.0"
+      "default": "3.1.1"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -166,6 +166,7 @@
         "cardinality": { "$ref": "#/$defs/fieldCardinality" },
         "idAttribute": { "type": "boolean" },
         "pii": { "type": "boolean" },
+        "piiSubject": { "type": "string", "minLength": 1 },
         "derivation": { "$ref": "#/$defs/fieldDerivation" },
         "subfields": {
           "type": "array",
@@ -173,7 +174,25 @@
         }
       },
       "additionalProperties": false,
+      "dependentSchemas": {
+        "piiSubject": {
+          "type": "object",
+          "required": ["pii"],
+          "properties": { "pii": { "const": true } }
+        }
+      },
       "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["pii"],
+            "properties": { "pii": { "const": true } }
+          },
+          "then": {
+            "type": "object",
+            "required": ["piiSubject"]
+          }
+        },
         {
           "if": {
             "type": "object",
@@ -334,7 +353,11 @@
       "additionalProperties": false
     },
 
-    "filterKind": { "enum": ["dateRange"] },
+    "filterKind": { "enum": ["dateRange", "match"] },
+
+    "matchMode": { "enum": ["exact", "prefix", "contains"] },
+
+    "matchNormalize": { "enum": ["none", "caseFold", "email", "phone", "personName"] },
 
     "dateRangePreset": { "enum": ["last7Days", "lastCalendarMonth", "custom"] },
 
@@ -360,6 +383,24 @@
                 "uniqueItems": true
               }
             }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "match" } } },
+          "then": {
+            "type": "object",
+            "required": ["mode"],
+            "properties": {
+              "mode": { "$ref": "#/$defs/matchMode" },
+              "normalize": { "$ref": "#/$defs/matchNormalize" },
+              "minPrefixLength": { "type": "integer", "minimum": 2 }
+            },
+            "allOf": [
+              {
+                "if": { "type": "object", "required": ["minPrefixLength"] },
+                "then": { "type": "object", "properties": { "mode": { "const": "prefix" } } }
+              }
+            ]
           }
         }
       ],

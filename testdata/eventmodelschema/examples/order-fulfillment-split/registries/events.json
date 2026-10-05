@@ -11,9 +11,14 @@
         "idAttribute": true
       },
       {
+        "name": "customerId",
+        "type": "uuid"
+      },
+      {
         "name": "customerEmail",
         "type": "string",
-        "pii": true
+        "pii": true,
+        "piiSubject": "customerId"
       },
       {
         "name": "items",

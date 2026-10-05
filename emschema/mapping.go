@@ -491,23 +491,33 @@ func (m *mapper) mapScopes(id string, rm ReadModel) []scaffold.ReadModelScope {
 // resolving each Field reference against the read model's own columns —
 // this mapper has the document's field list to hand; the generated code
 // does not, so the reference must be resolved here, the same reasoning
-// mapScopes uses for a via read model's id. Rejects a filter kind other than
-// "dateRange" (the only kind schema 2.4.0 defines), mirroring how a groupBy
-// toggle subfield is rejected here rather than left to fail deep inside
-// generation or verification.
+// mapScopes uses for a via read model's id. Rejects an unknown filter kind,
+// mirroring how a groupBy toggle subfield is rejected here rather than left
+// to fail deep inside generation or verification.
+//
+// A "match" filter (schema 3.1.0) is checked here but not carried through:
+// search is not generated yet, so it is reported as lossy, by name. Dropping
+// it is safe for a pii field too — the risk search carries is an index that
+// reveals too much, and no index means nothing is revealed.
 func (m *mapper) mapFilters(id string, rm ReadModel) []scaffold.ReadModelFilter {
 	if len(rm.Filters) == 0 {
 		return nil
 	}
 	fieldNames := map[string]bool{}
+	byName := map[string]Field{}
 	for _, f := range rm.Fields {
 		fieldNames[scaffold.SanitizeName(f.Name)] = true
+		byName[scaffold.SanitizeName(f.Name)] = f
 	}
 	out := make([]scaffold.ReadModelFilter, 0, len(rm.Filters))
 	for _, filt := range rm.Filters {
+		if filt.Kind == FilterMatch {
+			m.checkMatchFilter(id, filt, byName)
+			continue
+		}
 		if filt.Kind != FilterDateRange {
-			m.rep.errorf("read model %q: filter %q has kind %q; only %q is supported",
-				id, filt.Param, filt.Kind, FilterDateRange)
+			m.rep.errorf("read model %q: filter %q has kind %q; only %q and %q are supported",
+				id, filt.Param, filt.Kind, FilterDateRange, FilterMatch)
 			continue
 		}
 		field := scaffold.SanitizeName(filt.Field)
@@ -528,6 +538,58 @@ func (m *mapper) mapFilters(id string, rm ReadModel) []scaffold.ReadModelFilter 
 		})
 	}
 	return out
+}
+
+// checkMatchFilter applies the reference and shape rules the schema leaves to
+// a generator (3.1.0: "not enforced here"), the same rules dotnetcqrs's
+// mapper enforces, so a document that imports on one stack imports on the
+// other. It then reports the filter lossy: nothing here generates search yet.
+func (m *mapper) checkMatchFilter(id string, filt ReadModelFilter, fields map[string]Field) {
+	f, ok := fields[scaffold.SanitizeName(filt.Field)]
+	if !ok {
+		m.rep.errorf("read model %q: filter %q names field %q, which is not one of this read model's own fields",
+			id, filt.Param, filt.Field)
+		return
+	}
+	bad := false
+	switch filt.Mode {
+	case MatchModeExact, MatchModePrefix, MatchModeContains:
+	default:
+		m.rep.errorf("read model %q: match filter %q has mode %q; want %q, %q or %q",
+			id, filt.Param, filt.Mode, MatchModeExact, MatchModePrefix, MatchModeContains)
+		bad = true
+	}
+	switch filt.Normalize {
+	case "", NormalizeNone, NormalizeCaseFold, NormalizeEmail, NormalizePhone, NormalizePersonName:
+	default:
+		m.rep.errorf("read model %q: match filter %q has normalize %q, which is not one the schema defines",
+			id, filt.Param, filt.Normalize)
+		bad = true
+	}
+	if filt.MinPrefixLength != nil && filt.Mode != MatchModePrefix {
+		m.rep.errorf("read model %q: match filter %q sets minPrefixLength, which only applies to mode %q",
+			id, filt.Param, MatchModePrefix)
+		bad = true
+	}
+	if f.Derivation != nil {
+		m.rep.errorf("read model %q: match filter %q is over %q, a derived field; only a copied field can be searched",
+			id, filt.Param, filt.Field)
+		bad = true
+	} else if FoldType(f) != "text" {
+		m.rep.errorf("read model %q: match filter %q is over %q, which is not a text field",
+			id, filt.Param, filt.Field)
+		bad = true
+	}
+	if f.PII && filt.Mode == MatchModePrefix && filt.MinPrefixLength == nil {
+		m.rep.errorf("read model %q: match filter %q is a prefix search over personal data and must declare minPrefixLength",
+			id, filt.Param)
+		bad = true
+	}
+	if bad {
+		return
+	}
+	m.rep.lossyf("read model %q: match filter %q (%s over %q) is not generated yet; the read model cannot be searched by it",
+		id, filt.Param, filt.Mode, filt.Field)
 }
 
 // readModelKey picks the row key. idAttribute is a gift here: it names the

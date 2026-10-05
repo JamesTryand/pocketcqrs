@@ -3,13 +3,25 @@
 Fixtures for M14 (eventmodelschema import/export). Copied verbatim, unmodified.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
-- **Commit**: `c4fcf2c`, tag `v2.7.0` — *"readModel.requiredRole -- the
+- **Commit**: `f616eaf`, tag `v3.1.1` — *"Schema 3.1.1: match normalizers
+  pinned exactly, with test vectors"*, 2026-09-24.
+- **Copied**: 2026-10-05, straight from 2.7.0 across three releases, as the
+  first step (G0) of porting dotnetcqrs's personal-data support. 3.0.0 is
+  **breaking**: `field.piiSubject` is required whenever `pii` is true (see
+  `emschema/document.go`'s `Field.PIISubject`). 3.1.0 adds the `match` filter
+  kind, which the mapper checks and reports lossy until search is generated
+  here (`emschema/mapping.go`'s `checkMatchFilter`). 3.1.1 pins the
+  normalizers byte-exactly, with test vectors in upstream
+  `docs/design-notes.md`; that matters once a hashed index is built here,
+  because hashes only match when every stack normalizes identically. The
+  worked examples now carry a PII `customerEmail` (subject `customerId`) and
+  an `exact` email match filter.
+- **Before that**: `c4fcf2c`, tag `v2.7.0` — *"readModel.requiredRole -- the
   read-side mirror of command authorization"*, 2026-09-08 — raised by
   `project/timesheets` (D12), ported into this repo the same day (see
   `emschema/document.go`'s `ReadModel.RequiredRole` and
-  `scaffold.Domain.projection`'s `//@rule` emission).
-- **Copied**: 2026-09-08 (venture-overview schema-update check; previously
-  `649e86d` / `v2.5.0`, "command authorization (requiredRole, fieldGatedRole,
+  `scaffold.Domain.projection`'s `//@rule` emission), copied 2026-09-08
+  (venture-overview schema-update check; previously `649e86d` / `v2.5.0`, "command authorization (requiredRole, fieldGatedRole,
   requiredOwnership, scope)", 2026-09-03; before that `0acc987` / `2.4.0`,
   "readModel.filters for single-field date-range query filtering",
   2026-09-02; before that `bb4a060` / `2.3.0`, "groupBy derivation for nested
@@ -21,13 +33,10 @@ Fixtures for M14 (eventmodelschema import/export). Copied verbatim, unmodified.
   `emschema/verify.go`'s `runViewScenario`/`filterByFilters`) and 2.7.0
   (`readModel.requiredRole`) both landed in `dotnetcqrs` the same day
   (2026-09-08, v0.7.0/v0.8.0) and were ported here together in the same
-  pass, having previously gone unported entirely (this repo stayed on 2.5.0
-  through both schema releases until this refresh). Both additive only over
-  2.5.0 — the copy is documentation/example fixture only (nothing in this
+  pass. The copy is documentation/example fixture only (nothing in this
   repo validates a document against it at runtime; see
   `emschema/document.go`'s own header comment for the Go-side source of
-  truth, and `emschema/lint.go`'s `lintCommandAuth` for this repo's own
-  referential-integrity checks over the 2.5.0 keywords).
+  truth).
 - Same author as this repository; no separate licence file exists upstream.
 
 ## Contents

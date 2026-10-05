@@ -266,16 +266,41 @@ type ReadModelScopeVia struct {
 // The runtime queryParams value shape ({"kind": "last7Days"} or
 // {"kind": "custom", "from": "...", "to": "..."}) is a documented
 // convention, not part of the schema — see resolveDateRangeFilter.
+//
+// Schema 3.1.0 adds a second kind, "match": a searchable field. Mode is
+// required (exact | prefix | contains), Normalize defaults to caseFold, and
+// MinPrefixLength (prefix only, at least 2) defaults to 3 upstream but is
+// left nil here when the document omits it, so the mapper can tell "absent"
+// from "declared".
 type ReadModelFilter struct {
-	Param   string   `json:"param"`
-	Field   string   `json:"field"`
-	Kind    string   `json:"kind"`
-	Presets []string `json:"presets,omitempty"`
+	Param           string   `json:"param"`
+	Field           string   `json:"field"`
+	Kind            string   `json:"kind"`
+	Presets         []string `json:"presets,omitempty"`
+	Mode            string   `json:"mode,omitempty"`
+	Normalize       string   `json:"normalize,omitempty"`
+	MinPrefixLength *int     `json:"minPrefixLength,omitempty"`
 }
 
-// FilterDateRange is the one ReadModelFilter.Kind value the schema defines
-// as of 2.4.0.
-const FilterDateRange = "dateRange"
+// ReadModelFilter.Kind values: dateRange (schema 2.4.0) and match (3.1.0).
+const (
+	FilterDateRange = "dateRange"
+	FilterMatch     = "match"
+)
+
+// Match modes and normalizers, per the schema's closed enums (3.1.0; the
+// normalizers' exact rules are pinned by 3.1.1's design notes).
+const (
+	MatchModeExact    = "exact"
+	MatchModePrefix   = "prefix"
+	MatchModeContains = "contains"
+
+	NormalizeNone       = "none"
+	NormalizeCaseFold   = "caseFold"
+	NormalizeEmail      = "email"
+	NormalizePhone      = "phone"
+	NormalizePersonName = "personName"
+)
 
 // DateRangePreset values, per the schema's closed dateRangePreset enum.
 const (
@@ -303,6 +328,11 @@ type Field struct {
 	Cardinality string `json:"cardinality,omitempty"` // single | list
 	IDAttribute bool   `json:"idAttribute,omitempty"`
 	PII         bool   `json:"pii,omitempty"`
+	// PIISubject (schema 3.0.0) names the sibling field whose value is the
+	// id of the data subject this PII value belongs to: the value is
+	// encrypted under that subject's key. Required whenever PII is true and
+	// rejected without it; the sibling-reference checks are the mapper's.
+	PIISubject string `json:"piiSubject,omitempty"`
 	// Subfields is required (non-empty), alongside Cardinality "list", when
 	// Derivation.Kind is groupBy (schema 2.3.0) — each entry is one column
 	// of the nested row a groupBy derivation produces per distinct group
@@ -483,7 +513,12 @@ type Hotspot struct {
 // emission for how this project enforces it, necessarily differently from
 // dotnetcqrs's pluggable resolveOwnRole delegate, since reads here have no
 // generated route to hook at all).
-const SchemaVersion = "2.7.0"
+//
+// 3.0.0 (breaking: field.piiSubject, required whenever pii is true), 3.1.0
+// (additive: readModel.filters kind "match") and 3.1.1 (normalizer rules
+// pinned, no shape change) were vendored together on 2026-10-05, as the
+// first step of porting dotnetcqrs's personal-data support.
+const SchemaVersion = "3.1.1"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (
