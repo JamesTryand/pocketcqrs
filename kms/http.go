@@ -49,7 +49,7 @@ func indexKeyPath(name string) string  { return "v1/index-keys/" + url.PathEscap
 func b64(p []byte) string { return base64.StdEncoding.EncodeToString(p) }
 
 // do sends one request and returns the status and body. Transport failures
-// come back as-is (net errors, deadline), so IsUnavailable recognises them.
+// come back as *UnavailableError, so IsUnavailable recognises them.
 func (c *HTTPClient) do(ctx context.Context, method, path string, body any) (int, []byte, error) {
 	ref, err := url.Parse(path)
 	if err != nil {
@@ -72,12 +72,12 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, body any) (int
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, &UnavailableError{Op: method + " " + path, Err: err}
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, &UnavailableError{Op: method + " " + path, Err: err}
 	}
 	return resp.StatusCode, b, nil
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/idempotency"
+	"github.com/jamestryand/pocketcqrs/kms"
 )
 
 // Config controls the gateway behavior.
@@ -219,6 +220,14 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		if len(payload) == 0 {
 			payload = []byte(`{}`)
 		}
+		// Personal data arrives as plaintext and the platform encrypts it.
+		// An external caller sending an envelope would be choosing the
+		// ciphertext, and the subject, that get stored: refused. Reactors
+		// and other in-process dispatch, which legitimately carry stored
+		// envelopes along, never come through here.
+		if hasPIIEnvelope(payload) {
+			return apis.NewBadRequestError(`command payload contains a "$pii" object; send personal data as plaintext, the platform encrypts it`, nil)
+		}
 
 		if cfg.Authorize != nil {
 			authorized, err := cfg.Authorize(re, aggregate, cmdName, id, payload)
@@ -313,6 +322,18 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 				// effect happened, and which node answers is not stable.
 				return re.JSON(http.StatusServiceUnavailable, map[string]string{
 					"error": "this node is a read-only replica; commands must go to the master",
+				})
+			case kms.IsSubjectErased(err):
+				// the data subject was erased: permanent, unlike a 409 —
+				// a returning person is a new subject with a new id. Not
+				// cached (no side effect happened).
+				return re.JSON(http.StatusGone, map[string]string{"error": err.Error()})
+			case kms.IsUnavailable(err):
+				// the key service couldn't be used: nothing was applied
+				re.Response.Header().Set("Retry-After", "1")
+				return re.JSON(http.StatusServiceUnavailable, map[string]string{
+					"error": "dependency unavailable: the key service is unavailable; retry later",
+					"hint":  "nothing was applied; safe to retry shortly",
 				})
 			case decider.IsRejection(err):
 				// the decider's own verdict: the only 400 on this path. Not
@@ -475,4 +496,37 @@ func actorMeta(re *core.RequestEvent, cfg Config) map[string]any {
 	}
 
 	return meta
+}
+
+// hasPIIEnvelope reports whether any object anywhere in payload has a
+// property named "$pii" (compared after JSON unescaping, so "$pii" is
+// caught too). A body that doesn't parse isn't judged here; dispatch reports
+// it.
+func hasPIIEnvelope(payload []byte) bool {
+	var v any
+	if err := json.Unmarshal(payload, &v); err != nil {
+		return false
+	}
+	var walk func(any) bool
+	walk = func(v any) bool {
+		switch t := v.(type) {
+		case map[string]any:
+			if _, ok := t["$pii"]; ok {
+				return true
+			}
+			for _, c := range t {
+				if walk(c) {
+					return true
+				}
+			}
+		case []any:
+			for _, c := range t {
+				if walk(c) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(v)
 }

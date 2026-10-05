@@ -17,8 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"os"
 )
 
 // MaxBatchItems is the facade's per-call item limit for every batch call.
@@ -147,26 +145,29 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("kms: %s: facade answered HTTP %d", e.Op, e.Status)
 }
 
+// UnavailableError: the facade couldn't be reached (connection refused,
+// timeout, cancelled). Wraps the transport error.
+type UnavailableError struct {
+	Op  string
+	Err error
+}
+
+func (e *UnavailableError) Error() string { return "kms: " + e.Op + ": facade unreachable: " + e.Err.Error() }
+func (e *UnavailableError) Unwrap() error { return e.Err }
+
 // IsUnavailable reports whether err means the facade couldn't be used right
 // now — unreachable, timed out, or answering something unexpected — rather
 // than that the request itself was wrong. The gateway maps it to 503 and a
-// reactor retries. A KeyNotFoundError/IndexKeyNotFoundError (wiring faults)
-// and a SubjectErasedError (permanent) are deliberately not unavailable.
+// reactor retries. Only this package's own error types count, so a network
+// error from anything else on the same path is never mistaken for the key
+// service being down. A KeyNotFoundError/IndexKeyNotFoundError (wiring
+// faults) and a SubjectErasedError (permanent) are deliberately not
+// unavailable.
 func IsUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
 	var pe *ProtocolError
 	var se *StatusError
-	var ne net.Error
-	var oe *net.OpError
-	switch {
-	case errors.As(err, &pe), errors.As(err, &se), errors.As(err, &ne), errors.As(err, &oe):
-		return true
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
-		return true
-	}
-	return false
+	var ue *UnavailableError
+	return errors.As(err, &pe) || errors.As(err, &se) || errors.As(err, &ue)
 }
 
 // IsSubjectErased reports whether err is (or wraps) a SubjectErasedError.
