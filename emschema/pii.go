@@ -78,6 +78,10 @@ func checkPIISubjects(r *Report, owner string, fields []Field) {
 			r.errorf("%s names piiSubject %q, which is itself pii and so cannot be encrypted under its own key", where, f.PIISubject)
 			continue
 		}
+		if FoldType(subject) != "text" {
+			r.errorf("%s names piiSubject %q, which is not a text field; a subject id is an opaque string", where, f.PIISubject)
+			continue
+		}
 		lower := strings.ToLower(f.PIISubject)
 		for _, w := range piiLookalikeNames {
 			if strings.Contains(lower, w) {

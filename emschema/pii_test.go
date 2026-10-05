@@ -90,6 +90,11 @@ func TestPIIRulesRejected(t *testing.T) {
 			ev.Fields[0].PII, ev.Fields[0].PIISubject = true, "staffId"
 			d.Events["time-logged"] = ev
 		}, "itself pii"},
+		{"piiSubject not text", func(d *Document) {
+			ev := d.Events["time-logged"]
+			ev.Fields[1].PIISubject = "taskDate"
+			d.Events["time-logged"] = ev
+		}, "not a text field"},
 		{"read model pii, event plaintext", func(d *Document) {
 			ev := d.Events["time-logged"]
 			ev.Fields[1].PII, ev.Fields[1].PIISubject = false, ""

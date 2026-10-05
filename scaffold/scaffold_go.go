@@ -21,6 +21,11 @@ type GoFile struct {
 type namedField struct {
 	Name   string
 	GoType string
+	// PII and Subject: the field is personal data, encrypted under the
+	// key of the subject named by the sibling field Subject. GoType is then
+	// pii.Value[T].
+	PII     bool
+	Subject string
 }
 
 // goType maps a //@schema type onto the Go type a generated struct field
@@ -90,9 +95,72 @@ func (d Domain) collectEventFields() ([]namedField, []string) {
 
 	fields := make([]namedField, 0, len(order))
 	for _, name := range order {
-		fields = append(fields, namedField{Name: name, GoType: goType(types[name])})
+		nf := namedField{Name: name, GoType: goType(types[name])}
+		if f, ok := d.firstEventField(name); ok && f.PII {
+			nf.PII, nf.Subject = true, f.PIISubject
+			nf.GoType = "pii.Value[" + nf.GoType + "]"
+		}
+		fields = append(fields, nf)
 	}
 	return fields, warnings
+}
+
+// firstEventField is the first declaration of a field name across the
+// domain's events.
+func (d Domain) firstEventField(name string) (Field, bool) {
+	for _, c := range d.Commands {
+		for _, e := range c.Events {
+			for _, f := range e.Fields {
+				if f.Name == name {
+					return f, true
+				}
+			}
+		}
+	}
+	return Field{}, false
+}
+
+// piiConflicts refuses a field name that is personal data on one of the
+// domain's events but not another (or under a different subject): State
+// and every payload struct share one Go type per name, so the generated
+// protector could neither encrypt the plaintext copy nor know whose key
+// to use. Fail closed rather than pick one.
+func (d Domain) piiConflicts() error {
+	type seen struct {
+		event, subject string
+		pii            bool
+	}
+	first := map[string]seen{}
+	var problems []string
+	for _, c := range d.Commands {
+		for _, e := range c.Events {
+			for _, f := range e.Fields {
+				prev, ok := first[f.Name]
+				if !ok {
+					first[f.Name] = seen{e.Name, f.PIISubject, f.PII}
+					continue
+				}
+				if prev.pii != f.PII || prev.subject != f.PIISubject {
+					problems = append(problems, fmt.Sprintf("field %q is pii=%v (subject %q) on event %q but pii=%v (subject %q) on event %q",
+						f.Name, prev.pii, prev.subject, prev.event, f.PII, f.PIISubject, e.Name))
+				}
+			}
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("aggregate %q: personal-data fields must be declared the same way on every event: %s",
+			d.Aggregate, strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func hasPIIField(fields []namedField) bool {
+	for _, f := range fields {
+		if f.PII {
+			return true
+		}
+	}
+	return false
 }
 
 // fieldTypeConflictWarnings extends Warnings() with the Go-specific
@@ -142,7 +210,7 @@ func GoPackageName(aggregate string) string {
 
 func usesGoType(fields []namedField, want string) bool {
 	for _, f := range fields {
-		if f.GoType == want {
+		if f.GoType == want || f.GoType == "pii.Value["+want+"]" {
 			return true
 		}
 	}
@@ -209,6 +277,9 @@ func (d Domain) GenerateGo() ([]GoFile, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
+	if err := d.piiConflicts(); err != nil {
+		return nil, err
+	}
 
 	pkg := GoPackageName(d.Aggregate)
 	fields, _ := d.collectEventFields()
@@ -259,9 +330,28 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 		return goType(schemaType)
 	}
 
+	hasPII := hasPIIField(fields)
+	piiOf := map[string]namedField{}
+	for _, f := range fields {
+		if f.PII {
+			piiOf[f.Name] = f
+		}
+	}
+	eventHasPII := func(e Event) bool {
+		for _, f := range e.Fields {
+			if _, ok := piiOf[f.Name]; ok {
+				return true
+			}
+		}
+		return false
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "package %s\n\n", pkg)
 	b.WriteString("import (\n")
+	if hasPII {
+		b.WriteString("\t\"context\"\n")
+	}
 	b.WriteString("\t\"encoding/json\"\n")
 	b.WriteString("\t\"fmt\"\n")
 	if usesGoType(fields, "time.Time") {
@@ -270,6 +360,9 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 	b.WriteString("\n")
 	b.WriteString("\t\"github.com/jamestryand/pocketcqrs/decider\"\n")
 	b.WriteString("\t\"github.com/jamestryand/pocketcqrs/events\"\n")
+	if hasPII {
+		b.WriteString("\t\"github.com/jamestryand/pocketcqrs/pii\"\n")
+	}
 	b.WriteString(")\n\n")
 
 	b.WriteString("// Event types this aggregate produces.\n")
@@ -290,10 +383,37 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 	}
 	b.WriteString("}\n\n")
 
+	// An event carrying personal data gets a named payload type: Decide
+	// returns it as a typed Payload (it can't marshal fresh plaintext
+	// itself), and the generated Protector encrypts it by type.
+	emitted := map[string]bool{}
+	for _, c := range d.Commands {
+		for _, e := range c.Events {
+			if !eventHasPII(e) || emitted[e.Name] {
+				continue
+			}
+			emitted[e.Name] = true
+			fmt.Fprintf(&b, "// %sData is %s's payload. Its pii.Value fields are personal data:\n", ExportName(e.Name), e.Name)
+			b.WriteString("// encrypted by Protector before append, never readable in the log.\n")
+			fmt.Fprintf(&b, "type %sData struct {\n", ExportName(e.Name))
+			for _, f := range e.Fields {
+				fmt.Fprintf(&b, "\t%s %s `json:%q`\n", ExportName(f.Name), fieldGoType(f.Name, f.Type), f.Name)
+			}
+			b.WriteString("}\n\n")
+		}
+	}
+
 	ctor := ExportName(d.Aggregate)
 	fmt.Fprintf(&b, "// %s builds the generated decider. Register it at bootstrap, next to\n", ctor)
 	b.WriteString("// this project's own domains, not inside example wiring:\n")
-	fmt.Fprintf(&b, "//\n//\tdecider.Register(registry, %q, %s())\n", d.Aggregate, ctor)
+	if hasPII {
+		fmt.Fprintf(&b, "//\n//\tdecider.RegisterProtected(registry, %q, %s(), NewProtector(piiDeps))\n", d.Aggregate, ctor)
+		b.WriteString("//\n// It carries personal data, so it must be registered with its Protector\n")
+		b.WriteString("// (piiDeps from pii.Wire); without one, every command writing personal data\n")
+		b.WriteString("// fails rather than store plaintext.\n")
+	} else {
+		fmt.Fprintf(&b, "//\n//\tdecider.Register(registry, %q, %s())\n", d.Aggregate, ctor)
+	}
 	fmt.Fprintf(&b, "func %s() *decider.Decider[State] {\n", ctor)
 	b.WriteString("\treturn &decider.Decider[State]{\n")
 	b.WriteString("\t\tInitialState: func() State { return State{} },\n")
@@ -317,7 +437,18 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 			b.WriteString("\t\t\t\t// runs; replace it with the real decision.\n")
 		}
 		e := c.Events[0]
-		if len(e.Fields) == 0 {
+		if eventHasPII(e) {
+			fmt.Fprintf(&b, "\t\t\t\tvar payload %sData\n", ExportName(e.Name))
+			b.WriteString("\t\t\t\tif err := json.Unmarshal(cmd.Payload, &payload); err != nil {\n\t\t\t\t\treturn nil, err\n\t\t\t\t}\n")
+			b.WriteString("\t\t\t\t// A sealed value only becomes readable if this decision reads it\n")
+			b.WriteString("\t\t\t\t// (Get asks the shell to reveal it); copying it forward costs nothing.\n")
+			for _, f := range e.Fields {
+				if _, ok := piiOf[f.Name]; ok {
+					fmt.Fprintf(&b, "\t\t\t\tif err := pii.ResolveIn(cmd, &payload.%s); err != nil {\n\t\t\t\t\treturn nil, err\n\t\t\t\t}\n", ExportName(f.Name))
+				}
+			}
+			fmt.Fprintf(&b, "\t\t\t\treturn []events.NewEvent{{Type: %s, Payload: &payload}}, nil\n", e.Name)
+		} else if len(e.Fields) == 0 {
 			fmt.Fprintf(&b, "\t\t\t\treturn []events.NewEvent{{Type: %s, Data: json.RawMessage(\"{}\")}}, nil\n", e.Name)
 		} else {
 			b.WriteString("\t\t\t\tvar payload struct {\n")
@@ -367,7 +498,82 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 	b.WriteString("\t\t\treturn s, nil\n")
 	b.WriteString("\t\t},\n")
 	b.WriteString("\t}\n}\n")
+	if hasPII {
+		d.writeProtectorGo(&b, fields, eventHasPII)
+	}
 	return b.String()
+}
+
+// writeProtectorGo emits the aggregate's decider.Protector (and Sealer):
+// reveal the state's and command's sealed values in one batch, encrypt
+// fresh values in each typed payload under its piiSubject, and seal a
+// command's personal data at batching intake.
+func (d Domain) writeProtectorGo(b *strings.Builder, fields []namedField, eventHasPII func(Event) bool) {
+	b.WriteString("\n// Protector is this aggregate's personal-data hook (package pii does the\n")
+	b.WriteString("// work; this only names the fields). Generated: regenerate rather than edit.\n")
+	b.WriteString("type Protector struct{ deps pii.Deps }\n\n")
+	b.WriteString("// NewProtector takes the Deps pii.Wire returns.\n")
+	b.WriteString("func NewProtector(deps pii.Deps) *Protector { return &Protector{deps: deps} }\n\n")
+
+	b.WriteString("// Reveal decrypts State's personal data and the command's sealed values in\n")
+	b.WriteString("// one batch, for a decide that read them.\n")
+	b.WriteString("func (p *Protector) Reveal(ctx context.Context, s State, cmd decider.Command) (State, decider.Command, error) {\n")
+	b.WriteString("\tbuf := pii.NewBuffer(p.deps.KMS, p.deps.Cache)\n")
+	for _, f := range fields {
+		if f.PII {
+			fmt.Fprintf(b, "\tif err := pii.Reveal(buf, &s.%s); err != nil {\n\t\treturn s, cmd, err\n\t}\n", ExportName(f.Name))
+		}
+	}
+	b.WriteString("\tcr := pii.QueueCommand(buf, cmd)\n")
+	b.WriteString("\tif err := buf.Flush(ctx); err != nil {\n\t\treturn s, cmd, err\n\t}\n")
+	b.WriteString("\treturn s, cr.Apply(cmd), nil\n}\n\n")
+
+	b.WriteString("// Protect encrypts every fresh personal-data value under its subject's key.\n")
+	b.WriteString("func (p *Protector) Protect(ctx context.Context, _ string, evs []events.NewEvent) ([]events.NewEvent, error) {\n")
+	b.WriteString("\tfor i := range evs {\n")
+	b.WriteString("\t\tswitch pl := evs[i].Payload.(type) {\n")
+	emitted := map[string]bool{}
+	for _, c := range d.Commands {
+		for _, e := range c.Events {
+			if !eventHasPII(e) || emitted[e.Name] {
+				continue
+			}
+			emitted[e.Name] = true
+			fmt.Fprintf(b, "\t\tcase *%sData:\n", ExportName(e.Name))
+			b.WriteString("\t\t\tvar err error\n")
+			for _, f := range e.Fields {
+				if !f.PII {
+					continue
+				}
+				fmt.Fprintf(b, "\t\t\tif pl.%s, err = pii.ProtectField(ctx, p.deps, pl.%s, pl.%s, %q, %q); err != nil {\n\t\t\t\treturn nil, err\n\t\t\t}\n",
+					ExportName(f.Name), ExportName(f.Name), ExportName(f.PIISubject), e.Name+"."+f.Name, f.PIISubject)
+			}
+		}
+	}
+	b.WriteString("\t\t}\n\t}\n\treturn evs, nil\n}\n\n")
+
+	b.WriteString("// Seal encrypts a command's personal data before it is queued (batching\n")
+	b.WriteString("// intake), so the command queue never holds plaintext.\n")
+	b.WriteString("func (p *Protector) Seal(ctx context.Context, cmd decider.Command) (json.RawMessage, error) {\n")
+	b.WriteString("\tswitch cmd.Name {\n")
+	for _, c := range d.Commands {
+		var seal []string
+		seen := map[string]bool{}
+		for _, e := range c.Events {
+			for _, f := range e.Fields {
+				if f.PII && !seen[f.Name] {
+					seen[f.Name] = true
+					seal = append(seal, fmt.Sprintf("{Field: %q, Subject: %q}", f.Name, f.PIISubject))
+				}
+			}
+		}
+		if len(seal) == 0 {
+			continue
+		}
+		fmt.Fprintf(b, "\tcase %q:\n", c.Name)
+		fmt.Fprintf(b, "\t\treturn pii.SealPayload(ctx, p.deps, cmd.Payload, []pii.SealField{%s})\n", strings.Join(seal, ", "))
+	}
+	b.WriteString("\t}\n\treturn cmd.Payload, nil\n}\n")
 }
 
 func (d Domain) projectionGo(pkg string, rm ReadModel) string {
@@ -470,8 +676,7 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 		b.WriteString("\tif err := json.Unmarshal(ev.Data, &data); err != nil {\n\t\treturn err\n\t}\n")
 		b.WriteString("\trec, err := p.getOrCreate(ev.AggregateID)\n\tif err != nil {\n\t\treturn err\n\t}\n")
 		if len(plainColumns) > 0 {
-			fmt.Fprintf(&b, "\tfor _, name := range []string{%s} {\n", quotedList(plainColumns))
-			b.WriteString("\t\tif v, ok := data[name]; ok {\n\t\t\trec.Set(name, v)\n\t\t}\n\t}\n")
+			writeColumnMerge(&b, rm, plainColumns)
 		}
 		b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n}\n\n")
 	}
@@ -638,11 +843,44 @@ func writeProjectionPlainApply(b *strings.Builder, rm ReadModel, on []string, ty
 	fmt.Fprintf(b, "\t\trec.Set(%q, ev.AggregateID)\n", rm.Key)
 	b.WriteString("\t}\n")
 	if len(columns) > 0 {
-		fmt.Fprintf(b, "\tfor _, name := range []string{%s} {\n", quotedList(columns))
-		b.WriteString("\t\tif v, ok := data[name]; ok {\n\t\t\trec.Set(name, v)\n\t\t}\n\t}\n")
+		writeColumnMerge(b, rm, columns)
 	}
 	b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n")
 	b.WriteString("}\n")
+}
+
+// writeColumnMerge copies payload fields into same-named columns. A
+// personal-data column stores the envelope's JSON text as it is, never a
+// revealed value: what can't forget holds ciphertext, so a rebuild stays a
+// pure function of the log and erasure needs nothing done here. A read model
+// with no personal data gets exactly the loop it always had.
+func writeColumnMerge(b *strings.Builder, rm ReadModel, columns []string) {
+	piiCol := map[string]bool{}
+	for _, f := range rm.Fields {
+		if f.PII {
+			piiCol[f.Name] = true
+		}
+	}
+	var plain, personal []string
+	for _, c := range columns {
+		if piiCol[c] {
+			personal = append(personal, c)
+		} else {
+			plain = append(plain, c)
+		}
+	}
+	if len(plain) > 0 {
+		fmt.Fprintf(b, "\tfor _, name := range []string{%s} {\n", quotedList(plain))
+		b.WriteString("\t\tif v, ok := data[name]; ok {\n\t\t\trec.Set(name, v)\n\t\t}\n\t}\n")
+	}
+	if len(personal) > 0 {
+		b.WriteString("\t// personal data: the $pii envelope's JSON text, stored as is and never\n")
+		b.WriteString("\t// revealed here (a text column; the generated query route reveals it)\n")
+		fmt.Fprintf(b, "\tfor _, name := range []string{%s} {\n", quotedList(personal))
+		b.WriteString("\t\tif v, ok := data[name]; ok && v != nil {\n")
+		b.WriteString("\t\t\tenv, err := json.Marshal(v)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
+		b.WriteString("\t\t\trec.Set(name, string(env))\n\t\t}\n\t}\n")
+	}
 }
 
 // writeProjectionScopes appends one Resolve<Param> helper per declared

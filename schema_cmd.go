@@ -346,13 +346,27 @@ func writeSliceGo(mapped *emschema.Mapped, outDir string, force bool) (int, erro
 func printGoWiringSuggestions(cmd *cobra.Command, domains []scaffold.Domain) {
 	cmd.Println("\nSuggested wiring (not applied automatically):")
 	for _, d := range domains {
+		if len(d.PIIFields()) > 0 {
+			cmd.Println("\n  // personal data: needs the key-management facade (KMS_FACADE_URL; the host")
+			cmd.Println("  // refuses to start without it). Once, before registering any protected")
+			cmd.Println("  // aggregate; Writer is false on a --cqrsRole=secondary:")
+			cmd.Println("  piiDeps, err := pii.Wire(ctx, pii.WireOptions{Registry: registry, Engine: engine,")
+			cmd.Println("  \tCheckpoints: store, Loader: store, Writer: true})")
+			break
+		}
+	}
+	for _, d := range domains {
 		// scaffold.ExportName and scaffold.GoPackageName, not a re-derived
 		// copy of the same casing transform: this line must name the exact
 		// package/func GenerateGo's files declare, or the suggestion could
 		// silently drift from the code it's describing.
 		pkg := scaffold.GoPackageName(d.Aggregate)
 		aggregateCtor := scaffold.ExportName(d.Aggregate)
-		cmd.Printf("\n  decider.Register(registry, %q, %s.%s())\n", d.Aggregate, pkg, aggregateCtor)
+		if len(d.PIIFields()) > 0 {
+			cmd.Printf("\n  decider.RegisterProtected(registry, %q, %s.%s(), %s.NewProtector(piiDeps))\n", d.Aggregate, pkg, aggregateCtor, pkg)
+		} else {
+			cmd.Printf("\n  decider.Register(registry, %q, %s.%s())\n", d.Aggregate, pkg, aggregateCtor)
+		}
 		for _, rm := range d.ReadModels {
 			ctor := "New" + scaffold.ExportName(rm.Collection)
 			cmd.Printf("  // read model %q needs a PocketBase migration for its collection --\n", rm.Collection)
