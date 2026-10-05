@@ -41,6 +41,14 @@ func IsRejection(err error) bool {
 	return errors.As(err, &r)
 }
 
+// ErrRevealRequired is what a decide returns (wrapped) when it read a stored
+// personal-data value that hasn't been decrypted yet (package pii's
+// Value.Get on a Pending value). It isn't a verdict: a shell with a
+// personal-data protector reveals the state's pending values in one batch
+// and runs decide again. It lives here rather than in package pii so the
+// registry can recognise it without importing pii (which imports decider).
+var ErrRevealRequired = errors.New("decider: decide read personal data that has not been revealed yet")
+
 // ErrDecideFault lets a Decide ADAPTER — not domain code — say that an
 // error is not a verdict: the decider did not reach a decision at all (the
 // JS runtime's execution timeout, a decider returning a malformed result).
