@@ -49,6 +49,44 @@ func IsReadModel(c Consumer) bool {
 	return owns
 }
 
+// OwnCheckpoints is an optional interface a Consumer implements to keep its
+// position somewhere other than the engine's checkpoint store. For a consumer
+// whose progress belongs to the process rather than the database: the
+// personal-data cache evictor empties a per-process cache, so a durable,
+// shared position would let one process skip an erasure its cache never saw.
+// Engine.Checkpoint reports this store's position for such a consumer.
+type OwnCheckpoints interface {
+	Checkpoints() CheckpointStore
+}
+
+// MemoryCheckpoints is a process-local CheckpointStore, for OwnCheckpoints.
+// A name never saved reads as Start.
+type MemoryCheckpoints struct {
+	Start int64
+
+	mu  sync.Mutex
+	pos map[string]int64
+}
+
+func (m *MemoryCheckpoints) Checkpoint(_ context.Context, name string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.pos[name]; ok {
+		return p, nil
+	}
+	return m.Start, nil
+}
+
+func (m *MemoryCheckpoints) SaveCheckpoint(_ context.Context, name string, position int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pos == nil {
+		m.pos = map[string]int64{}
+	}
+	m.pos[name] = position
+	return nil
+}
+
 // HeadSource is an optional interface a PollSource implements to report the
 // newest committed position, for each consumer's lag in positions.
 // *events.Store satisfies it. Without it that lag is unknown.
@@ -293,7 +331,27 @@ func (e *Engine) Names() []string {
 // checkpoint table holds the master's progress (see
 // NewEngineWithCheckpoints). 0 for a consumer that has never run.
 func (e *Engine) Checkpoint(ctx context.Context, name string) (int64, error) {
-	return e.checkpoints.Checkpoint(ctx, name)
+	e.mu.RLock()
+	store := e.checkpoints
+	for _, c := range e.consumers {
+		if c.Name() == name {
+			store = e.checkpointsFor(c)
+			break
+		}
+	}
+	e.mu.RUnlock()
+	return store.Checkpoint(ctx, name)
+}
+
+// checkpointsFor is the store c's position lives in: its own (see
+// OwnCheckpoints) or the engine's.
+func (e *Engine) checkpointsFor(c Consumer) CheckpointStore {
+	if o, ok := c.(OwnCheckpoints); ok {
+		if s := o.Checkpoints(); s != nil {
+			return s
+		}
+	}
+	return e.checkpoints
 }
 
 // Start runs the catch-up loop in the background until ctx is done:
@@ -401,7 +459,8 @@ func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer, head *int64) 
 		e.record(name, progress{checkpoint: pos, head: head, pendingSince: pendingSince, blocked: true})
 		return err
 	}
-	pos, err := e.checkpoints.Checkpoint(ctx, name)
+	checkpoints := e.checkpointsFor(c)
+	pos, err := checkpoints.Checkpoint(ctx, name)
 	if err != nil {
 		return fail(err)
 	}
@@ -422,7 +481,7 @@ func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer, head *int64) 
 					"consumer", name, "position", ev.Position, "error", err)
 				return fail(err)
 			}
-			if err := e.checkpoints.SaveCheckpoint(ctx, name, ev.Position); err != nil {
+			if err := checkpoints.SaveCheckpoint(ctx, name, ev.Position); err != nil {
 				return fail(err)
 			}
 			pos = ev.Position
