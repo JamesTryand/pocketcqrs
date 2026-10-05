@@ -99,6 +99,14 @@ func NewWriter(store *events.Store, queue *commandqueue.Store, registry *decider
 // on every decide attempt, including a post-crash replay, which would make
 // the replayed events NOT match the original and break the whole pre-commit
 // crash-safety argument this package depends on.
+//
+// Personal data is sealed here, before the row is written (Registry.Seal):
+// the queue never deletes rows, so plaintext written to it would outlive
+// both key destruction and erasure. Sealing also fixes each value's
+// ciphertext at intake, so a replayed decide reproduces byte-identical
+// events, and keeps the key-service round trip out of the single writer
+// loop. A key-service failure or an erased subject fails the enqueue, with
+// nothing queued.
 func (w *Writer) Enqueue(ctx context.Context, aggregate, aggregateID, command string, payload json.RawMessage, meta map[string]any) (id string, wait <-chan Outcome, err error) {
 	if w.MaxDepth > 0 {
 		depth, err := w.queue.Depth(ctx)
@@ -111,6 +119,11 @@ func (w *Writer) Enqueue(ctx context.Context, aggregate, aggregateID, command st
 	}
 	if _, ok := meta["now"]; !ok {
 		return "", nil, fmt.Errorf("batching: enqueue %s/%s/%s: meta must include \"now\", captured by the caller before enqueueing", aggregate, aggregateID, command)
+	}
+
+	payload, err = w.registry.Seal(ctx, aggregate, decider.Command{Name: command, Payload: payload})
+	if err != nil {
+		return "", nil, fmt.Errorf("batching: seal %s/%s/%s: %w", aggregate, aggregateID, command, err)
 	}
 
 	metaJSON, err := json.Marshal(meta)

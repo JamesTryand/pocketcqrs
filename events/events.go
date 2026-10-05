@@ -40,6 +40,26 @@ type NewEvent struct {
 	// See the versioning contract: append-only property evolution,
 	// transforms/upcasters between versions, new type for divergent shapes.
 	Version int64 `json:"version,omitempty"`
+	// Payload, when set (Data left empty), is a typed event payload the
+	// decider registry marshals into Data after its personal-data protector
+	// has encrypted it. A decider whose events carry personal data returns
+	// Payload because it cannot marshal fresh plaintext itself (it refuses
+	// to). Never stored: by the time an event reaches the store, Data is set.
+	Payload any `json:"-"`
+}
+
+// ErrUnencodedPayload: an event reached the store with a typed Payload the
+// decider registry never encoded. It bypassed the registry's personal-data
+// protector, so it is refused rather than written.
+var ErrUnencodedPayload = errors.New("events: event has a typed payload the decider registry did not encode")
+
+func checkEncoded(evts []NewEvent) error {
+	for _, ne := range evts {
+		if ne.Payload != nil {
+			return fmt.Errorf("%w (type %s)", ErrUnencodedPayload, ne.Type)
+		}
+	}
+	return nil
 }
 
 // Event is a committed event envelope.
@@ -298,6 +318,9 @@ func (s *Store) Append(ctx context.Context, aggregate, aggregateID string, expec
 	}
 	if len(evts) == 0 {
 		return nil, nil
+	}
+	if err := checkEncoded(evts); err != nil {
+		return nil, err
 	}
 
 	s.mu.Lock()

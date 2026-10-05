@@ -71,6 +71,11 @@ func (s *Store) CommitBatch(ctx context.Context, batch []DecidedCommand) ([]Batc
 	if len(batch) == 0 {
 		return nil, nil
 	}
+	for _, dc := range batch {
+		if err := checkEncoded(dc.NewEvents); err != nil {
+			return nil, err
+		}
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

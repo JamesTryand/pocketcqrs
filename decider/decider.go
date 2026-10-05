@@ -106,6 +106,10 @@ type Command struct {
 	Actor      string          `json:"actor,omitempty"`
 	Now        string          `json:"now,omitempty"`
 	Provenance string          `json:"provenance,omitempty"`
+
+	// reveals carries sealed personal-data values a Protector revealed for a
+	// second decide (WithReveals/Revealed). Unexported, so never serialized.
+	reveals map[revealKey]Reveal
 }
 
 // Decider is the write-side model of one aggregate type.
@@ -143,6 +147,11 @@ type erased struct {
 	decide   func(Command, any, map[string]any) ([]events.NewEvent, error)
 	evolve   func(any, events.Event) (any, error)
 	commands []string
+
+	// personal-data hooks, set by RegisterProtected; nil means none.
+	reveal  func(context.Context, any, Command) (any, Command, error)
+	protect func(context.Context, string, []events.NewEvent) ([]events.NewEvent, error)
+	seal    func(context.Context, Command) (json.RawMessage, error)
 }
 
 // Untyped is a type-erased decider contract, used by adapters whose state
@@ -331,18 +340,56 @@ func (r *Registry) DecideWithMeta(ctx context.Context, loader StreamLoader, aggr
 	}
 
 	newEvents, err := d.decide(cmd, state, meta)
+	// A decide that read personal data still sealed: reveal it (one batch)
+	// and decide once more. Pure decide makes the rerun safe; a second
+	// ErrRevealRequired, or one with no protector, is a fault, never a
+	// rejection — the command wasn't judged.
+	if err != nil && errors.Is(err, ErrRevealRequired) && d.reveal != nil {
+		state, cmd, err = d.reveal(ctx, state, cmd)
+		if err != nil {
+			return nil, 0, fmt.Errorf("decider: reveal %s/%s: %w", aggregate, id, err)
+		}
+		newEvents, err = d.decide(cmd, state, meta)
+	}
 	if err != nil {
-		if errors.Is(err, ErrDecideFault) {
+		if errors.Is(err, ErrDecideFault) || errors.Is(err, ErrRevealRequired) {
 			return nil, 0, err
 		}
 		return nil, 0, &RejectionError{Err: err}
 	}
 
+	if d.protect != nil && len(newEvents) > 0 {
+		if newEvents, err = d.protect(ctx, id, newEvents); err != nil {
+			return nil, 0, fmt.Errorf("decider: protect %s/%s: %w", aggregate, id, err)
+		}
+	}
 	for i := range newEvents {
+		if err := encodePayload(&newEvents[i]); err != nil {
+			return nil, 0, fmt.Errorf("decider: encode %s/%s %s: %w", aggregate, id, newEvents[i].Type, err)
+		}
 		newEvents[i].Metadata = mergeMeta(newEvents[i].Metadata, meta)
 	}
 
 	return newEvents, int64(len(stream)), nil
+}
+
+// encodePayload marshals a typed Payload into Data. It runs after the
+// protector, so a personal-data value is an envelope by now; one that isn't
+// (no protector registered, or one that missed a field) refuses to marshal,
+// and the command fails instead of writing plaintext.
+func encodePayload(ne *events.NewEvent) error {
+	if ne.Payload == nil {
+		return nil
+	}
+	if len(ne.Data) > 0 {
+		return errors.New("event sets both Data and Payload")
+	}
+	data, err := json.Marshal(ne.Payload)
+	if err != nil {
+		return err
+	}
+	ne.Data, ne.Payload = data, nil
+	return nil
 }
 
 // mergeMeta overlays extra onto the event's existing metadata (existing keys
