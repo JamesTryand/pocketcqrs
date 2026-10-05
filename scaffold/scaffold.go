@@ -25,6 +25,7 @@ package scaffold
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -115,6 +116,13 @@ type Field struct {
 	// it on Field instead of forcing a fifth place a mapper would have to
 	// know to look. Finding 4 / schema 2.3.0.
 	Subfields []Field `json:"subfields,omitempty"`
+	// PII marks personal data (schema field.pii), encrypted under the key of
+	// the data subject whose id is in the sibling field PIISubject. The Go
+	// target generates the encryption (package pii); the JS target refuses
+	// it (see Generate). Top-level fields only — the importer refuses pii
+	// inside subfields.
+	PII        bool   `json:"pii,omitempty"`
+	PIISubject string `json:"piiSubject,omitempty"`
 }
 
 // Derivation kinds.
@@ -579,7 +587,50 @@ func (d Domain) Events() []string {
 // ordinary function-file API, so they go through the same load check, the
 // same dry run and the same maintenance barrier as hand-written code —
 // generated code gets no shortcut.
+//
+// A domain with personal-data fields is refused: the JS target has no
+// encryption yet, and writing those fields as plain columns would imply a
+// protection that doesn't exist. Use GenerateGo for such a domain.
 func (d Domain) Generate() ([]File, error) {
+	if pii := d.PIIFields(); len(pii) > 0 {
+		return nil, fmt.Errorf("aggregate %q has personal-data (pii) fields %s; the JS target cannot encrypt them yet "+
+			"— generate Go (--lang go) instead", d.Aggregate, strings.Join(pii, ", "))
+	}
+	return d.generateJS()
+}
+
+// GenerateForDryRun is Generate without the personal-data refusal, for
+// scenario verification only: a scenario's values are the document's own
+// example data, decided in a throwaway store, so pii fields are carried as
+// plain fields there. Never save its output as functions.
+func (d Domain) GenerateForDryRun() ([]File, error) {
+	return d.generateJS()
+}
+
+// PIIFields names the domain's personal-data fields, "Owner.field", sorted.
+func (d Domain) PIIFields() []string {
+	var out []string
+	add := func(owner string, fs []Field) {
+		for _, f := range fs {
+			if f.PII {
+				out = append(out, owner+"."+f.Name)
+			}
+		}
+	}
+	for _, c := range d.Commands {
+		add(c.Name, c.Fields)
+		for _, e := range c.Events {
+			add(e.Name, e.Fields)
+		}
+	}
+	for _, rm := range d.ReadModels {
+		add(rm.Collection, rm.Fields)
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
+}
+
+func (d Domain) generateJS() ([]File, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}

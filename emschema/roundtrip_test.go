@@ -145,6 +145,14 @@ func TestGeneratedSliceLoads(t *testing.T) {
 	}
 	for _, d := range mapped.Domains {
 		files, err := d.Generate()
+		if len(d.PIIFields()) > 0 {
+			// the JS target can't encrypt yet, so it refuses rather than
+			// writing personal data as plain columns
+			if err == nil || !strings.Contains(err.Error(), "customerEmail") {
+				t.Fatalf("%s has pii; JS generation must refuse it by name, got %v", d.Aggregate, err)
+			}
+			files, err = d.GenerateForDryRun()
+		}
 		if err != nil {
 			t.Fatalf("%s did not generate: %v", d.Aggregate, err)
 		}

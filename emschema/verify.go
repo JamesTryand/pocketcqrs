@@ -89,7 +89,7 @@ func (v *verifier) indexSources(mapped *Mapped) error {
 	v.collectionOf = map[string]string{}
 	v.eventAggregate = map[string]string{}
 	for _, d := range mapped.Domains {
-		files, err := d.Generate()
+		files, err := d.GenerateForDryRun()
 		if err != nil {
 			return fmt.Errorf("generating %s for verification: %w", d.Aggregate, err)
 		}

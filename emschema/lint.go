@@ -98,6 +98,7 @@ func Lint(doc *Document) *Report {
 		lintCommandAuth(doc, id, c, r)
 	}
 
+	checkPII(doc, r)
 	notePII(doc, r)
 	noteLossy(doc, r)
 	sort.Strings(r.Errors)
@@ -342,25 +343,19 @@ func lintCommandAuth(doc *Document, id string, c Command, r *Report) {
 	}
 }
 
-// notePII records PII flags that this project cannot carry.
-//
-// A PII flag silently dropped is the worst kind of loss this format can
-// suffer, because the flag exists precisely so a generator can treat the
-// field carefully. //@schema has no place for it, so the honest answer is to
-// name every one.
+// notePII names every pii field and what happens to it, so an operator
+// sees the protection the import implies. The Go target encrypts each one
+// under its piiSubject's key (package pii); the JS target refuses a document
+// with any — a recorded-but-unenforced flag would imply a protection that
+// doesn't exist.
 func notePII(doc *Document, r *Report) {
 	var flagged []string
 	walk := func(owner string, fields []Field) {
-		var recurse func(prefix string, fs []Field)
-		recurse = func(prefix string, fs []Field) {
-			for _, f := range fs {
-				if f.PII {
-					flagged = append(flagged, owner+"."+prefix+f.Name)
-				}
-				recurse(prefix+f.Name+".", f.Subfields)
+		for _, f := range fields {
+			if f.PII {
+				flagged = append(flagged, owner+"."+f.Name)
 			}
 		}
-		recurse("", fields)
 	}
 	for id, e := range doc.Events {
 		walk("event "+id, e.Fields)
@@ -373,8 +368,8 @@ func notePII(doc *Document, r *Report) {
 	}
 	if len(flagged) > 0 {
 		sort.Strings(flagged)
-		r.lossyf("%d field(s) are marked pii and NOTHING here carries that flag: %s. "+
-			"They are stored as ordinary columns; treat them accordingly",
+		r.warnf("%d field(s) are marked pii: %s. With --lang go they are encrypted under their piiSubject's "+
+			"key (crypto-shredding: erasing the subject destroys the key); --lang js refuses them for now",
 			len(flagged), strings.Join(flagged, ", "))
 	}
 }

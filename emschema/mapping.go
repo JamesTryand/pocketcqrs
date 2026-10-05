@@ -322,6 +322,10 @@ func (m *mapper) fields(owner string, in []Field) []scaffold.Field {
 			Name:       scaffold.SanitizeName(f.Name),
 			Type:       FoldType(f),
 			Derivation: m.mapDerivation(f.Derivation),
+			PII:        f.PII,
+		}
+		if f.PII {
+			sf.PIISubject = scaffold.SanitizeName(f.PIISubject)
 		}
 		if f.Derivation != nil && f.Derivation.Kind == DerivationGroupBy {
 			sf.Subfields = m.groupBySubfields(owner, f)

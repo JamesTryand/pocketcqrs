@@ -102,13 +102,18 @@ func TestWorkedExampleLintsClean(t *testing.T) {
 		t.Error("a document with chapters, hotspots, screens and pii must report what is lost")
 	}
 	var sawPII bool
-	for _, l := range rep.Lossy {
+	for _, l := range rep.Warnings {
 		if strings.Contains(l, "pii") && strings.Contains(l, "customerEmail") {
 			sawPII = true
 		}
 	}
 	if !sawPII {
-		t.Errorf("the pii flag on customerEmail must be named, not just counted: %v", rep.Lossy)
+		t.Errorf("the pii flag on customerEmail must be named, not just counted: %v", rep.Warnings)
+	}
+	for _, l := range rep.Lossy {
+		if strings.Contains(l, "customerEmail") && strings.Contains(l, "pii") {
+			t.Errorf("pii is carried now, not lost: %s", l)
+		}
 	}
 }
 

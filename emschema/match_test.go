@@ -69,6 +69,10 @@ func TestMatchFilterRulesRejected(t *testing.T) {
 				rm.Fields[1].PII = true
 				rm.Fields[1].PIISubject = "entryId"
 				doc.ReadModels["time-entries"] = rm
+				ev := doc.Events["time-logged"]
+				ev.Fields[1].PII = true
+				ev.Fields[1].PIISubject = "entryId"
+				doc.Events["time-logged"] = ev
 			}
 			_, err := Map(doc, Options{})
 			if err == nil {
