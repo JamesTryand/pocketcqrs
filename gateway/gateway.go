@@ -499,7 +499,7 @@ func actorMeta(re *core.RequestEvent, cfg Config) map[string]any {
 }
 
 // hasPIIEnvelope reports whether any object anywhere in payload has a
-// property named "$pii" (compared after JSON unescaping, so "$pii" is
+// property named "$pii" (compared after JSON unescaping, so "\u0024pii" is
 // caught too). A body that doesn't parse isn't judged here; dispatch reports
 // it.
 func hasPIIEnvelope(payload []byte) bool {

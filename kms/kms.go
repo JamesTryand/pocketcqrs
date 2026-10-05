@@ -152,7 +152,9 @@ type UnavailableError struct {
 	Err error
 }
 
-func (e *UnavailableError) Error() string { return "kms: " + e.Op + ": facade unreachable: " + e.Err.Error() }
+func (e *UnavailableError) Error() string {
+	return "kms: " + e.Op + ": facade unreachable: " + e.Err.Error()
+}
 func (e *UnavailableError) Unwrap() error { return e.Err }
 
 // IsUnavailable reports whether err means the facade couldn't be used right

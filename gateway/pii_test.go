@@ -100,7 +100,7 @@ func TestGatewayRefusesAnEnvelopeAnywhere(t *testing.T) {
 	for _, body := range []string{
 		`{"email":{"$pii":{"s":"s1","c":"vault:v1:x"}}}`,
 		`{"people":[{"email":{"$pii":{"s":"s1","c":"x"}}}]}`,
-		`{"email":{"$pii":{"s":"s1","c":"x"}}}`, // escaped key
+		`{"email":{"\u0024pii":{"s":"s1","c":"x"}}}`, // escaped key: \u0024 is $
 		`{"$pii":{"s":"s1","c":"x"},"other":1}`,
 	} {
 		status, _, resp := postProbe(t, srv, "p1", "Ok", body)
