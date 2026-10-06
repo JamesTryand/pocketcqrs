@@ -51,12 +51,13 @@ Decisions taken on the document's behalf (10):
   ! event "order-shipped" declares no fields; generated as carrying no payload
   ! command "notify-shipping-partner" has no `aggregate` tag; using the supplied override "shipmentNotice"
 Not carried across (6):
-  – 1 field(s) are marked pii and NOTHING here carries that flag: event order-placed.customerEmail
   – slice status is board state and is not preserved (done×2, inProgress×1, planned×1)
 ```
 
-Read it. A folded type, a defaulted key or a dropped PII flag that nobody is
-told about is the failure mode this whole layer exists to avoid.
+Read it. A folded type, a defaulted key or a dropped protection that nobody is
+told about is the failure mode this whole layer exists to avoid. (A `pii` field
+is never dropped: the Go target encrypts it, and the JS target refuses the
+aggregate. See [Personal data](personal-data.md).)
 
 ### Untagged aggregates are refused, not guessed
 
@@ -125,8 +126,11 @@ Ten schema types fold onto five `//@schema` types:
 | anything with `cardinality: "list"` | `json` |
 | anything with `subfields` | `json` |
 
-`idAttribute: true` names a read model's row key. `pii` and `optional` have
-no home in `//@schema` and are reported as lossy.
+`idAttribute: true` names a read model's row key. `optional` has no home in
+`//@schema` and is reported as lossy. `pii` (with its `piiSubject`) is carried
+by the Go target and refused by the JS target; see [Personal data](personal-data.md).
+`match` filters (schema 3.1.0) are generated as search indexes for the Go
+target, described on the same page.
 
 ## Export
 

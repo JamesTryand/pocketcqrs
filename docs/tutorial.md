@@ -67,8 +67,7 @@ Decisions taken on the document's behalf (10):
   ! event "shipment-notified" declares no fields; generated as carrying no payload
   ! read model order-summary.orderId is a uuid and becomes text (no uuid column type here)
   ! read model "pending-shipments" marks no field with idAttribute; keying rows on "orderId" (the aggregate id)
-Not carried across (6):
-  – 1 field(s) are marked pii and NOTHING here carries that flag: event order-placed.customerEmail. They are stored as ordinary columns; treat them accordingly
+Not carried across (5):
   – 1 chapter(s) are design-time grouping with no runtime concept here
   – 1 actor lane(s) are design-time notation with no runtime concept here
   – 1 hotspot(s) are open questions about the model; they are carried into the domain doc, not into code
@@ -93,13 +92,16 @@ example fields didn't line up; only the failure is load-bearing here)
 Read every line — that is the point of the report, not a formality. Two
 things worth slowing down on:
 
-- **The PII line matters more than it looks.** `order-placed.customerEmail`
-  is marked `pii` in the source document. This project has no runtime PII
-  flag yet (`//@pii` is deliberately unbuilt — see `NEEDS.md`), so the
-  generated `orderId`/`customerEmail`/`items` land in the log and in
-  `//@schema` as ordinary fields. The report telling you this, by name, is
-  the whole reason the report exists: a silently dropped protection is worse
-  than an absent one nobody claimed.
+- **The PII line matters more than it looks.** Since schema 3.0.0 the worked
+  example marks `order-placed.customerEmail` as `pii`, with `customerId` as its
+  data subject. The Go target encrypts it under that subject's key (see
+  [Personal data](personal-data.md)). The JS target can't encrypt yet, so it
+  **refuses** the `order` aggregate rather than write an email into the log as
+  plain text. With today's code, the import above stops with
+  `aggregate "order" has personal-data (pii) fields ...`. Use `--lang go` for
+  this document (see [the Go guide](go-guide.md)) until the JS target supports
+  personal data. A protection that is silently dropped is worse than one nobody
+  claimed, so the importer refuses instead of guessing.
 - **The failing scenario is not a bug in the import.** `order-summary`
   expects a `status` field that nothing in the document ever assigns —
   the generated projection can't invent a rule the document doesn't state.

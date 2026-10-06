@@ -5,6 +5,38 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ## Unreleased
 
+### Added
+
+- **Personal data, crypto-shredded** (the port of dotnetcqrs's PII support; see
+  [docs/personal-data.md](docs/personal-data.md)). With `schema import --lang go`, a `pii` field is
+  encrypted under its data subject's key (the key-management facade) before it reaches the log.
+  Erasing the subject (`dataSubject/{id}/EraseSubject`) destroys the key, so every copy becomes
+  unreadable. The protections:
+  - `$pii` envelopes from callers are refused with `400`; an erased subject is `410`.
+  - The batching queue only ever holds sealed values.
+  - Without its protector, a command fails rather than store plaintext.
+  - `Decide` sees plaintext through a reveal on demand, and stays pure.
+  - New packages: `kms`, `pii`, `queryroute`, `searchindex` and `match`.
+- **Generated read routes**: `GET /api/cqrs/rm/{collection}` per read model.
+  - Access: `requiredRole`, plus optional self-access (a person reads their own rows).
+  - PII is decrypted per page; erased values read `{"$redacted":true}`.
+  - Collections holding personal data are locked to superusers in PocketBase's own record API.
+- **Search** (`match` filters, schema 3.1.0/3.1.1), indexed in `search.db`:
+  - blind HMAC indexes for personal data;
+  - normalizers pinned byte for byte with dotnetcqrs;
+  - erasure purge, and key rotation without downtime.
+
+### Changed
+
+- **Schema 3.1.1** (from 2.7.0). 3.0.0 is breaking for documents: a `pii` field now needs
+  `piiSubject`.
+- **The JS target refuses a domain with `pii` fields** instead of writing them as ordinary columns.
+  The worked example now has one, so `schema import` of it needs `--lang go` for now.
+- `events.NewEvent` gains `Payload` (typed, encoded by the registry after its protector runs). The
+  store refuses one that wasn't encoded.
+- `consumers.OwnCheckpoints` lets a consumer keep its position somewhere other than the engine's
+  store.
+
 ## v0.13.0 — the health/telemetry contract 1.0
 
 The cross-stack health/telemetry contract 1.0, identical to dotnetcqrs v0.17.0: an ops port with
