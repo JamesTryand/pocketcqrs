@@ -5,6 +5,23 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ## Unreleased
 
+## v0.14.0 — personal data, crypto-shredded
+
+The port of dotnetcqrs's personal-data support:
+- `pii` fields are encrypted per data subject through the key-management facade, before they reach
+  the log;
+- erasure destroys the key;
+- generated read routes reveal PII per page;
+- `match` filters become search indexes, blind for personal data.
+
+It shares dotnetcqrs's wire format, status codes and pinned normalizers, so stored values and
+hashed indexes agree across stacks. **Breaking for documents:** schema 3.1.1, where a `pii` field
+needs `piiSubject`. **The JS target refuses `pii`** until it gets its own support, so the worked
+example imports with `--lang go`. Not yet run against a live facade: only the in-memory client and
+an HTTP stand-in. Released on `go test ./...`, `go vet` and the smoke
+suite on Windows (BLUEFAN), where the LiteFS/Litestream replication checks skip (Linux-only);
+nothing in this release touches replication.
+
 ### Added
 
 - **Personal data, crypto-shredded** (the port of dotnetcqrs's PII support; see
