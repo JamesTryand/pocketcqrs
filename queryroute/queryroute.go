@@ -41,6 +41,7 @@ import (
 
 	"github.com/jamestryand/pocketcqrs/kms"
 	"github.com/jamestryand/pocketcqrs/pii"
+	"github.com/jamestryand/pocketcqrs/searchindex"
 )
 
 // PathPrefix is where every read-model route lives.
@@ -63,6 +64,9 @@ type Spec struct {
 	// SelfSubject is the one subject column every pii column shares, when
 	// there is one; self-access is only possible then.
 	SelfSubject string
+	// Match is the read model's match filters (schema 3.1.0): each Param is
+	// a search, answered from search.db, even over a pii column.
+	Match []searchindex.Field
 }
 
 // Config is the host's part.
@@ -75,6 +79,9 @@ type Config struct {
 	// SubjectOf returns the caller's own data-subject id ("" for none). nil
 	// (the default) means no self-access.
 	SubjectOf func(auth *core.Record) string
+	// Indexes holds each read model's registered search (searchindex.Register),
+	// by collection; required for a spec with Match filters.
+	Indexes map[string]*searchindex.Index
 	// Logger may be nil.
 	Logger func(msg string, args ...any)
 }
@@ -113,6 +120,9 @@ func (s Spec) validate(cfg Config) error {
 	}
 	if len(s.PII) > 0 && (cfg.PII == nil || cfg.PII.KMS == nil) {
 		return fmt.Errorf("queryroute %s: has personal-data columns but no pii.Deps (call pii.Wire)", s.Collection)
+	}
+	if len(s.Match) > 0 && cfg.Indexes[s.Collection] == nil {
+		return fmt.Errorf("queryroute %s: has match filters but no registered search index (searchindex.Register)", s.Collection)
 	}
 	if len(s.RequiredRole) > 0 && cfg.ResolveOwnRole == nil {
 		return fmt.Errorf("queryroute %s: declares requiredRole %v but no ResolveOwnRole hook", s.Collection, s.RequiredRole)
@@ -188,9 +198,53 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 		}
 	}
 
-	filter, params, sortExpr, page, perPage, err := parseQuery(re.Request.URL.Query(), spec)
+	query := re.Request.URL.Query()
+	// match filters first: each is a search in search.db, narrowing the page
+	// to the row keys every one of them found
+	var keys []string
+	searched := false
+	for _, f := range spec.Match {
+		terms, ok := query[f.Param]
+		if !ok {
+			continue
+		}
+		delete(query, f.Param)
+		found, err := cfg.Indexes[spec.Collection].Search(re.Request.Context(), f, terms[0])
+		var bad *searchindex.BadTermError
+		switch {
+		case errors.As(err, &bad):
+			return fail(re, http.StatusBadRequest, bad.Msg)
+		case errors.Is(err, searchindex.ErrTooBroad):
+			return fail(re, http.StatusBadRequest, fmt.Sprintf("'%s' matches too many rows; narrow the search", f.Param))
+		case kms.IsUnavailable(err):
+			re.Response.Header().Set("Retry-After", "1")
+			return fail(re, http.StatusServiceUnavailable, "search is unavailable: the key service could not hash the term")
+		case err != nil:
+			return fail(re, http.StatusInternalServerError, "search failed: "+err.Error())
+		}
+		if !searched {
+			keys, searched = found, true
+		} else {
+			keys = intersect(keys, found)
+		}
+	}
+	page, perPage := 1, defaultPerPage
+	if searched && len(keys) == 0 {
+		return re.JSON(http.StatusOK, map[string]any{"items": []map[string]any{}, "page": page, "perPage": perPage})
+	}
+
+	filter, params, sortExpr, page, perPage, err := parseQuery(query, spec)
 	if err != nil {
 		return fail(re, http.StatusBadRequest, err.Error())
+	}
+	if searched {
+		or := make([]string, len(keys))
+		for i, k := range keys {
+			p := "k" + strconv.Itoa(i)
+			or[i] = spec.Key + " = {:" + p + "}"
+			params[p] = k
+		}
+		filter = append(filter, "("+strings.Join(or, " || ")+")")
 	}
 	if selfOnly != "" {
 		filter = append(filter, spec.SelfSubject+" = {:self}")
@@ -266,6 +320,20 @@ func queueReveal(buf *pii.Buffer, row map[string]any, col, cell string) error {
 		row[col] = v
 	})
 	return nil
+}
+
+func intersect(a, b []string) []string {
+	in := make(map[string]bool, len(b))
+	for _, k := range b {
+		in[k] = true
+	}
+	var out []string
+	for _, k := range a {
+		if in[k] {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 func hasRole(roles []string, role string) bool {
