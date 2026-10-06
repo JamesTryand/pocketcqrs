@@ -151,6 +151,20 @@ func checkReadModelPII(doc *Document, r *Report, id string, rm ReadModel) {
 			}
 		}
 	}
+	subjects := map[string]bool{}
+	for _, f := range rm.Fields {
+		if f.PII {
+			subjects[f.PIISubject] = true
+		}
+	}
+	if len(subjects) > 0 && len(rm.RequiredRole) == 0 {
+		r.warnf("read model %q holds personal data but declares no requiredRole; its read route serves it to "+
+			"nobody but superusers (and, with the self-access hook, each subject for their own rows) — declare a role", id)
+	}
+	if len(subjects) > 1 {
+		r.warnf("read model %q holds personal data of more than one subject per row; self-access (a person "+
+			"reading their own rows) is unavailable for it, since a row would also carry someone else's data", id)
+	}
 	for _, filt := range rm.Filters {
 		if f, ok := own[filt.Field]; ok && f.PII && filt.Kind == FilterDateRange {
 			r.errorf("read model %q: dateRange filter %q is over pii field %q; an encrypted column cannot be compared in SQL", id, filt.Param, f.Name)

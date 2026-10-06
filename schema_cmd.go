@@ -355,6 +355,10 @@ func printGoWiringSuggestions(cmd *cobra.Command, domains []scaffold.Domain) {
 			break
 		}
 	}
+	cmd.Println("\n  // read routes (GET /api/cqrs/rm/{collection}), inside app.OnServe, with one")
+	cmd.Println("  // config: ResolveOwnRole as for commands; SubjectOf (optional) lets a person")
+	cmd.Println("  // read their own rows; PII only when a read model holds personal data:")
+	cmd.Println("  readCfg := queryroute.Config{PII: &piiDeps, ResolveOwnRole: ownRole, SubjectOf: nil}")
 	for _, d := range domains {
 		// scaffold.ExportName and scaffold.GoPackageName, not a re-derived
 		// copy of the same casing transform: this line must name the exact
@@ -372,6 +376,7 @@ func printGoWiringSuggestions(cmd *cobra.Command, domains []scaffold.Domain) {
 			cmd.Printf("  // read model %q needs a PocketBase migration for its collection --\n", rm.Collection)
 			cmd.Println("  // see migrations/1754200000_tasks_collection.go for the shape.")
 			cmd.Printf("  engine.Register(%s.%s(app))\n", pkg, ctor)
+			cmd.Printf("  if err := queryroute.Register(se, %s.%s, readCfg); err != nil { return err }\n", pkg, scaffold.QuerySpecName(rm))
 		}
 		for _, r := range d.Reactors {
 			reactorCtor := scaffold.ExportName(r.Name)

@@ -60,6 +60,33 @@ func TestPIIDomainGeneratesAProtectorAndEnvelopeColumns(t *testing.T) {
 	if strings.Contains(proj, `[]string{"email", "name"}`) {
 		t.Errorf("the email column must not be merged as a plain value:\n%s", proj)
 	}
+	q := strings.Join(strings.Fields(src["customers_query.go"]), " ")
+	for _, want := range []string{
+		"var CustomersQuery = queryroute.Spec{",
+		`Columns: []string{"customerId", "email", "name"}`,
+		`PII: map[string]string{"email": "customerId"}`,
+		`SelfSubject: "customerId"`,
+		"nobody but superusers", // no requiredRole declared: closed by default, and said so
+	} {
+		if !strings.Contains(q, want) {
+			t.Errorf("query spec is missing %q:\n%s", want, src["customers_query.go"])
+		}
+	}
+}
+
+func TestQuerySpecOmitsSelfAccessForMixedSubjectsAndCarriesTheRole(t *testing.T) {
+	d := piiDomain()
+	rm := &d.ReadModels[0]
+	rm.RequiredRole = []string{"support"}
+	rm.Fields = append(rm.Fields, Field{Name: "courierId", Type: "text"},
+		Field{Name: "courierPhone", Type: "text", PII: true, PIISubject: "courierId"})
+	src := queryGo("customer", *rm)
+	if strings.Contains(src, "SelfSubject") {
+		t.Errorf("two subjects per row: no self-access:\n%s", src)
+	}
+	if !strings.Contains(src, `RequiredRole: []string{"support"}`) {
+		t.Errorf("requiredRole must reach the spec:\n%s", src)
+	}
 }
 
 func TestPIIConflictAcrossEventsIsRefused(t *testing.T) {

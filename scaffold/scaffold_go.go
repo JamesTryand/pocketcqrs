@@ -298,6 +298,14 @@ func (d Domain) GenerateGo() ([]GoFile, error) {
 		files = append(files, GoFile{Name: rm.Collection + ".go", Source: src})
 	}
 
+	for _, rm := range d.ReadModels {
+		src, err := formatGo(queryGo(pkg, rm))
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, GoFile{Name: rm.Collection + "_query.go", Source: src})
+	}
+
 	for _, r := range d.Reactors {
 		src, err := formatGo(d.reactorGo(pkg, r))
 		if err != nil {
@@ -847,6 +855,80 @@ func writeProjectionPlainApply(b *strings.Builder, rm ReadModel, on []string, ty
 	}
 	b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n")
 	b.WriteString("}\n")
+}
+
+// QuerySpecName is the generated queryroute.Spec variable for a read model.
+func QuerySpecName(rm ReadModel) string { return ExportName(rm.Collection) + "Query" }
+
+// queryGo emits a read model's route spec (package queryroute serves it):
+// its columns, which are personal data and under whose subject, its
+// requiredRole, and the shared subject column self-access needs.
+func queryGo(pkg string, rm ReadModel) string {
+	cols := []string{rm.Key}
+	seen := map[string]bool{rm.Key: true}
+	piiSubject := map[string]string{}
+	for _, f := range rm.Fields {
+		if !seen[f.Name] {
+			seen[f.Name] = true
+			cols = append(cols, f.Name)
+		}
+		if f.PII {
+			piiSubject[f.Name] = f.PIISubject
+		}
+	}
+	self := ""
+	for _, subj := range piiSubject {
+		if self == "" {
+			self = subj
+		} else if subj != self {
+			self = "" // several subjects: a row could hold someone else's data, so no self-access
+			break
+		}
+	}
+	if self != "" && !seen[self] {
+		self = ""
+	}
+
+	name := QuerySpecName(rm)
+	var b strings.Builder
+	fmt.Fprintf(&b, "package %s\n\n", pkg)
+	b.WriteString("import \"github.com/jamestryand/pocketcqrs/queryroute\"\n\n")
+	fmt.Fprintf(&b, "// %s is the generated read route for %q: GET %s%s.\n", name, rm.Collection, "/api/cqrs/rm/", rm.Collection)
+	b.WriteString("// Register it once the app serves (it fails rather than serve a\n// misconfigured route):\n//\n")
+	fmt.Fprintf(&b, "//\tqueryroute.Register(se, %s, readCfg)\n", name)
+	if len(piiSubject) > 0 {
+		b.WriteString("//\n// It holds personal data: values are revealed per page, erased ones read\n")
+		b.WriteString("// {\"$redacted\":true}, pii columns can't be filtered or sorted on, and\n")
+		b.WriteString("// registering locks PocketBase's own record API for the collection to\n// superusers.")
+		if len(rm.RequiredRole) == 0 {
+			b.WriteString(" No requiredRole is declared, so nobody but superusers (and,\n// with SubjectOf, each subject for their own rows) can read it.")
+		}
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "var %s = queryroute.Spec{\n", name)
+	fmt.Fprintf(&b, "\tCollection: %q,\n", rm.Collection)
+	fmt.Fprintf(&b, "\tKey:        %q,\n", rm.Key)
+	fmt.Fprintf(&b, "\tColumns:    []string{%s},\n", quotedList(cols))
+	if len(piiSubject) > 0 {
+		keys := make([]string, 0, len(piiSubject))
+		for k := range piiSubject {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		pairs := make([]string, len(keys))
+		for i, k := range keys {
+			pairs[i] = fmt.Sprintf("%q: %q", k, piiSubject[k])
+		}
+		fmt.Fprintf(&b, "\tPII:        map[string]string{%s},\n", strings.Join(pairs, ", "))
+	}
+	if len(rm.RequiredRole) > 0 {
+		fmt.Fprintf(&b, "\tRequiredRole: []string{%s},\n", quotedList(rm.RequiredRole))
+	}
+	if self != "" {
+		fmt.Fprintf(&b, "\tSelfSubject: %q,\n", self)
+	}
+	b.WriteString("}\n")
+	return b.String()
 }
 
 // writeColumnMerge copies payload fields into same-named columns. A

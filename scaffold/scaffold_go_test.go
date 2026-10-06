@@ -20,11 +20,14 @@ func TestGenerateGoShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 3 {
-		t.Fatalf("expected a decider, a projection and a reactor, got %d files", len(files))
+	if len(files) != 4 {
+		t.Fatalf("expected a decider, a projection, its read route and a reactor, got %d files", len(files))
 	}
 
-	dec, proj, react := files[0], files[1], files[2]
+	dec, proj, query, react := files[0], files[1], files[2], files[3]
+	if query.Name != "tickets_query.go" || !strings.Contains(query.Source, "var TicketsQuery = queryroute.Spec{") {
+		t.Errorf("read route spec: %q: %s", query.Name, query.Source)
+	}
 	if dec.Name != "ticket.go" {
 		t.Errorf("decider file name: %q", dec.Name)
 	}
