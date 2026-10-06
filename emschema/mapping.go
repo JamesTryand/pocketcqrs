@@ -94,6 +94,7 @@ type mapper struct {
 	// scenario's `given` into a net "does the stream currently exist"
 	// verdict rather than just scanning for own-stream presence. Finding 3.
 	eventEndsStream map[string]bool
+	prefixMin       map[string]int // hashed prefix filters: minPrefixLength per (read model, field, normalizer)
 }
 
 func (m *mapper) domain(name string) *scaffold.Domain {
@@ -516,7 +517,9 @@ func (m *mapper) mapFilters(id string, rm ReadModel) []scaffold.ReadModelFilter 
 	out := make([]scaffold.ReadModelFilter, 0, len(rm.Filters))
 	for _, filt := range rm.Filters {
 		if filt.Kind == FilterMatch {
-			m.checkMatchFilter(id, filt, byName)
+			if mf, ok := m.checkMatchFilter(id, filt, byName); ok {
+				out = append(out, mf)
+			}
 			continue
 		}
 		if filt.Kind != FilterDateRange {
@@ -548,12 +551,12 @@ func (m *mapper) mapFilters(id string, rm ReadModel) []scaffold.ReadModelFilter 
 // a generator (3.1.0: "not enforced here"), the same rules dotnetcqrs's
 // mapper enforces, so a document that imports on one stack imports on the
 // other. It then reports the filter lossy: nothing here generates search yet.
-func (m *mapper) checkMatchFilter(id string, filt ReadModelFilter, fields map[string]Field) {
+func (m *mapper) checkMatchFilter(id string, filt ReadModelFilter, fields map[string]Field) (scaffold.ReadModelFilter, bool) {
 	f, ok := fields[scaffold.SanitizeName(filt.Field)]
 	if !ok {
 		m.rep.errorf("read model %q: filter %q names field %q, which is not one of this read model's own fields",
 			id, filt.Param, filt.Field)
-		return
+		return scaffold.ReadModelFilter{}, false
 	}
 	bad := false
 	switch filt.Mode {
@@ -590,10 +593,39 @@ func (m *mapper) checkMatchFilter(id string, filt ReadModelFilter, fields map[st
 		bad = true
 	}
 	if bad {
-		return
+		return scaffold.ReadModelFilter{}, false
 	}
-	m.rep.lossyf("read model %q: match filter %q (%s over %q) is not generated yet; the read model cannot be searched by it",
-		id, filt.Param, filt.Mode, filt.Field)
+	if f.PII && filt.Mode == MatchModePrefix {
+		m.rep.warnf("read model %q: match filter %q is a prefix search over personal data: anyone who can call the key "+
+			"service's hmac endpoint can confirm a guessed first %d characters, then extend the guess one at a time — "+
+			"prefix is only as private as access to hmac is", id, filt.Param, *filt.MinPrefixLength)
+	}
+	if f.PII && filt.Mode == MatchModeContains {
+		m.rep.warnf("read model %q: match filter %q (contains over personal data) keeps a normalized PLAINTEXT index at "+
+			"rest in search.db; that file must be excluded from backups (it is rebuilt from the log)", id, filt.Param)
+	}
+	out := scaffold.ReadModelFilter{Param: filt.Param, Field: scaffold.SanitizeName(filt.Field), Kind: FilterMatch,
+		Mode: filt.Mode, Normalize: filt.Normalize}
+	if filt.MinPrefixLength != nil {
+		out.MinPrefixLength = *filt.MinPrefixLength
+	} else if filt.Mode == MatchModePrefix {
+		out.MinPrefixLength = 3 // the schema's default
+	}
+	// two hashed prefix filters on one field and normalizer share one index,
+	// so they must agree on where prefixes start
+	key := id + "|" + out.Field + "|" + out.Normalize
+	if f.PII && filt.Mode == MatchModePrefix {
+		if m.prefixMin == nil {
+			m.prefixMin = map[string]int{}
+		}
+		if prev, seen := m.prefixMin[key]; seen && prev != out.MinPrefixLength {
+			m.rep.errorf("read model %q: match filters on %q share one hashed prefix index but declare minPrefixLength %d and %d",
+				id, filt.Field, prev, out.MinPrefixLength)
+			return scaffold.ReadModelFilter{}, false
+		}
+		m.prefixMin[key] = out.MinPrefixLength
+	}
+	return out, true
 }
 
 // readModelKey picks the row key. idAttribute is a gift here: it names the

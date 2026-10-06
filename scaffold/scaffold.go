@@ -246,7 +246,16 @@ type ReadModelFilter struct {
 	Field   string   `json:"field"`
 	Kind    string   `json:"kind"`
 	Presets []string `json:"presets,omitempty"`
+	// match filters (schema 3.1.0): Mode exact|prefix|contains, Normalize
+	// ("" = caseFold), MinPrefixLength in code points (prefix only).
+	Mode            string `json:"mode,omitempty"`
+	Normalize       string `json:"normalize,omitempty"`
+	MinPrefixLength int    `json:"minPrefixLength,omitempty"`
 }
+
+// FilterMatch is a searchable field (schema 3.1.0), served from search.db
+// by package searchindex.
+const FilterMatch = "match"
 
 // Reactor maps events to a command on another aggregate — the automation
 // shape. The target id is derived from the source event so that delivery
@@ -451,6 +460,16 @@ func (d Domain) Validate() error {
 				add("read model %q: a filter is missing its param name", rm.Collection)
 			}
 			switch filt.Kind {
+			case FilterMatch:
+				if !fieldNames[filt.Field] {
+					add("read model %q: match filter %q names field %q, which is not one of this read model's own fields",
+						rm.Collection, filt.Param, filt.Field)
+				}
+				switch filt.Mode {
+				case "exact", "prefix", "contains":
+				default:
+					add("read model %q: match filter %q has mode %q; want exact, prefix or contains", rm.Collection, filt.Param, filt.Mode)
+				}
 			case FilterDateRange:
 				if filt.Field == "" {
 					add("read model %q: filter %q is missing its field name", rm.Collection, filt.Param)

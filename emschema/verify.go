@@ -12,6 +12,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
+	"github.com/jamestryand/pocketcqrs/match"
 	"github.com/jamestryand/pocketcqrs/scaffold"
 )
 
@@ -551,6 +552,38 @@ func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, 
 // (schema 2.6.0), resolved by the caller (runViewScenario) before this is
 // called. Passed explicitly rather than read from nowFunc() here, so this
 // function has no live-clock dependency of its own to reason about.
+// applyMatch is a match filter's meaning, applied to plain rows: both sides
+// normalized by the filter's rule, then exact, prefix or contains. The same
+// result search.db gives, without an index (a dry run holds every value in
+// the clear).
+func applyMatch(filt ReadModelFilter, rows map[string]map[string]any, term string) (map[string]map[string]any, error) {
+	want, err := match.Normalize(filt.Normalize, term)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]map[string]any{}
+	for k, row := range rows {
+		v, _ := row[filt.Field].(string)
+		got, err := match.Normalize(filt.Normalize, v)
+		if err != nil {
+			return nil, err
+		}
+		keep := false
+		switch filt.Mode {
+		case MatchModeExact:
+			keep = got == want
+		case MatchModePrefix:
+			keep = strings.HasPrefix(got, want)
+		case MatchModeContains:
+			keep = strings.Contains(got, want)
+		}
+		if keep {
+			out[k] = row
+		}
+	}
+	return out, nil
+}
+
 func filterByFilters(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage, ref time.Time) (map[string]map[string]any, json.RawMessage, string) {
 	if len(rm.Filters) == 0 || len(queryParams) == 0 {
 		return rows, queryParams, ""
@@ -572,6 +605,18 @@ func filterByFilters(rm ReadModel, rows map[string]map[string]any, queryParams j
 		}
 		delete(remaining, filt.Param)
 
+		if filt.Kind == FilterMatch {
+			var term string
+			if err := json.Unmarshal(raw, &term); err != nil {
+				return nil, nil, fmt.Sprintf("match filter %q's queryParams value must be a string, got %s", filt.Param, raw)
+			}
+			kept, err := applyMatch(filt, filtered, term)
+			if err != nil {
+				return nil, nil, fmt.Sprintf("match filter %q: %v", filt.Param, err)
+			}
+			filtered = kept
+			continue
+		}
 		if filt.Kind != FilterDateRange {
 			return nil, nil, fmt.Sprintf("filter %q has kind %q, which this verifier does not know how to apply",
 				filt.Param, filt.Kind)

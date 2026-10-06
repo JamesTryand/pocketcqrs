@@ -24,6 +24,10 @@ func piiDomain() Domain {
 			Collection: "customers", Key: "customerId",
 			Fields: []Field{{Name: "customerId", Type: "text"}, email, {Name: "name", Type: "text"}},
 			On:     []string{"CustomerRegistered"},
+			Filters: []ReadModelFilter{
+				{Param: "email", Field: "email", Kind: FilterMatch, Mode: "exact", Normalize: "email"},
+				{Param: "name", Field: "name", Kind: FilterMatch, Mode: "prefix", MinPrefixLength: 2},
+			},
 		}},
 	}
 }
@@ -67,6 +71,10 @@ func TestPIIDomainGeneratesAProtectorAndEnvelopeColumns(t *testing.T) {
 		`PII: map[string]string{"email": "customerId"}`,
 		`SelfSubject: "customerId"`,
 		"nobody but superusers", // no requiredRole declared: closed by default, and said so
+		"var CustomersSearch = searchindex.Spec{",
+		`{Param: "email", Field: "email", Mode: "exact", Normalize: "email", PII: true}`,
+		`{Param: "name", Field: "name", Mode: "prefix", MinPrefix: 2}`,
+		"Match: CustomersSearch.Fields,",
 	} {
 		if !strings.Contains(q, want) {
 			t.Errorf("query spec is missing %q:\n%s", want, src["customers_query.go"])
@@ -80,7 +88,7 @@ func TestQuerySpecOmitsSelfAccessForMixedSubjectsAndCarriesTheRole(t *testing.T)
 	rm.RequiredRole = []string{"support"}
 	rm.Fields = append(rm.Fields, Field{Name: "courierId", Type: "text"},
 		Field{Name: "courierPhone", Type: "text", PII: true, PIISubject: "courierId"})
-	src := queryGo("customer", *rm)
+	src := queryGo("customer", *rm, []string{"CustomerRegistered"})
 	if strings.Contains(src, "SelfSubject") {
 		t.Errorf("two subjects per row: no self-access:\n%s", src)
 	}

@@ -299,7 +299,11 @@ func (d Domain) GenerateGo() ([]GoFile, error) {
 	}
 
 	for _, rm := range d.ReadModels {
-		src, err := formatGo(queryGo(pkg, rm))
+		on := rm.On
+		if len(on) == 0 {
+			on = d.Events()
+		}
+		src, err := formatGo(queryGo(pkg, rm, on))
 		if err != nil {
 			return nil, err
 		}
@@ -863,7 +867,7 @@ func QuerySpecName(rm ReadModel) string { return ExportName(rm.Collection) + "Qu
 // queryGo emits a read model's route spec (package queryroute serves it):
 // its columns, which are personal data and under whose subject, its
 // requiredRole, and the shared subject column self-access needs.
-func queryGo(pkg string, rm ReadModel) string {
+func queryGo(pkg string, rm ReadModel, on []string) string {
 	cols := []string{rm.Key}
 	seen := map[string]bool{rm.Key: true}
 	piiSubject := map[string]string{}
@@ -890,9 +894,39 @@ func queryGo(pkg string, rm ReadModel) string {
 	}
 
 	name := QuerySpecName(rm)
+	var matches []ReadModelFilter
+	for _, filt := range rm.Filters {
+		if filt.Kind == FilterMatch {
+			matches = append(matches, filt)
+		}
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "package %s\n\n", pkg)
-	b.WriteString("import \"github.com/jamestryand/pocketcqrs/queryroute\"\n\n")
+	if len(matches) > 0 {
+		b.WriteString("import (\n\t\"github.com/jamestryand/pocketcqrs/queryroute\"\n\t\"github.com/jamestryand/pocketcqrs/searchindex\"\n)\n\n")
+		search := SearchSpecName(rm)
+		fmt.Fprintf(&b, "// %s is %q's match filters, indexed in search.db (package\n", search, rm.Collection)
+		b.WriteString("// searchindex). Register it before the read route, after the store's startup\n// purge:\n//\n")
+		fmt.Fprintf(&b, "//\tidx, err := searchindex.Register(ctx, engine, searchStore, %s, &piiDeps, indexKey)\n", search)
+		fmt.Fprintf(&b, "var %s = searchindex.Spec{\n", search)
+		fmt.Fprintf(&b, "\tCollection: %q,\n\tEvents: []string{%s},\n\tFields: []searchindex.Field{\n", rm.Collection, quotedList(on))
+		for _, filt := range matches {
+			fmt.Fprintf(&b, "\t\t{Param: %q, Field: %q, Mode: %q", filt.Param, filt.Field, filt.Mode)
+			if filt.Normalize != "" {
+				fmt.Fprintf(&b, ", Normalize: %q", filt.Normalize)
+			}
+			if filt.MinPrefixLength > 0 {
+				fmt.Fprintf(&b, ", MinPrefix: %d", filt.MinPrefixLength)
+			}
+			if _, isPII := piiSubject[filt.Field]; isPII {
+				b.WriteString(", PII: true")
+			}
+			b.WriteString("},\n")
+		}
+		b.WriteString("\t},\n}\n\n")
+	} else {
+		b.WriteString("import \"github.com/jamestryand/pocketcqrs/queryroute\"\n\n")
+	}
 	fmt.Fprintf(&b, "// %s is the generated read route for %q: GET %s%s.\n", name, rm.Collection, "/api/cqrs/rm/", rm.Collection)
 	b.WriteString("// Register it once the app serves (it fails rather than serve a\n// misconfigured route):\n//\n")
 	fmt.Fprintf(&b, "//\tqueryroute.Register(se, %s, readCfg)\n", name)
@@ -927,9 +961,16 @@ func queryGo(pkg string, rm ReadModel) string {
 	if self != "" {
 		fmt.Fprintf(&b, "\tSelfSubject: %q,\n", self)
 	}
+	if len(matches) > 0 {
+		fmt.Fprintf(&b, "\tMatch: %s.Fields,\n", SearchSpecName(rm))
+	}
 	b.WriteString("}\n")
 	return b.String()
 }
+
+// SearchSpecName is the generated searchindex.Spec variable for a read model
+// with match filters.
+func SearchSpecName(rm ReadModel) string { return ExportName(rm.Collection) + "Search" }
 
 // writeColumnMerge copies payload fields into same-named columns. A
 // personal-data column stores the envelope's JSON text as it is, never a

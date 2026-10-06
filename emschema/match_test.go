@@ -3,6 +3,8 @@ package emschema
 import (
 	"strings"
 	"testing"
+
+	"github.com/jamestryand/pocketcqrs/scaffold"
 )
 
 // matchDocument is dateRangeDocument with one match filter (schema 3.1.0)
@@ -18,29 +20,74 @@ func matchDocument(f ReadModelFilter) *Document {
 
 func intp(n int) *int { return &n }
 
-func TestMatchFilterImportsAndIsReportedLossy(t *testing.T) {
+func TestMatchFilterIsCarriedToScaffold(t *testing.T) {
 	mapped, err := Map(matchDocument(ReadModelFilter{
-		Param: "staff", Field: "staffId", Kind: FilterMatch, Mode: MatchModeExact,
+		Param: "staff", Field: "staffId", Kind: FilterMatch, Mode: MatchModePrefix,
 	}), Options{})
 	if err != nil {
 		t.Fatalf("a well-formed match filter must import: %v", err)
 	}
-	found := false
 	for _, l := range mapped.Report.Lossy {
-		if strings.Contains(l, `"staff"`) && strings.Contains(l, "not generated") {
-			found = true
+		if strings.Contains(l, `"staff"`) {
+			t.Fatalf("a match filter is generated now, not lossy: %s", l)
 		}
 	}
-	if !found {
-		t.Fatalf("the dropped match filter must be named as lossy: %v", mapped.Report.Lossy)
-	}
+	var got []scaffold.ReadModelFilter
 	for _, d := range mapped.Domains {
 		for _, rm := range d.ReadModels {
 			for _, f := range rm.Filters {
 				if f.Kind == FilterMatch {
-					t.Fatalf("a match filter must not reach scaffold until search is generated: %+v", f)
+					got = append(got, f)
 				}
 			}
+		}
+	}
+	if len(got) != 1 || got[0].Mode != MatchModePrefix || got[0].MinPrefixLength != 3 {
+		t.Fatalf("carried with the schema's default minPrefixLength of 3: %+v", got)
+	}
+}
+
+func piiMatchDocument(filters ...ReadModelFilter) *Document {
+	doc := matchDocument(filters[0])
+	rm := doc.ReadModels["time-entries"]
+	rm.Filters = append(rm.Filters, filters[1:]...)
+	rm.Fields[1].PII, rm.Fields[1].PIISubject = true, "entryId"
+	doc.ReadModels["time-entries"] = rm
+	ev := doc.Events["time-logged"]
+	ev.Fields[1].PII, ev.Fields[1].PIISubject = true, "entryId"
+	doc.Events["time-logged"] = ev
+	return doc
+}
+
+func TestPIIMatchWarningsAndTheSharedPrefixRule(t *testing.T) {
+	mapped, err := Map(piiMatchDocument(
+		ReadModelFilter{Param: "s", Field: "staffId", Kind: FilterMatch, Mode: MatchModePrefix, MinPrefixLength: intp(3)},
+		ReadModelFilter{Param: "c", Field: "staffId", Kind: FilterMatch, Mode: MatchModeContains},
+	), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(mapped.Report.Warnings, " | ")
+	if !strings.Contains(all, "hmac endpoint") || !strings.Contains(all, "PLAINTEXT index") {
+		t.Fatalf("pii prefix and pii contains must each say what they cost: %v", mapped.Report.Warnings)
+	}
+	_, err = Map(piiMatchDocument(
+		ReadModelFilter{Param: "a", Field: "staffId", Kind: FilterMatch, Mode: MatchModePrefix, MinPrefixLength: intp(3)},
+		ReadModelFilter{Param: "b", Field: "staffId", Kind: FilterMatch, Mode: MatchModePrefix, MinPrefixLength: intp(4)},
+	), Options{})
+	if err == nil || !strings.Contains(err.Error(), "share one hashed prefix index") {
+		t.Fatalf("two hashed prefix filters on one index must agree on minPrefixLength: %v", err)
+	}
+}
+
+func TestVerifyAppliesAMatchFilter(t *testing.T) {
+	rows := map[string]map[string]any{
+		"e1": {"staffId": "Alice"}, "e2": {"staffId": "alan"}, "e3": {"staffId": "Bob"},
+	}
+	for mode, want := range map[string]int{MatchModeExact: 0, MatchModePrefix: 2, MatchModeContains: 2} {
+		got, err := applyMatch(ReadModelFilter{Field: "staffId", Mode: mode}, rows, "AL")
+		if err != nil || len(got) != want {
+			t.Errorf("%s: want %d rows, got %d %v", mode, want, len(got), err)
 		}
 	}
 }
