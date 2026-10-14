@@ -1,0 +1,299 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "3.15.0",
+  "id": "repeated-outcomes-example",
+  "name": "Repeated Outcomes Example",
+  "description": "Repeated events in an outcome (3.13.0): releasing a pay run records the release and one payment per person paid, in one decision. Each payment is its own event, so each person's pay is encrypted under their own key. How many payments, and how much each, is worked out by hand from the run's own state. Each payment is a row of its own in the payments read model, keyed by the payment's id rather than the pay run's stream (3.14.0 rowKeyField).",
+  "swimlanes": [
+    {
+      "id": "payroll",
+      "name": "Payroll",
+      "kind": "team"
+    }
+  ],
+  "events": {
+    "work-recorded": {
+      "name": "Work Recorded",
+      "swimlaneId": "payroll",
+      "aggregate": "pay_run",
+      "fields": [
+        {
+          "name": "payRunId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "personId",
+          "type": "string"
+        },
+        {
+          "name": "amount",
+          "type": "decimal",
+          "pii": true,
+          "piiSubject": "personId"
+        }
+      ]
+    },
+    "pay-run-released": {
+      "name": "Pay Run Released",
+      "swimlaneId": "payroll",
+      "aggregate": "pay_run",
+      "fields": [
+        {
+          "name": "payRunId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "periodEnd",
+          "type": "date"
+        }
+      ]
+    },
+    "person-paid": {
+      "name": "Person Paid",
+      "swimlaneId": "payroll",
+      "aggregate": "pay_run",
+      "fields": [
+        {
+          "name": "payRunId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "personId",
+          "type": "string"
+        },
+        {
+          "name": "paymentId",
+          "type": "string"
+        },
+        {
+          "name": "periodEnd",
+          "type": "date"
+        },
+        {
+          "name": "amount",
+          "type": "decimal",
+          "pii": true,
+          "piiSubject": "personId"
+        }
+      ]
+    }
+  },
+  "commands": {
+    "release-pay-run": {
+      "name": "Release Pay Run",
+      "aggregate": "pay_run",
+      "fields": [
+        {
+          "name": "periodEnd",
+          "type": "date"
+        }
+      ]
+    }
+  },
+  "readModels": {
+    "payments": {
+      "name": "Payments",
+      "question": "What has each person been paid, run by run?",
+      "builtFromEventIds": [
+        "person-paid"
+      ],
+      "rowKeyField": "paymentId",
+      "fields": [
+        {
+          "name": "paymentId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "payRunId",
+          "type": "string"
+        },
+        {
+          "name": "personId",
+          "type": "string"
+        },
+        {
+          "name": "periodEnd",
+          "type": "date"
+        },
+        {
+          "name": "amount",
+          "type": "decimal",
+          "pii": true,
+          "piiSubject": "personId"
+        }
+      ]
+    }
+  },
+  "screens": {
+    "payroll-screen": {
+      "name": "Payroll"
+    }
+  },
+  "slices": [
+    {
+      "id": "release-pay-run-slice",
+      "name": "Release Pay Run",
+      "pattern": "stateChange",
+      "swimlaneId": "payroll",
+      "status": "created",
+      "screenId": "payroll-screen",
+      "commandId": "release-pay-run",
+      "eventIds": [
+        "pay-run-released",
+        "person-paid"
+      ],
+      "outcomes": [
+        {
+          "eventIds": [
+            "pay-run-released",
+            "person-paid"
+          ],
+          "repeated": [
+            "person-paid"
+          ],
+          "description": "The release, then one payment per person owed something."
+        }
+      ],
+      "scenarios": [
+        {
+          "id": "two-people-paid",
+          "name": "Two people with recorded work are each paid",
+          "kind": "stateChange",
+          "given": [
+            {
+              "eventId": "work-recorded",
+              "data": {
+                "payRunId": "r1",
+                "personId": "p1",
+                "amount": 120
+              }
+            },
+            {
+              "eventId": "work-recorded",
+              "data": {
+                "payRunId": "r1",
+                "personId": "p2",
+                "amount": 80
+              }
+            }
+          ],
+          "when": {
+            "commandId": "release-pay-run",
+            "data": {
+              "periodEnd": "2026-09-30"
+            }
+          },
+          "then": {
+            "events": [
+              {
+                "eventId": "pay-run-released",
+                "data": {
+                  "periodEnd": "2026-09-30"
+                }
+              },
+              {
+                "eventId": "person-paid",
+                "data": {
+                  "personId": "p1",
+                  "amount": 120,
+                  "paymentId": "r1:p1"
+                }
+              },
+              {
+                "eventId": "person-paid",
+                "data": {
+                  "personId": "p2",
+                  "amount": 80,
+                  "paymentId": "r1:p2"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "nobody-owed",
+          "name": "With no work recorded, the release pays nobody",
+          "kind": "stateChange",
+          "given": [],
+          "when": {
+            "commandId": "release-pay-run",
+            "data": {
+              "periodEnd": "2026-09-30"
+            }
+          },
+          "then": {
+            "events": [
+              {
+                "eventId": "pay-run-released",
+                "data": {
+                  "periodEnd": "2026-09-30"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "view-payments-slice",
+      "name": "View Payments",
+      "pattern": "stateView",
+      "swimlaneId": "payroll",
+      "status": "created",
+      "screenId": "payroll-screen",
+      "readModelId": "payments",
+      "scenarios": [
+        {
+          "id": "one-row-per-payment",
+          "name": "Two payments in one pay run are two rows",
+          "kind": "stateView",
+          "given": [
+            {
+              "eventId": "person-paid",
+              "data": {
+                "payRunId": "r1",
+                "personId": "p1",
+                "paymentId": "r1:p1",
+                "periodEnd": "2026-09-30",
+                "amount": 120
+              }
+            },
+            {
+              "eventId": "person-paid",
+              "data": {
+                "payRunId": "r1",
+                "personId": "p2",
+                "paymentId": "r1:p2",
+                "periodEnd": "2026-09-30",
+                "amount": 80
+              }
+            }
+          ],
+          "when": {
+            "readModelId": "payments"
+          },
+          "then": {
+            "result": {
+              "entries": [
+                {
+                  "paymentId": "r1:p1",
+                  "personId": "p1",
+                  "amount": 120
+                },
+                {
+                  "paymentId": "r1:p2",
+                  "personId": "p2",
+                  "amount": 80
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

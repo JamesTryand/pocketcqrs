@@ -1,0 +1,145 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "3.15.0",
+  "id": "conditional-outcomes-example",
+  "name": "Conditional Outcomes Example",
+  "description": "Conditional outcomes (3.12.0): one command emits one set of events or another, and the model says when. Logging more than 12 hours also flags the entry, by a declared rule. Submitting an expense also flags it when its converted amount is over the limit; converting is a calculation, so that condition is hand-written (`when: \"hand\"`).",
+  "swimlanes": [
+    { "id": "time", "name": "Time", "kind": "team" }
+  ],
+  "events": {
+    "entry-logged": {
+      "name": "Entry Logged",
+      "swimlaneId": "time",
+      "aggregate": "entry",
+      "fields": [
+        { "name": "entryId", "type": "string" },
+        { "name": "hours", "type": "decimal" }
+      ]
+    },
+    "entry-flagged": {
+      "name": "Entry Flagged",
+      "swimlaneId": "time",
+      "aggregate": "entry",
+      "fields": [
+        { "name": "entryId", "type": "string" },
+        { "name": "reason", "type": "string" }
+      ]
+    },
+    "expense-submitted": {
+      "name": "Expense Submitted",
+      "swimlaneId": "time",
+      "aggregate": "expense",
+      "fields": [
+        { "name": "expenseId", "type": "string" },
+        { "name": "amount", "type": "decimal" },
+        { "name": "currency", "type": "string" }
+      ]
+    },
+    "expense-flagged": {
+      "name": "Expense Flagged",
+      "swimlaneId": "time",
+      "aggregate": "expense",
+      "fields": [
+        { "name": "expenseId", "type": "string" },
+        { "name": "reason", "type": "string" }
+      ]
+    }
+  },
+  "commands": {
+    "log-entry": {
+      "name": "Log Entry",
+      "aggregate": "entry",
+      "fields": [{ "name": "hours", "type": "decimal" }],
+      "refuseWhen": [
+        { "message": "hours must be positive", "all": [{ "command": "hours", "atMost": 0 }] }
+      ]
+    },
+    "submit-expense": {
+      "name": "Submit Expense",
+      "aggregate": "expense",
+      "fields": [
+        { "name": "amount", "type": "decimal" },
+        { "name": "currency", "type": "string" }
+      ]
+    }
+  },
+  "screens": {
+    "entries-screen": { "name": "Entries" },
+    "expenses-screen": { "name": "Expenses" }
+  },
+  "slices": [
+    {
+      "id": "log-entry-slice",
+      "name": "Log Entry",
+      "pattern": "stateChange",
+      "swimlaneId": "time",
+      "status": "created",
+      "screenId": "entries-screen",
+      "commandId": "log-entry",
+      "eventIds": ["entry-logged", "entry-flagged"],
+      "outcomes": [
+        {
+          "eventIds": ["entry-logged", "entry-flagged"],
+          "description": "A long day is logged and flagged for a manager, in the same commit.",
+          "when": [{ "all": [{ "command": "hours", "greaterThan": 12 }] }],
+          "set": { "entry-flagged": { "reason": "long-day" } }
+        },
+        { "eventIds": ["entry-logged"] }
+      ],
+      "scenarios": [
+        {
+          "id": "log-an-entry", "name": "An ordinary day is logged", "kind": "stateChange",
+          "given": [], "when": { "commandId": "log-entry", "data": { "hours": 8 } },
+          "then": { "events": [{ "eventId": "entry-logged", "data": { "hours": 8 } }] }
+        },
+        {
+          "id": "long-day-is-flagged", "name": "More than 12 hours is logged and flagged", "kind": "stateChange",
+          "given": [], "when": { "commandId": "log-entry", "data": { "hours": 13 } },
+          "then": {
+            "events": [
+              { "eventId": "entry-logged", "data": { "hours": 13 } },
+              { "eventId": "entry-flagged", "data": { "reason": "long-day" } }
+            ]
+          }
+        },
+        {
+          "id": "refused-before-outcomes", "name": "Refusals come before outcomes", "kind": "error",
+          "given": [], "when": { "commandId": "log-entry", "data": { "hours": -1 } },
+          "then": { "error": { "message": "hours must be positive" } }
+        }
+      ]
+    },
+    {
+      "id": "submit-expense-slice",
+      "name": "Submit Expense",
+      "pattern": "stateChange",
+      "swimlaneId": "time",
+      "status": "created",
+      "screenId": "expenses-screen",
+      "commandId": "submit-expense",
+      "eventIds": ["expense-submitted", "expense-flagged"],
+      "outcomes": [
+        {
+          "eventIds": ["expense-submitted", "expense-flagged"],
+          "description": "Over the limit once converted to the home currency: a calculation, so the condition is hand-written.",
+          "when": "hand",
+          "set": { "expense-flagged": { "reason": "over-limit" } }
+        },
+        { "eventIds": ["expense-submitted"] }
+      ],
+      "scenarios": [
+        {
+          "id": "expense-over-limit", "name": "An expense over the limit is submitted and flagged", "kind": "stateChange",
+          "given": [], "when": { "commandId": "submit-expense", "data": { "amount": 900, "currency": "USD" } },
+          "then": {
+            "events": [
+              { "eventId": "expense-submitted", "data": { "amount": 900 } },
+              { "eventId": "expense-flagged", "data": { "reason": "over-limit" } }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

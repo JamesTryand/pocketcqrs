@@ -1,0 +1,45 @@
+{
+  "id": "place-order-slice",
+  "name": "Place Order",
+  "pattern": "stateChange",
+  "swimlaneId": "sales",
+  "chapterId": "order-lifecycle",
+  "businessCapability": "Allow customers to place orders",
+  "status": "done",
+  "screenId": "place-order-screen",
+  "commandId": "place-order",
+  "eventIds": [
+    "order-placed"
+  ],
+  "scenarios": [
+    {
+      "id": "place-order-happy-path",
+      "name": "Placing an order records Order Placed",
+      "kind": "stateChange",
+      "given": [],
+      "when": {
+        "commandId": "place-order",
+        "data": {
+          "customerId": "cust-1",
+          "items": [
+            {
+              "sku": "WIDGET-1",
+              "qty": 2
+            }
+          ]
+        }
+      },
+      "then": {
+        "events": [
+          {
+            "eventId": "order-placed",
+            "data": {
+              "orderId": "order-1",
+              "customerId": "cust-1"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

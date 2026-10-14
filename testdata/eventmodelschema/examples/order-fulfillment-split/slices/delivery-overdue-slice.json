@@ -1,0 +1,61 @@
+{
+  "id": "delivery-overdue-slice",
+  "name": "Delivery Overdue",
+  "pattern": "automation",
+  "swimlaneId": "sales",
+  "chapterId": "order-lifecycle",
+  "businessCapability": "Notice deliveries that are taking too long",
+  "status": "planned",
+  "automationId": "delivery-overdue-timer",
+  "triggerEventIds": [
+    "order-shipped"
+  ],
+  "delay": {
+    "after": {
+      "setting": "deliveryOverdueAfter",
+      "default": "P5D"
+    },
+    "cancelledByEventIds": [
+      "order-delivered",
+      "delivery-failed"
+    ]
+  },
+  "commandId": "flag-delivery-overdue",
+  "resultEventIds": [
+    "delivery-overdue"
+  ],
+  "scenarios": [
+    {
+      "id": "undelivered-order-flagged",
+      "name": "An order neither delivered nor failed five days after shipping is flagged",
+      "kind": "stateChange",
+      "given": [
+        {
+          "eventId": "order-shipped",
+          "data": {
+            "orderId": "order-1"
+          }
+        },
+        {
+          "elapsed": "P5D"
+        }
+      ],
+      "when": {
+        "commandId": "flag-delivery-overdue",
+        "data": {
+          "orderId": "order-1"
+        }
+      },
+      "then": {
+        "events": [
+          {
+            "eventId": "delivery-overdue",
+            "data": {
+              "orderId": "order-1"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

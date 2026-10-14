@@ -1,0 +1,13 @@
+{
+  "unclear-status-timing": {
+    "note": "Unclear whether the Order Status screen should show 'processing' before the shipment automation fires, or jump straight from 'placed' to 'shipped'.",
+    "target": {
+      "kind": "ordering",
+      "sliceIds": [
+        "order-status-slice",
+        "auto-ship-slice"
+      ]
+    },
+    "resolved": false
+  }
+}

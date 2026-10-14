@@ -10,7 +10,17 @@
   "triggerEventIds": [
     "order-shipped"
   ],
-  "commandId": "notify-shipping-partner",
+  "effect": {
+    "swimlaneId": "shipping-partner",
+    "description": "POST the shipment to the partner's API.",
+    "gaveUp": {
+      "commandId": "record-partner-notification-abandoned",
+      "resultEventIds": [
+        "partner-notification-abandoned"
+      ]
+    }
+  },
+  "commandId": "record-partner-notified",
   "resultEventIds": [
     "shipment-notified"
   ],
@@ -28,7 +38,7 @@
         }
       ],
       "when": {
-        "commandId": "notify-shipping-partner",
+        "commandId": "record-partner-notified",
         "data": {
           "orderId": "order-1"
         }
@@ -37,6 +47,36 @@
         "events": [
           {
             "eventId": "shipment-notified",
+            "data": {
+              "orderId": "order-1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "partner-unreachable",
+      "name": "When the partner can't be reached, the runtime gives up and says so",
+      "kind": "stateChange",
+      "given": [
+        {
+          "eventId": "order-shipped",
+          "data": {
+            "orderId": "order-1"
+          }
+        }
+      ],
+      "when": {
+        "commandId": "record-partner-notification-abandoned",
+        "data": {
+          "orderId": "order-1",
+          "reason": "timed out after 5 attempts"
+        }
+      },
+      "then": {
+        "events": [
+          {
+            "eventId": "partner-notification-abandoned",
             "data": {
               "orderId": "order-1"
             }

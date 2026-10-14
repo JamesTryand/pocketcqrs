@@ -3,7 +3,16 @@
 Fixtures for M14 (eventmodelschema import/export). Copied verbatim, unmodified.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
-- **Commit**: `f616eaf`, tag `v3.1.1` — *"Schema 3.1.1: match normalizers
+- **Commit**: `14b448f`, *"Schema 3.17.0: readModel.projection (generated | hand)"*
+  (untagged: upstream's last tag is `v3.9.0`). Copied 2026-10-14, to make the
+  importer fail closed (`emschema/supported.go`): every example from 3.2.0 on
+  is a fixture the importer must **refuse**, naming each feature, until that
+  feature is implemented here. `minimal.json` is the one that loads.
+- **3.1.1's copy is kept in `v3.1.1/`** (commit `f616eaf`, tag `v3.1.1`). The
+  round-trip, join and verify tests use its `order-fulfillment` example,
+  which uses nothing past 3.1.1; 3.17.0's adds ingresses, delays, effects and
+  partitioning, all refused. The notes below are that copy's history.
+- **Previous commit**: `f616eaf`, tag `v3.1.1` — *"Schema 3.1.1: match normalizers
   pinned exactly, with test vectors"*, 2026-09-24.
 - **Copied**: 2026-10-05, straight from 2.7.0 across three releases, as the
   first step (G0) of porting dotnetcqrs's personal-data support. 3.0.0 is

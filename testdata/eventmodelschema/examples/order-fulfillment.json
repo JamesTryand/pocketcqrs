@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
-  "eventModelingSchemaVersion": "3.1.1",
+  "eventModelingSchemaVersion": "3.15.0",
   "id": "order-fulfillment",
   "name": "Order Fulfillment",
   "description": "Worked example exercising every notation in the schema: all 3 slice patterns, all 3 scenario kinds, a hotspot, a chapter, and an actor lane. The shipping-partner notification slice also demonstrates automation without a read model (a boundary-crossing Bridge/Reactor: event straight to command, no persisted state needed).",
@@ -9,6 +9,14 @@
     { "id": "warehouse", "name": "Warehouse", "kind": "system" },
     { "id": "shipping-partner", "name": "Shipping Partner", "kind": "system", "description": "External carrier integration boundary." }
   ],
+  "partitioning": {
+    "key": "shopId",
+    "description": "Each shop on the platform is a tenant: its orders, read models and timers are its own.",
+    "crossPartitionRoles": ["operator"]
+  },
+  "dataSubjects": {
+    "erasure": { "self": true, "roles": ["support"] }
+  },
   "chapters": {
     "order-lifecycle": { "name": "Order Lifecycle", "description": "From placement through shipment notification." }
   },
@@ -37,7 +45,11 @@
       ]
     },
     "order-shipped": { "name": "Order Shipped", "description": "The warehouse shipped an order.", "swimlaneId": "warehouse", "aggregate": "Order" },
-    "shipment-notified": { "name": "Shipment Notified", "description": "The shipping partner was notified of a shipment.", "swimlaneId": "shipping-partner" }
+    "shipment-notified": { "name": "Shipment Notified", "description": "The shipping partner acknowledged a shipment.", "swimlaneId": "shipping-partner" },
+    "partner-notification-abandoned": { "name": "Partner Notification Abandoned", "description": "The shipping partner could not be told about a shipment, and the runtime has stopped trying.", "swimlaneId": "shipping-partner" },
+    "order-delivered": { "name": "Order Delivered", "description": "The carrier delivered the order.", "swimlaneId": "sales", "aggregate": "Order" },
+    "delivery-failed": { "name": "Delivery Failed", "description": "The carrier could not deliver the order.", "swimlaneId": "sales", "aggregate": "Order" },
+    "delivery-overdue": { "name": "Delivery Overdue", "description": "A shipped order has not been reported delivered or failed in time.", "swimlaneId": "sales", "aggregate": "Order" }
   },
   "commands": {
     "place-order": {
@@ -51,7 +63,34 @@
       ]
     },
     "ship-order": { "name": "Ship Order", "description": "Warehouse fulfills a pending order.", "reason": "A pending order needs to leave the warehouse.", "aggregate": "Order" },
-    "notify-shipping-partner": { "name": "Notify Shipping Partner", "description": "Informs the external shipping partner that an order has shipped.", "reason": "The shipping partner needs to know about the shipment to process it." }
+    "record-partner-notified": { "name": "Record Partner Notified", "description": "Records that the shipping partner acknowledged a shipment.", "reason": "The shipping partner needs to know about the shipment to process it." },
+    "record-partner-notification-abandoned": {
+      "name": "Record Partner Notification Abandoned",
+      "description": "Records that the shipping partner could not be told about a shipment.",
+      "reason": "Someone has to tell the partner another way.",
+      "fields": [
+        { "name": "orderId", "type": "uuid" },
+        { "name": "reason", "type": "string" }
+      ]
+    },
+    "record-delivery": {
+      "name": "Record Delivery",
+      "description": "The carrier reports how a delivery attempt went.",
+      "reason": "The order's status should reflect what happened at the door.",
+      "aggregate": "Order",
+      "fields": [
+        { "name": "orderId", "type": "uuid" },
+        { "name": "carrierEventId", "type": "string" },
+        { "name": "delivered", "type": "boolean" }
+      ]
+    },
+    "flag-delivery-overdue": {
+      "name": "Flag Delivery Overdue",
+      "description": "Marks a shipped order whose delivery has taken too long.",
+      "reason": "Someone should chase the carrier before the customer has to.",
+      "aggregate": "Order",
+      "fields": [{ "name": "orderId", "type": "uuid" }]
+    }
   },
   "readModels": {
     "order-summary": {
@@ -61,8 +100,11 @@
       "builtFromEventIds": ["order-placed", "order-shipped"],
       "fields": [
         { "name": "orderId", "type": "uuid", "idAttribute": true },
+        { "name": "customerId", "type": "uuid" },
         { "name": "status", "type": "string" }
-      ]
+      ],
+      "requiredRole": "support",
+      "selfAccess": { "subjectField": "customerId" }
     },
     "pending-shipments": {
       "name": "Pending Shipments",
@@ -83,9 +125,20 @@
     "place-order-screen": { "name": "Place Order", "actorLaneId": "customer" },
     "order-status-screen": { "name": "Order Status", "actorLaneId": "customer" }
   },
+  "ingresses": {
+    "carrier-webhook": {
+      "name": "Carrier Webhook",
+      "description": "The shipping partner calls this to report delivery attempts. It redelivers on any non-2xx response, so every call carries the carrier's own event id.",
+      "swimlaneId": "shipping-partner",
+      "verification": { "scheme": "hmac-sha256" },
+      "deliveryIdField": "carrierEventId"
+    }
+  },
   "automations": {
     "auto-ship-pending-orders": { "name": "Auto-Ship Pending Orders", "description": "Reacts to newly placed orders by shipping them." },
-    "notify-shipping-partner-automation": { "name": "Notify Shipping Partner", "description": "Reacts to a shipment leaving the warehouse by notifying the external shipping partner. A Bridge: no local state needed, straight from event to command." }
+    "notify-shipping-partner-automation": { "name": "Notify Shipping Partner", "description": "When a shipment leaves the warehouse, calls the shipping partner's API and records whether the partner acknowledged it. No local state needed." },
+    "delivery-overdue-timer": { "name": "Delivery Overdue Timer", "description": "Flags an order that has neither been delivered nor failed some days after shipping." },
+    "reconcile-pending-shipments": { "name": "Reconcile Pending Shipments", "description": "Every so often, retries shipping any order still waiting, in case its first attempt was lost." }
   },
   "slices": [
     {
@@ -125,9 +178,9 @@
           "id": "view-order-summary-after-placement",
           "name": "Order summary reflects a placed order before shipment",
           "kind": "stateView",
-          "given": [{ "eventId": "order-placed", "data": { "orderId": "order-1" } }],
+          "given": [{ "eventId": "order-placed", "data": { "orderId": "order-1", "customerId": "customer-1" } }],
           "when": { "readModelId": "order-summary", "queryParams": { "orderId": "order-1" } },
-          "then": { "result": { "orderId": "order-1", "status": "placed" } }
+          "then": { "result": { "orderId": "order-1", "customerId": "customer-1", "status": "placed" } }
         }
       ]
     },
@@ -144,6 +197,7 @@
       "readModelId": "pending-shipments",
       "commandId": "ship-order",
       "resultEventIds": ["order-shipped"],
+      "outcomes": [["order-shipped"], []],
       "scenarios": [
         {
           "id": "auto-ship-triggers-on-order-placed",
@@ -165,7 +219,15 @@
       "status": "planned",
       "automationId": "notify-shipping-partner-automation",
       "triggerEventIds": ["order-shipped"],
-      "commandId": "notify-shipping-partner",
+      "effect": {
+        "swimlaneId": "shipping-partner",
+        "description": "POST the shipment to the partner's API.",
+        "gaveUp": {
+          "commandId": "record-partner-notification-abandoned",
+          "resultEventIds": ["partner-notification-abandoned"]
+        }
+      },
+      "commandId": "record-partner-notified",
       "resultEventIds": ["shipment-notified"],
       "scenarios": [
         {
@@ -173,8 +235,102 @@
           "name": "A warehouse shipment automatically notifies the shipping partner",
           "kind": "stateChange",
           "given": [{ "eventId": "order-shipped", "data": { "orderId": "order-1" } }],
-          "when": { "commandId": "notify-shipping-partner", "data": { "orderId": "order-1" } },
+          "when": { "commandId": "record-partner-notified", "data": { "orderId": "order-1" } },
           "then": { "events": [{ "eventId": "shipment-notified", "data": { "orderId": "order-1" } }] }
+        },
+        {
+          "id": "partner-unreachable",
+          "name": "When the partner can't be reached, the runtime gives up and says so",
+          "kind": "stateChange",
+          "given": [{ "eventId": "order-shipped", "data": { "orderId": "order-1" } }],
+          "when": { "commandId": "record-partner-notification-abandoned", "data": { "orderId": "order-1", "reason": "timed out after 5 attempts" } },
+          "then": { "events": [{ "eventId": "partner-notification-abandoned", "data": { "orderId": "order-1" } }] }
+        }
+      ]
+    },
+    {
+      "id": "record-delivery-slice",
+      "name": "Record Delivery",
+      "pattern": "stateChange",
+      "swimlaneId": "sales",
+      "chapterId": "order-lifecycle",
+      "businessCapability": "Know whether an order reached the customer",
+      "status": "planned",
+      "ingressId": "carrier-webhook",
+      "commandId": "record-delivery",
+      "eventIds": ["order-delivered", "delivery-failed"],
+      "outcomes": [["order-delivered"], ["delivery-failed"]],
+      "scenarios": [
+        {
+          "id": "carrier-reports-delivery",
+          "name": "The carrier reports a successful delivery",
+          "kind": "stateChange",
+          "given": [{ "eventId": "order-shipped", "data": { "orderId": "order-1" } }],
+          "when": { "commandId": "record-delivery", "data": { "orderId": "order-1", "carrierEventId": "evt-1", "delivered": true } },
+          "then": { "events": [{ "eventId": "order-delivered", "data": { "orderId": "order-1" } }] }
+        },
+        {
+          "id": "delivery-before-shipment-rejected",
+          "name": "A delivery report for an order that never shipped is rejected",
+          "kind": "error",
+          "given": [{ "eventId": "order-placed", "data": { "orderId": "order-1" } }],
+          "when": { "commandId": "record-delivery", "data": { "orderId": "order-1", "carrierEventId": "evt-2", "delivered": true } },
+          "then": { "error": { "code": "ERR_NOT_SHIPPED", "message": "The order has not shipped." } }
+        }
+      ]
+    },
+    {
+      "id": "delivery-overdue-slice",
+      "name": "Delivery Overdue",
+      "pattern": "automation",
+      "swimlaneId": "sales",
+      "chapterId": "order-lifecycle",
+      "businessCapability": "Notice deliveries that are taking too long",
+      "status": "planned",
+      "automationId": "delivery-overdue-timer",
+      "triggerEventIds": ["order-shipped"],
+      "delay": {
+        "after": { "setting": "deliveryOverdueAfter", "default": "P5D" },
+        "cancelledByEventIds": ["order-delivered", "delivery-failed"]
+      },
+      "commandId": "flag-delivery-overdue",
+      "resultEventIds": ["delivery-overdue"],
+      "scenarios": [
+        {
+          "id": "undelivered-order-flagged",
+          "name": "An order neither delivered nor failed five days after shipping is flagged",
+          "kind": "stateChange",
+          "given": [
+            { "eventId": "order-shipped", "data": { "orderId": "order-1" } },
+            { "elapsed": "P5D" }
+          ],
+          "when": { "commandId": "flag-delivery-overdue", "data": { "orderId": "order-1" } },
+          "then": { "events": [{ "eventId": "delivery-overdue", "data": { "orderId": "order-1" } }] }
+        }
+      ]
+    },
+    {
+      "id": "reconcile-shipments-slice",
+      "name": "Reconcile Pending Shipments",
+      "pattern": "automation",
+      "swimlaneId": "warehouse",
+      "chapterId": "order-lifecycle",
+      "businessCapability": "No order stays unshipped because one attempt was lost",
+      "status": "planned",
+      "automationId": "reconcile-pending-shipments",
+      "schedule": { "cron": { "setting": "shipmentReconcileCron", "default": "*/15 * * * *" } },
+      "readModelId": "pending-shipments",
+      "commandId": "ship-order",
+      "resultEventIds": ["order-shipped"],
+      "outcomes": [["order-shipped"], []],
+      "scenarios": [
+        {
+          "id": "reconcile-ships-waiting-order",
+          "name": "A reconcile pass ships an order that is still waiting",
+          "kind": "stateChange",
+          "given": [{ "eventId": "order-placed", "data": { "orderId": "order-2" } }],
+          "when": { "commandId": "ship-order", "data": { "orderId": "order-2" } },
+          "then": { "events": [{ "eventId": "order-shipped", "data": { "orderId": "order-2" } }] }
         }
       ]
     }

@@ -14,10 +14,18 @@
         "idAttribute": true
       },
       {
+        "name": "customerId",
+        "type": "uuid"
+      },
+      {
         "name": "status",
         "type": "string"
       }
-    ]
+    ],
+    "requiredRole": "support",
+    "selfAccess": {
+      "subjectField": "customerId"
+    }
   },
   "pending-shipments": {
     "name": "Pending Shipments",

@@ -1,0 +1,38 @@
+{
+  "id": "order-status-slice",
+  "name": "Order Status",
+  "pattern": "stateView",
+  "swimlaneId": "sales",
+  "chapterId": "order-lifecycle",
+  "businessCapability": "Let customers check their order status",
+  "status": "done",
+  "screenId": "order-status-screen",
+  "readModelId": "order-summary",
+  "scenarios": [
+    {
+      "id": "view-order-summary-after-placement",
+      "name": "Order summary reflects a placed order before shipment",
+      "kind": "stateView",
+      "given": [
+        {
+          "eventId": "order-placed",
+          "data": {
+            "orderId": "order-1"
+          }
+        }
+      ],
+      "when": {
+        "readModelId": "order-summary",
+        "queryParams": {
+          "orderId": "order-1"
+        }
+      },
+      "then": {
+        "result": {
+          "orderId": "order-1",
+          "status": "placed"
+        }
+      }
+    }
+  ]
+}

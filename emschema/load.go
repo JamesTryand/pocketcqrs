@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 )
 
 // Manifest describes how one document is split across files. Order lives
@@ -41,6 +42,11 @@ func Load(path string) (*Document, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("emschema: %s is not a valid document: %w", filepath.Base(path), err)
 	}
+	var c supportChecker
+	c.check(raw, reflect.TypeOf(doc), "")
+	if err := c.refuseUnsupported(filepath.Base(path)); err != nil {
+		return nil, err
+	}
 	return &doc, nil
 }
 
@@ -61,6 +67,10 @@ func LoadManifest(dir string) (*Document, error) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, fmt.Errorf("emschema: invalid manifest.json: %w", err)
 	}
+	// every file is checked against what it is read into, and the document
+	// is refused once, at the end, naming everything in every file
+	var c supportChecker
+	c.check(raw, reflect.TypeOf(m), "manifest.json")
 
 	doc := &Document{
 		EventModelingSchemaVersion: m.EventModelingSchemaVersion,
@@ -85,6 +95,7 @@ func LoadManifest(dir string) (*Document, error) {
 		if err := json.Unmarshal(body, into); err != nil {
 			return fmt.Errorf("emschema: %s: %w", rel, err)
 		}
+		c.check(body, reflect.TypeOf(into).Elem(), filepath.ToSlash(rel))
 		return nil
 	}
 
@@ -124,6 +135,9 @@ func LoadManifest(dir string) (*Document, error) {
 			return nil, err
 		}
 		doc.Slices = append(doc.Slices, s)
+	}
+	if err := c.refuseUnsupported(filepath.Base(dir)); err != nil {
+		return nil, err
 	}
 	return doc, nil
 }

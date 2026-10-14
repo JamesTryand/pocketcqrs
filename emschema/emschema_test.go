@@ -17,7 +17,7 @@ func fixture(t *testing.T, rel string) string {
 }
 
 func TestLoadWorkedExample(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	doc, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,11 +58,11 @@ func TestLoadWorkedExample(t *testing.T) {
 // TestJoinMatchesSingleDocument proves the Go reimplementation of join.js is
 // faithful: the split layout and the single document are the same model.
 func TestJoinMatchesSingleDocument(t *testing.T) {
-	single, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	single, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	joined, err := Load(fixture(t, "examples/order-fulfillment-split"))
+	joined, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment-split"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestJoinMatchesSingleDocument(t *testing.T) {
 }
 
 func TestMinimalDocumentLintsClean(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/minimal.json"))
+	doc, err := Load(fixture(t, "v3.1.1/examples/minimal.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestMinimalDocumentLintsClean(t *testing.T) {
 }
 
 func TestWorkedExampleLintsClean(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	doc, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestWorkedExampleLintsClean(t *testing.T) {
 // TestLintCatchesDanglingReferences is the whole reason this layer exists:
 // the source schema is structural only and verifies no id resolves.
 func TestLintCatchesDanglingReferences(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	doc, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestLintRefusesTranslation(t *testing.T) {
 // is invalid, not merely surplus — and that is the same trap an export must
 // avoid when synthesizing screens.
 func TestLintRefusesPatternFieldsThatDoNotBelong(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	doc, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

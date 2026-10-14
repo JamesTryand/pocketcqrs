@@ -1,5 +1,5 @@
 {
-  "eventModelingSchemaVersion": "3.1.1",
+  "eventModelingSchemaVersion": "3.15.0",
   "id": "order-fulfillment",
   "name": "Order Fulfillment",
   "description": "Worked example exercising every notation in the schema: all 3 slice patterns, all 3 scenario kinds, a hotspot, a chapter, and an actor lane. The shipping-partner notification slice also demonstrates automation without a read model (a boundary-crossing Bridge/Reactor: event straight to command, no persisted state needed).",
@@ -21,6 +21,21 @@
       "description": "External carrier integration boundary."
     }
   ],
+  "dataSubjects": {
+    "erasure": {
+      "self": true,
+      "roles": [
+        "support"
+      ]
+    }
+  },
+  "partitioning": {
+    "key": "shopId",
+    "description": "Each shop on the platform is a tenant: its orders, read models and timers are its own.",
+    "crossPartitionRoles": [
+      "operator"
+    ]
+  },
   "registries": {
     "chapters": "registries/chapters.json",
     "actorLanes": "registries/actorLanes.json",
@@ -28,6 +43,7 @@
     "commands": "registries/commands.json",
     "readModels": "registries/readModels.json",
     "screens": "registries/screens.json",
+    "ingresses": "registries/ingresses.json",
     "automations": "registries/automations.json",
     "hotspots": "registries/hotspots.json"
   },
@@ -35,6 +51,9 @@
     "slices/place-order-slice.json",
     "slices/order-status-slice.json",
     "slices/auto-ship-slice.json",
-    "slices/notify-shipping-partner-slice.json"
+    "slices/notify-shipping-partner-slice.json",
+    "slices/record-delivery-slice.json",
+    "slices/delivery-overdue-slice.json",
+    "slices/reconcile-shipments-slice.json"
   ]
 }

@@ -18,6 +18,14 @@
       "items": { "$ref": "#/$defs/swimlane" },
       "minItems": 1
     },
+    "dataSubjects": {
+      "type": "object",
+      "description": "Carried inline, like swimlanes: a small document-wide declaration, not a registry. Its full shape is checked against eventmodeling.schema.json once joined."
+    },
+    "partitioning": {
+      "type": "object",
+      "description": "Carried inline, like swimlanes and dataSubjects: a small document-wide declaration, not a registry. Its full shape is checked against eventmodeling.schema.json once joined."
+    },
     "registries": {
       "type": "object",
       "properties": {
@@ -27,6 +35,7 @@
         "commands": { "$ref": "#/$defs/filePath" },
         "readModels": { "$ref": "#/$defs/filePath" },
         "screens": { "$ref": "#/$defs/filePath" },
+        "ingresses": { "$ref": "#/$defs/filePath" },
         "automations": { "$ref": "#/$defs/filePath" },
         "hotspots": { "$ref": "#/$defs/filePath" }
       },

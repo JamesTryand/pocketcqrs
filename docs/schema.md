@@ -59,6 +59,33 @@ told about is the failure mode this whole layer exists to avoid. (A `pii` field
 is never dropped: the Go target encrypts it, and the JS target refuses the
 aggregate. See [Personal data](personal-data.md).)
 
+### What it can't apply is refused
+
+The schema says a generator must refuse what it can't apply, never drop it
+(3.8.0 for access rules, 3.10.0 for refusals). So import checks every key in
+the document against what the importer reads, and refuses the whole document,
+naming each one, if anything is left over:
+
+```
+emschema: refusals.json declares 2 thing(s) pocketcqrs cannot apply yet, so nothing was generated (dropping them would generate code without them):
+  /commands/claim-entry-for-invoice/refuseWhen: refuseWhen, rules that refuse a command (schema 3.10.0; numeric operators 3.11.0)
+  /commands/update-entry/refuseWhen: refuseWhen, rules that refuse a command (schema 3.10.0; numeric operators 3.11.0)
+```
+
+The check is an allow-list, so a key added upstream after the vendored schema
+is refused too, and so is a derivation or filter `kind` the importer doesn't
+know. Example data (`data`, `queryParams`, a scenario's expected `result`) is
+the domain's own and isn't checked. A split document is checked file by file,
+and the pointer starts with the file's path.
+
+Refused today, from schema 3.2.0 on: `selfAccess`, `dataSubjects`,
+`outcomes`, ingresses, delays, schedules and `elapsed`, automation `effect`,
+partitioning, `grantsAccess`, a scenario's `caller`, `actor` and `at`,
+`removedByEventIds`, `refuseWhen`, a read model's `rowKeyField`,
+`requiredOwnership.stateField`, `rowsPerListItem`, the `sumOfItems` and
+`byEvent` derivations, and `projection`. Each leaves this list as it is
+implemented.
+
 ### Untagged aggregates are refused, not guessed
 
 `aggregate` is optional in the schema, and real documents leave boundary
@@ -191,18 +218,18 @@ lower-camel convention (`Order` → `order`).
 
 ## Schema version
 
-This project targets **schema 2.1.0**, and an export declares it.
+This project reads **schema 3.17.0** documents, and an export declares it.
+Import reads everything up to 3.1.1 and refuses the rest by name (above);
+every version since 3.1.1 is additive, so an export, which uses only what
+import reads, is a valid 3.17.0 document.
 
-Upstream bumped to `2.0.0` on 2026-08-06 for the removal of the `translation`
-pattern, then `2.1.0` on 2026-08-30 (additive: a new `sliceStatus` value,
-`accepted`), and keeps a `CHANGELOG.md`. **Import reports a document's
-declared version but does not branch on it**, which is deliberate rather than
-left over: the bump fixes the signal going forward, but a document authored
-between the v2 schema changes and the bump declares `1.x` while being a v2
-document, and a genuine v1 document declares the same. Only the shape
-distinguishes them.
+**Import reports a document's declared version but does not branch on it**,
+which is deliberate rather than left over: the 2.0.0 bump fixed the signal
+going forward, but a document authored between the v2 schema changes and the
+bump declares `1.x` while being a v2 document, and a genuine v1 document
+declares the same. Only the shape distinguishes them.
 
 So import checks the *shape*: a slice using the removed `translation` pattern
 is refused with an explanation of where it went — it collapses into
 `automation`, because a read model never originates an event — and a version
-that differs from `2.0.0` is noted without being treated as a problem.
+that differs from the one this project reads is noted without being treated as a problem.

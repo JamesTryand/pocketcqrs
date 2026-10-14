@@ -518,7 +518,13 @@ type Hotspot struct {
 // (additive: readModel.filters kind "match") and 3.1.1 (normalizer rules
 // pinned, no shape change) were vendored together on 2026-10-05, as the
 // first step of porting dotnetcqrs's personal-data support.
-const SchemaVersion = "3.1.1"
+//
+// 3.17.0 was vendored on 2026-10-14 to make the importer fail closed
+// (supported.go): it reads a 3.17.0 document and refuses, by name, every
+// feature from 3.2.0 on that it cannot apply yet, instead of dropping it.
+// An export uses only what this package reads, so it is a valid 3.17.0
+// document (every version since 3.1.1 is additive).
+const SchemaVersion = "3.17.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

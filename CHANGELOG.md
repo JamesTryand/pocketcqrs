@@ -5,6 +5,20 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ## Unreleased
 
+### Changed
+
+- **`schema import` fails closed.** It used to drop every key it didn't read, so a document using a
+  newer schema feature (a read model's `selfAccess`, a command's `refuseWhen`, a removal) imported
+  into code that quietly lacked it. Now every key is checked against what the importer reads, and
+  the document is refused, naming each feature and where it is, before anything is generated. The
+  check is an allow-list, so a feature added upstream later is refused too. See
+  [docs/schema.md](docs/schema.md), "What it can't apply is refused". **Breaking for documents**
+  that use any schema feature from 3.2.0 on: they were imported without it before, and are refused
+  now.
+- The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
+  round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
+  3.17.0.
+
 ## v0.14.0 — personal data, crypto-shredded
 
 The port of dotnetcqrs's personal-data support:

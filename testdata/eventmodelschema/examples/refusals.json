@@ -1,0 +1,159 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "3.15.0",
+  "id": "refusals-example",
+  "name": "Refusals Example",
+  "description": "Declared refusals (3.10.0; numeric comparisons, 3.11.0): a time entry is claimed by one invoice at a time, and cannot be changed while it is claimed. Each rule reads the entry's own state (folded from its own events) and the command, never a read model.",
+  "swimlanes": [
+    { "id": "billing", "name": "Billing", "kind": "team" }
+  ],
+  "events": {
+    "entry-logged": {
+      "name": "Entry Logged",
+      "swimlaneId": "billing",
+      "aggregate": "entry",
+      "fields": [
+        { "name": "entryId", "type": "string" },
+        { "name": "hours", "type": "decimal" }
+      ]
+    },
+    "entry-claimed-for-invoice": {
+      "name": "Entry Claimed For Invoice",
+      "swimlaneId": "billing",
+      "aggregate": "entry",
+      "fields": [
+        { "name": "entryId", "type": "string" },
+        { "name": "claimedForInvoiceId", "type": "string" }
+      ]
+    },
+    "entry-updated": {
+      "name": "Entry Updated",
+      "swimlaneId": "billing",
+      "aggregate": "entry",
+      "fields": [
+        { "name": "entryId", "type": "string" },
+        { "name": "hours", "type": "decimal" }
+      ]
+    }
+  },
+  "commands": {
+    "log-entry": {
+      "name": "Log Entry",
+      "aggregate": "entry",
+      "fields": [{ "name": "hours", "type": "decimal" }]
+    },
+    "claim-entry-for-invoice": {
+      "name": "Claim Entry For Invoice",
+      "aggregate": "entry",
+      "fields": [{ "name": "claimedForInvoiceId", "type": "string" }],
+      "refuseWhen": [
+        {
+          "message": "entry is on another invoice",
+          "all": [
+            { "state": "claimedForInvoiceId", "is": "set" },
+            { "state": "claimedForInvoiceId", "notEquals": { "command": "claimedForInvoiceId" } }
+          ]
+        }
+      ]
+    },
+    "update-entry": {
+      "name": "Update Entry",
+      "aggregate": "entry",
+      "fields": [{ "name": "hours", "type": "decimal" }],
+      "refuseWhen": [
+        { "message": "entry is on an invoice", "all": [{ "state": "claimedForInvoiceId", "is": "set" }] },
+        { "message": "hours must be positive", "all": [{ "command": "hours", "atMost": 0 }] },
+        { "message": "a day has at most 24 hours", "all": [{ "command": "hours", "greaterThan": 24 }] }
+      ]
+    }
+  },
+  "screens": {
+    "entries-screen": { "name": "Entries" },
+    "invoicing-screen": { "name": "Invoicing" }
+  },
+  "slices": [
+    {
+      "id": "log-entry-slice",
+      "name": "Log Entry",
+      "pattern": "stateChange",
+      "swimlaneId": "billing",
+      "status": "created",
+      "screenId": "entries-screen",
+      "commandId": "log-entry",
+      "eventIds": ["entry-logged"],
+      "scenarios": [
+        {
+          "id": "log-an-entry", "name": "Log an entry", "kind": "stateChange",
+          "given": [], "when": { "commandId": "log-entry", "data": { "hours": 3 } },
+          "then": { "events": [{ "eventId": "entry-logged" }] }
+        }
+      ]
+    },
+    {
+      "id": "claim-entry-slice",
+      "name": "Claim Entry For Invoice",
+      "pattern": "stateChange",
+      "swimlaneId": "billing",
+      "status": "created",
+      "screenId": "invoicing-screen",
+      "commandId": "claim-entry-for-invoice",
+      "eventIds": ["entry-claimed-for-invoice"],
+      "scenarios": [
+        {
+          "id": "claim-an-entry", "name": "An unclaimed entry is claimed", "kind": "stateChange",
+          "given": [{ "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } }],
+          "when": { "commandId": "claim-entry-for-invoice", "data": { "claimedForInvoiceId": "inv-1" } },
+          "then": { "events": [{ "eventId": "entry-claimed-for-invoice" }] }
+        },
+        {
+          "id": "claimed-by-another-invoice", "name": "An entry on one invoice cannot be claimed by another", "kind": "error",
+          "given": [
+            { "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } },
+            { "eventId": "entry-claimed-for-invoice", "data": { "entryId": "e1", "claimedForInvoiceId": "inv-1" } }
+          ],
+          "when": { "commandId": "claim-entry-for-invoice", "data": { "claimedForInvoiceId": "inv-2" } },
+          "then": { "error": { "message": "entry is on another invoice" } }
+        }
+      ]
+    },
+    {
+      "id": "update-entry-slice",
+      "name": "Update Entry",
+      "pattern": "stateChange",
+      "swimlaneId": "billing",
+      "status": "created",
+      "screenId": "entries-screen",
+      "commandId": "update-entry",
+      "eventIds": ["entry-updated"],
+      "scenarios": [
+        {
+          "id": "update-an-entry", "name": "An unclaimed entry can be updated", "kind": "stateChange",
+          "given": [{ "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } }],
+          "when": { "commandId": "update-entry", "data": { "hours": 4 } },
+          "then": { "events": [{ "eventId": "entry-updated" }] }
+        },
+        {
+          "id": "claimed-entry-cannot-change", "name": "A claimed entry cannot be updated", "kind": "error",
+          "given": [
+            { "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } },
+            { "eventId": "entry-claimed-for-invoice", "data": { "entryId": "e1", "claimedForInvoiceId": "inv-1" } }
+          ],
+          "when": { "commandId": "update-entry", "data": { "hours": 4 } },
+          "then": { "error": { "message": "entry is on an invoice" } }
+        },
+        {
+          "id": "hours-must-be-positive", "name": "Negative hours are refused (3.11.0: atMost)", "kind": "error",
+          "given": [{ "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } }],
+          "when": { "commandId": "update-entry", "data": { "hours": -2 } },
+          "then": { "error": { "message": "hours must be positive" } }
+        },
+        {
+          "id": "at-most-a-day", "name": "More than 24 hours is refused (3.11.0: greaterThan)", "kind": "error",
+          "given": [{ "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } }],
+          "when": { "commandId": "update-entry", "data": { "hours": 25 } },
+          "then": { "error": { "message": "a day has at most 24 hours" } }
+        }
+      ]
+    }
+  ]
+}

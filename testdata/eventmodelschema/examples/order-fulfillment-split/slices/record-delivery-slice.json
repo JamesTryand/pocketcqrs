@@ -1,0 +1,83 @@
+{
+  "id": "record-delivery-slice",
+  "name": "Record Delivery",
+  "pattern": "stateChange",
+  "swimlaneId": "sales",
+  "chapterId": "order-lifecycle",
+  "businessCapability": "Know whether an order reached the customer",
+  "status": "planned",
+  "ingressId": "carrier-webhook",
+  "commandId": "record-delivery",
+  "eventIds": [
+    "order-delivered",
+    "delivery-failed"
+  ],
+  "outcomes": [
+    [
+      "order-delivered"
+    ],
+    [
+      "delivery-failed"
+    ]
+  ],
+  "scenarios": [
+    {
+      "id": "carrier-reports-delivery",
+      "name": "The carrier reports a successful delivery",
+      "kind": "stateChange",
+      "given": [
+        {
+          "eventId": "order-shipped",
+          "data": {
+            "orderId": "order-1"
+          }
+        }
+      ],
+      "when": {
+        "commandId": "record-delivery",
+        "data": {
+          "orderId": "order-1",
+          "carrierEventId": "evt-1",
+          "delivered": true
+        }
+      },
+      "then": {
+        "events": [
+          {
+            "eventId": "order-delivered",
+            "data": {
+              "orderId": "order-1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "delivery-before-shipment-rejected",
+      "name": "A delivery report for an order that never shipped is rejected",
+      "kind": "error",
+      "given": [
+        {
+          "eventId": "order-placed",
+          "data": {
+            "orderId": "order-1"
+          }
+        }
+      ],
+      "when": {
+        "commandId": "record-delivery",
+        "data": {
+          "orderId": "order-1",
+          "carrierEventId": "evt-2",
+          "delivered": true
+        }
+      },
+      "then": {
+        "error": {
+          "code": "ERR_NOT_SHIPPED",
+          "message": "The order has not shipped."
+        }
+      }
+    }
+  ]
+}

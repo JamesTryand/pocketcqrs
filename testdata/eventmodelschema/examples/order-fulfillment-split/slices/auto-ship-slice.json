@@ -15,6 +15,12 @@
   "resultEventIds": [
     "order-shipped"
   ],
+  "outcomes": [
+    [
+      "order-shipped"
+    ],
+    []
+  ],
   "scenarios": [
     {
       "id": "auto-ship-triggers-on-order-placed",

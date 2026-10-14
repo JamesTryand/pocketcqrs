@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/manifest.schema.json",
+  "title": "EventModeling Manifest",
+  "description": "Describes how a single EventModeling document (see eventmodeling.schema.json) is split across multiple files: which file holds each registry, and the ordered list of slice files (order lives here, and only here -- not reintroduced as a per-slice index field). Joining a manifest with the files it references reproduces exactly the document shape eventmodeling.schema.json validates. This schema validates only the manifest's own skeleton (paths, swimlanes, metadata) -- structural correctness of the full model is re-checked against eventmodeling.schema.json once joined, so id/swimlane shapes are duplicated here deliberately, kept intentionally minimal.",
+  "type": "object",
+  "required": ["eventModelingSchemaVersion", "id", "name", "swimlanes", "slices"],
+  "properties": {
+    "eventModelingSchemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "id": { "$ref": "#/$defs/id" },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "swimlanes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/swimlane" },
+      "minItems": 1
+    },
+    "registries": {
+      "type": "object",
+      "properties": {
+        "chapters": { "$ref": "#/$defs/filePath" },
+        "actorLanes": { "$ref": "#/$defs/filePath" },
+        "events": { "$ref": "#/$defs/filePath" },
+        "commands": { "$ref": "#/$defs/filePath" },
+        "readModels": { "$ref": "#/$defs/filePath" },
+        "screens": { "$ref": "#/$defs/filePath" },
+        "automations": { "$ref": "#/$defs/filePath" },
+        "hotspots": { "$ref": "#/$defs/filePath" }
+      },
+      "additionalProperties": false
+    },
+    "slices": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/filePath" }
+    }
+  },
+  "additionalProperties": false,
+
+  "$defs": {
+    "filePath": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path relative to the manifest's own directory. No naming convention is required or assumed -- slice files may be organized into any folder layout (flat, by swimlane, by pattern, or otherwise); the manifest's explicit paths are what makes this possible without special-casing any particular scheme."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "swimlane": {
+      "type": "object",
+      "required": ["id", "name", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["team", "system"] },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

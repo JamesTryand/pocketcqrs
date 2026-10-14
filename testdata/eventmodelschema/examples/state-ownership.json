@@ -1,0 +1,99 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "3.15.0",
+  "id": "state-ownership-example",
+  "name": "State Ownership Example",
+  "description": "Ownership decided by the aggregate (3.15.0): an expense is changed or deleted only by the staff member it belongs to, which the expense's own state knows from its own events. No read model is consulted, so the first edit after logging is never refused while a projection catches up, and the check can't be stale.",
+  "swimlanes": [
+    { "id": "expenses", "name": "Expenses", "kind": "team" }
+  ],
+  "events": {
+    "expense-logged": {
+      "name": "Expense Logged",
+      "swimlaneId": "expenses",
+      "aggregate": "expense",
+      "fields": [
+        { "name": "expenseId", "type": "string", "idAttribute": true },
+        { "name": "staffId", "type": "string" },
+        { "name": "value", "type": "decimal" }
+      ]
+    },
+    "expense-updated": {
+      "name": "Expense Updated",
+      "swimlaneId": "expenses",
+      "aggregate": "expense",
+      "fields": [
+        { "name": "expenseId", "type": "string" },
+        { "name": "value", "type": "decimal" }
+      ]
+    }
+  },
+  "commands": {
+    "log-expense": {
+      "name": "Log Expense",
+      "aggregate": "expense",
+      "fields": [{ "name": "value", "type": "decimal" }]
+    },
+    "update-expense": {
+      "name": "Update Expense",
+      "aggregate": "expense",
+      "fields": [{ "name": "value", "type": "decimal" }],
+      "requiredOwnership": {
+        "stateField": "staffId",
+        "message": "only this expense's own staff member may change it"
+      }
+    }
+  },
+  "screens": {
+    "expenses-screen": { "name": "Expenses" }
+  },
+  "slices": [
+    {
+      "id": "log-expense-slice",
+      "name": "Log Expense",
+      "pattern": "stateChange",
+      "swimlaneId": "expenses",
+      "status": "created",
+      "screenId": "expenses-screen",
+      "commandId": "log-expense",
+      "eventIds": ["expense-logged"],
+      "scenarios": [
+        {
+          "id": "log-an-expense", "name": "Log an expense", "kind": "stateChange",
+          "given": [], "when": { "commandId": "log-expense", "data": { "value": 12.5 }, "actor": "s1" },
+          "then": { "events": [{ "eventId": "expense-logged" }] }
+        }
+      ]
+    },
+    {
+      "id": "update-expense-slice",
+      "name": "Update Expense",
+      "pattern": "stateChange",
+      "swimlaneId": "expenses",
+      "status": "created",
+      "screenId": "expenses-screen",
+      "commandId": "update-expense",
+      "eventIds": ["expense-updated"],
+      "scenarios": [
+        {
+          "id": "owner-updates", "name": "The expense's own staff member updates it", "kind": "stateChange",
+          "given": [{ "eventId": "expense-logged", "data": { "expenseId": "x1", "staffId": "s1", "value": 12.5 } }],
+          "when": { "commandId": "update-expense", "data": { "value": 14 }, "actor": "s1" },
+          "then": { "events": [{ "eventId": "expense-updated", "data": { "value": 14 } }] }
+        },
+        {
+          "id": "someone-else-is-refused", "name": "Someone else's update is refused, by the expense itself", "kind": "error",
+          "given": [{ "eventId": "expense-logged", "data": { "expenseId": "x1", "staffId": "s1", "value": 12.5 } }],
+          "when": { "commandId": "update-expense", "data": { "value": 0 }, "actor": "s2" },
+          "then": { "error": { "message": "only this expense's own staff member may change it" } }
+        },
+        {
+          "id": "no-such-expense", "name": "An expense that doesn't exist is not anyone's: it doesn't exist", "kind": "error",
+          "given": [],
+          "when": { "commandId": "update-expense", "data": { "value": 14 }, "actor": "s2" },
+          "then": { "error": { "message": "expense does not exist" } }
+        }
+      ]
+    }
+  ]
+}

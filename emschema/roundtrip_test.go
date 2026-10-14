@@ -12,7 +12,7 @@ import (
 // mapping is supposed to produce — including the two things it must refuse
 // to guess at.
 func TestImportWorkedExample(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	doc, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestImportWorkedExample(t *testing.T) {
 // TestGeneratedSliceLoads: every file the importer produces must actually
 // load, or the import has only pretended to work.
 func TestGeneratedSliceLoads(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	doc, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestGeneratedSliceLoads(t *testing.T) {
 // about the recoverable core rather than equality — the interesting output
 // of this test is the documented list of what does NOT come back.
 func TestRoundTripLoss(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	doc, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestRoundTripLoss(t *testing.T) {
 // checks against the code the import generated — the step that makes a
 // scenario more than documentation.
 func TestVerifyRunsScenarios(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/order-fulfillment.json"))
+	doc, err := Load(fixture(t, "v3.1.1/examples/order-fulfillment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,58 @@
+{
+  "id": "reconcile-shipments-slice",
+  "name": "Reconcile Pending Shipments",
+  "pattern": "automation",
+  "swimlaneId": "warehouse",
+  "chapterId": "order-lifecycle",
+  "businessCapability": "No order stays unshipped because one attempt was lost",
+  "status": "planned",
+  "automationId": "reconcile-pending-shipments",
+  "schedule": {
+    "cron": {
+      "setting": "shipmentReconcileCron",
+      "default": "*/15 * * * *"
+    }
+  },
+  "readModelId": "pending-shipments",
+  "commandId": "ship-order",
+  "resultEventIds": [
+    "order-shipped"
+  ],
+  "outcomes": [
+    [
+      "order-shipped"
+    ],
+    []
+  ],
+  "scenarios": [
+    {
+      "id": "reconcile-ships-waiting-order",
+      "name": "A reconcile pass ships an order that is still waiting",
+      "kind": "stateChange",
+      "given": [
+        {
+          "eventId": "order-placed",
+          "data": {
+            "orderId": "order-2"
+          }
+        }
+      ],
+      "when": {
+        "commandId": "ship-order",
+        "data": {
+          "orderId": "order-2"
+        }
+      },
+      "then": {
+        "events": [
+          {
+            "eventId": "order-shipped",
+            "data": {
+              "orderId": "order-2"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

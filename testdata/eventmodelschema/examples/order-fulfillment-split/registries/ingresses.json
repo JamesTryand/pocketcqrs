@@ -1,0 +1,11 @@
+{
+  "carrier-webhook": {
+    "name": "Carrier Webhook",
+    "description": "The shipping partner calls this to report delivery attempts. It redelivers on any non-2xx response, so every call carries the carrier's own event id.",
+    "swimlaneId": "shipping-partner",
+    "verification": {
+      "scheme": "hmac-sha256"
+    },
+    "deliveryIdField": "carrierEventId"
+  }
+}

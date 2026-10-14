@@ -1,0 +1,229 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "3.15.0",
+  "id": "read-access-example",
+  "name": "Read Access Example",
+  "description": "Who may read which rows of a read model (3.8.0). A manager holds requiredRole and sees every time entry. Anyone else sees their own entries (selfAccess) and the entries on projects they manage (a scope with grantsAccess), and nothing else. The selfAccess param lets a manager ask for only their own entries too. Each stateView scenario names its caller.",
+  "swimlanes": [
+    { "id": "work", "name": "Work", "kind": "team" }
+  ],
+  "events": {
+    "project-manager-assigned": {
+      "name": "Project Manager Assigned",
+      "swimlaneId": "work",
+      "aggregate": "project",
+      "fields": [
+        { "name": "assignmentId", "type": "string", "idAttribute": true },
+        { "name": "projectId", "type": "string" },
+        { "name": "staffId", "type": "string" }
+      ]
+    },
+    "project-manager-unassigned": {
+      "name": "Project Manager Unassigned",
+      "swimlaneId": "work",
+      "aggregate": "project",
+      "fields": [
+        { "name": "assignmentId", "type": "string", "idAttribute": true },
+        { "name": "projectId", "type": "string" },
+        { "name": "staffId", "type": "string" }
+      ]
+    },
+    "time-logged": {
+      "name": "Time Logged",
+      "swimlaneId": "work",
+      "aggregate": "timeEntry",
+      "fields": [
+        { "name": "entryId", "type": "string", "idAttribute": true },
+        { "name": "projectId", "type": "string" },
+        { "name": "staffId", "type": "string" },
+        { "name": "hours", "type": "decimal" }
+      ]
+    }
+  },
+  "commands": {
+    "log-time": { "name": "Log Time", "aggregate": "timeEntry" },
+    "assign-project-manager": { "name": "Assign Project Manager", "aggregate": "project" },
+    "unassign-project-manager": { "name": "Unassign Project Manager", "aggregate": "project" }
+  },
+  "readModels": {
+    "project-managers": {
+      "name": "Project Managers",
+      "question": "Who manages which project?",
+      "builtFromEventIds": ["project-manager-assigned", "project-manager-unassigned"],
+      "removedByEventIds": ["project-manager-unassigned"],
+      "fields": [
+        { "name": "assignmentId", "type": "string", "idAttribute": true },
+        { "name": "projectId", "type": "string" },
+        { "name": "staffId", "type": "string" }
+      ],
+      "requiredRole": "manager"
+    },
+    "time-entries": {
+      "name": "Time Entries",
+      "question": "What time has been logged, by whom, on which project?",
+      "builtFromEventIds": ["time-logged"],
+      "fields": [
+        { "name": "entryId", "type": "string", "idAttribute": true },
+        { "name": "projectId", "type": "string" },
+        { "name": "staffId", "type": "string" },
+        { "name": "hours", "type": "decimal" }
+      ],
+      "requiredRole": "manager",
+      "selfAccess": { "subjectField": "staffId", "param": "mine" },
+      "scopes": [
+        {
+          "param": "managedBy",
+          "via": {
+            "readModelId": "project-managers",
+            "matchParamTo": "staffId",
+            "selectField": "projectId",
+            "filterLocalField": "projectId"
+          },
+          "grantsAccess": true
+        }
+      ]
+    }
+  },
+  "screens": {
+    "log-time-screen": { "name": "Log Time" },
+    "projects-screen": { "name": "Projects" },
+    "my-time-screen": { "name": "My Time" }
+  },
+  "slices": [
+    {
+      "id": "assign-project-manager-slice",
+      "name": "Assign Project Manager",
+      "pattern": "stateChange",
+      "swimlaneId": "work",
+      "status": "created",
+      "screenId": "projects-screen",
+      "commandId": "assign-project-manager",
+      "eventIds": ["project-manager-assigned"],
+      "scenarios": []
+    },
+    {
+      "id": "unassign-project-manager-slice",
+      "name": "Unassign Project Manager",
+      "pattern": "stateChange",
+      "swimlaneId": "work",
+      "status": "created",
+      "screenId": "projects-screen",
+      "commandId": "unassign-project-manager",
+      "eventIds": ["project-manager-unassigned"],
+      "scenarios": []
+    },
+    {
+      "id": "log-time-slice",
+      "name": "Log Time",
+      "pattern": "stateChange",
+      "swimlaneId": "work",
+      "status": "created",
+      "screenId": "log-time-screen",
+      "commandId": "log-time",
+      "eventIds": ["time-logged"],
+      "scenarios": []
+    },
+    {
+      "id": "view-time-slice",
+      "name": "View Time",
+      "pattern": "stateView",
+      "swimlaneId": "work",
+      "status": "created",
+      "screenId": "my-time-screen",
+      "readModelId": "time-entries",
+      "scenarios": [
+        {
+          "id": "manager-sees-every-entry",
+          "name": "A manager holds requiredRole, so sees every entry",
+          "kind": "stateView",
+          "given": [
+            { "eventId": "time-logged", "data": { "entryId": "e1", "projectId": "p1", "staffId": "s1", "hours": 2 } },
+            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+          ],
+          "when": { "readModelId": "time-entries", "caller": { "subjectId": "m1", "role": "manager" } },
+          "then": {
+            "result": {
+              "entries": [
+                { "entryId": "e1", "staffId": "s1" },
+                { "entryId": "e2", "staffId": "s2" }
+              ]
+            }
+          }
+        },
+        {
+          "id": "staff-sees-only-own-entries",
+          "name": "Anyone else sees only their own entries, without asking for them",
+          "kind": "stateView",
+          "given": [
+            { "eventId": "time-logged", "data": { "entryId": "e1", "projectId": "p1", "staffId": "s1", "hours": 2 } },
+            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+          ],
+          "when": { "readModelId": "time-entries", "caller": { "subjectId": "s1", "role": "staff" } },
+          "then": { "result": { "entries": [ { "entryId": "e1", "staffId": "s1" } ] } }
+        },
+        {
+          "id": "project-manager-also-sees-managed-projects",
+          "name": "A granting scope adds the entries on projects the caller manages",
+          "kind": "stateView",
+          "given": [
+            { "eventId": "project-manager-assigned", "data": { "assignmentId": "p2:s1", "projectId": "p2", "staffId": "s1" } },
+            { "eventId": "time-logged", "data": { "entryId": "e1", "projectId": "p1", "staffId": "s1", "hours": 2 } },
+            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } },
+            { "eventId": "time-logged", "data": { "entryId": "e3", "projectId": "p3", "staffId": "s3", "hours": 1 } }
+          ],
+          "when": { "readModelId": "time-entries", "caller": { "subjectId": "s1", "role": "staff" } },
+          "then": {
+            "result": {
+              "entries": [
+                { "entryId": "e1", "staffId": "s1" },
+                { "entryId": "e2", "staffId": "s2" }
+              ]
+            }
+          }
+        },
+        {
+          "id": "an-unassigned-project-manager-loses-the-grant",
+          "name": "Unassigning removes the project-managers row, and with it the access it granted",
+          "kind": "stateView",
+          "given": [
+            { "eventId": "project-manager-assigned", "data": { "assignmentId": "p2:s1", "projectId": "p2", "staffId": "s1" } },
+            { "eventId": "project-manager-unassigned", "data": { "assignmentId": "p2:s1", "projectId": "p2", "staffId": "s1" } },
+            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+          ],
+          "when": { "readModelId": "time-entries", "caller": { "subjectId": "s1", "role": "staff" } },
+          "then": { "result": { "entries": [] } }
+        },
+        {
+          "id": "a-param-cannot-widen-access",
+          "name": "A scope param names the caller, whatever value is sent",
+          "kind": "stateView",
+          "given": [
+            { "eventId": "project-manager-assigned", "data": { "assignmentId": "p2:s2", "projectId": "p2", "staffId": "s2" } },
+            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+          ],
+          "when": {
+            "readModelId": "time-entries",
+            "queryParams": { "managedBy": "s2" },
+            "caller": { "subjectId": "s1", "role": "staff" }
+          },
+          "then": { "result": { "entries": [] } }
+        },
+        {
+          "id": "manager-asks-for-own-entries",
+          "name": "The selfAccess param narrows even a role holder to their own entries",
+          "kind": "stateView",
+          "given": [
+            { "eventId": "time-logged", "data": { "entryId": "e1", "projectId": "p1", "staffId": "m1", "hours": 2 } },
+            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+          ],
+          "when": {
+            "readModelId": "time-entries",
+            "queryParams": { "mine": "true" },
+            "caller": { "subjectId": "m1", "role": "manager" }
+          },
+          "then": { "result": { "entries": [ { "entryId": "e1", "staffId": "m1" } ] } }
+        }
+      ]
+    }
+  ]
+}

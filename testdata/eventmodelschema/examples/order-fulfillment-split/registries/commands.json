@@ -22,9 +22,56 @@
     "reason": "A pending order needs to leave the warehouse.",
     "aggregate": "Order"
   },
-  "notify-shipping-partner": {
-    "name": "Notify Shipping Partner",
-    "description": "Informs the external shipping partner that an order has shipped.",
+  "record-partner-notified": {
+    "name": "Record Partner Notified",
+    "description": "Records that the shipping partner acknowledged a shipment.",
     "reason": "The shipping partner needs to know about the shipment to process it."
+  },
+  "record-partner-notification-abandoned": {
+    "name": "Record Partner Notification Abandoned",
+    "description": "Records that the shipping partner could not be told about a shipment.",
+    "reason": "Someone has to tell the partner another way.",
+    "fields": [
+      {
+        "name": "orderId",
+        "type": "uuid"
+      },
+      {
+        "name": "reason",
+        "type": "string"
+      }
+    ]
+  },
+  "record-delivery": {
+    "name": "Record Delivery",
+    "description": "The carrier reports how a delivery attempt went.",
+    "reason": "The order's status should reflect what happened at the door.",
+    "aggregate": "Order",
+    "fields": [
+      {
+        "name": "orderId",
+        "type": "uuid"
+      },
+      {
+        "name": "carrierEventId",
+        "type": "string"
+      },
+      {
+        "name": "delivered",
+        "type": "boolean"
+      }
+    ]
+  },
+  "flag-delivery-overdue": {
+    "name": "Flag Delivery Overdue",
+    "description": "Marks a shipped order whose delivery has taken too long.",
+    "reason": "Someone should chase the carrier before the customer has to.",
+    "aggregate": "Order",
+    "fields": [
+      {
+        "name": "orderId",
+        "type": "uuid"
+      }
+    ]
   }
 }

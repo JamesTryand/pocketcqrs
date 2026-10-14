@@ -45,7 +45,30 @@
   },
   "shipment-notified": {
     "name": "Shipment Notified",
-    "description": "The shipping partner was notified of a shipment.",
+    "description": "The shipping partner acknowledged a shipment.",
     "swimlaneId": "shipping-partner"
+  },
+  "partner-notification-abandoned": {
+    "name": "Partner Notification Abandoned",
+    "description": "The shipping partner could not be told about a shipment, and the runtime has stopped trying.",
+    "swimlaneId": "shipping-partner"
+  },
+  "order-delivered": {
+    "name": "Order Delivered",
+    "description": "The carrier delivered the order.",
+    "swimlaneId": "sales",
+    "aggregate": "Order"
+  },
+  "delivery-failed": {
+    "name": "Delivery Failed",
+    "description": "The carrier could not deliver the order.",
+    "swimlaneId": "sales",
+    "aggregate": "Order"
+  },
+  "delivery-overdue": {
+    "name": "Delivery Overdue",
+    "description": "A shipped order has not been reported delivered or failed in time.",
+    "swimlaneId": "sales",
+    "aggregate": "Order"
   }
 }

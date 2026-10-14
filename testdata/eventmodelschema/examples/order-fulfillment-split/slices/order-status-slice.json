@@ -17,7 +17,8 @@
         {
           "eventId": "order-placed",
           "data": {
-            "orderId": "order-1"
+            "orderId": "order-1",
+            "customerId": "customer-1"
           }
         }
       ],
@@ -30,6 +31,7 @@
       "then": {
         "result": {
           "orderId": "order-1",
+          "customerId": "customer-1",
           "status": "placed"
         }
       }

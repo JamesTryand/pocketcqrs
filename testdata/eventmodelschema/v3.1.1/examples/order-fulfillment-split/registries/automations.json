@@ -1,0 +1,10 @@
+{
+  "auto-ship-pending-orders": {
+    "name": "Auto-Ship Pending Orders",
+    "description": "Reacts to newly placed orders by shipping them."
+  },
+  "notify-shipping-partner-automation": {
+    "name": "Notify Shipping Partner",
+    "description": "Reacts to a shipment leaving the warehouse by notifying the external shipping partner. A Bridge: no local state needed, straight from event to command."
+  }
+}

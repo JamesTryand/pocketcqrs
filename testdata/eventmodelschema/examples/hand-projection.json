@@ -1,0 +1,167 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "3.17.0",
+  "id": "hand-projection-example",
+  "name": "Hand Projection Example",
+  "description": "A read model built by a hand-written projection (3.17.0 readModel.projection: \"hand\"): which orders were placed after their day's dispatch had closed. That joins two streams (orders and the dispatch day), which no declaration expresses, so the projection is written by hand. A generator still generates its query route; a model-only check reports its view scenarios as needing the host (they are the host's to prove), and a host check runs the host's own projection against them.",
+  "swimlanes": [
+    {
+      "id": "sales",
+      "name": "Sales",
+      "kind": "team"
+    }
+  ],
+  "events": {
+    "order-placed": {
+      "name": "Order Placed",
+      "swimlaneId": "sales",
+      "aggregate": "order",
+      "fields": [
+        {
+          "name": "orderId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "day",
+          "type": "date"
+        }
+      ]
+    },
+    "dispatch-closed": {
+      "name": "Dispatch Closed",
+      "swimlaneId": "sales",
+      "aggregate": "dispatch_day",
+      "fields": [
+        {
+          "name": "day",
+          "type": "date",
+          "idAttribute": true
+        }
+      ]
+    }
+  },
+  "commands": {
+    "place-order": {
+      "name": "Place Order",
+      "aggregate": "order",
+      "fields": [
+        {
+          "name": "day",
+          "type": "date"
+        }
+      ]
+    },
+    "close-dispatch": {
+      "name": "Close Dispatch",
+      "aggregate": "dispatch_day",
+      "fields": []
+    }
+  },
+  "readModels": {
+    "late-orders": {
+      "name": "Late Orders",
+      "question": "Which orders were placed for a day whose dispatch had already closed?",
+      "builtFromEventIds": [
+        "order-placed",
+        "dispatch-closed"
+      ],
+      "projection": "hand",
+      "fields": [
+        {
+          "name": "orderId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "day",
+          "type": "date"
+        }
+      ]
+    }
+  },
+  "screens": {
+    "sales-screen": {
+      "name": "Sales"
+    }
+  },
+  "slices": [
+    {
+      "id": "place-order-slice",
+      "name": "Place Order",
+      "pattern": "stateChange",
+      "swimlaneId": "sales",
+      "status": "created",
+      "screenId": "sales-screen",
+      "commandId": "place-order",
+      "eventIds": [
+        "order-placed"
+      ],
+      "scenarios": []
+    },
+    {
+      "id": "close-dispatch-slice",
+      "name": "Close Dispatch",
+      "pattern": "stateChange",
+      "swimlaneId": "sales",
+      "status": "created",
+      "screenId": "sales-screen",
+      "commandId": "close-dispatch",
+      "eventIds": [
+        "dispatch-closed"
+      ],
+      "scenarios": []
+    },
+    {
+      "id": "view-late-orders-slice",
+      "name": "View Late Orders",
+      "pattern": "stateView",
+      "swimlaneId": "sales",
+      "status": "created",
+      "screenId": "sales-screen",
+      "readModelId": "late-orders",
+      "scenarios": [
+        {
+          "id": "an-order-after-dispatch-closed-is-late",
+          "kind": "stateView",
+          "name": "An order for 14 October placed after that day's dispatch closed is late; one for 15 October is not",
+          "given": [
+            {
+              "eventId": "dispatch-closed",
+              "data": {
+                "day": "2026-10-14"
+              }
+            },
+            {
+              "eventId": "order-placed",
+              "data": {
+                "orderId": "o1",
+                "day": "2026-10-14"
+              }
+            },
+            {
+              "eventId": "order-placed",
+              "data": {
+                "orderId": "o2",
+                "day": "2026-10-15"
+              }
+            }
+          ],
+          "when": {
+            "readModelId": "late-orders"
+          },
+          "then": {
+            "result": {
+              "entries": [
+                {
+                  "orderId": "o1",
+                  "day": "2026-10-14"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

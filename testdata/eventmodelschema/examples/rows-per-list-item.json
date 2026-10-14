@@ -1,0 +1,496 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "3.16.0",
+  "id": "rows-per-list-item-example",
+  "name": "Rows Per List Item Example",
+  "description": "Rows per list item (3.16.0): an invoice's lines, each carrying its project, are shown to each project's manager as that project's part of the invoice: one row per invoice and project, holding the project's lines, their subtotal and the invoice's status and number. The rows are built from the invoice's own events (rowsPerListItem); the subtotal is the sum of a subfield over the row's lines, given only once every line carries it (sumOfItems); the status is a literal per event (byEvent). A line with no project, such as the currency conversion, is in no row.",
+  "swimlanes": [
+    {
+      "id": "billing",
+      "name": "Billing",
+      "kind": "team"
+    }
+  ],
+  "events": {
+    "invoice-drafted": {
+      "name": "Invoice Drafted",
+      "swimlaneId": "billing",
+      "aggregate": "invoice",
+      "fields": [
+        {
+          "name": "invoiceId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "customerId",
+          "type": "string"
+        },
+        {
+          "name": "lines",
+          "type": "custom",
+          "cardinality": "list",
+          "description": "Each line in pounds, before conversion: no convertedAmount yet.",
+          "subfields": [
+            {
+              "name": "entryId",
+              "type": "string"
+            },
+            {
+              "name": "projectId",
+              "type": "string",
+              "optional": true
+            },
+            {
+              "name": "localAmount",
+              "type": "decimal",
+              "optional": true
+            },
+            {
+              "name": "convertedAmount",
+              "type": "decimal",
+              "optional": true
+            },
+            {
+              "name": "description",
+              "type": "string",
+              "optional": true
+            }
+          ]
+        }
+      ]
+    },
+    "invoice-issued": {
+      "name": "Invoice Issued",
+      "swimlaneId": "billing",
+      "aggregate": "invoice",
+      "fields": [
+        {
+          "name": "invoiceId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "invoiceNumber",
+          "type": "string"
+        },
+        {
+          "name": "invoiceCurrency",
+          "type": "string"
+        },
+        {
+          "name": "lines",
+          "type": "custom",
+          "cardinality": "list",
+          "description": "Each line converted into the invoice currency; the conversion margin is a line with no project.",
+          "subfields": [
+            {
+              "name": "entryId",
+              "type": "string"
+            },
+            {
+              "name": "projectId",
+              "type": "string",
+              "optional": true
+            },
+            {
+              "name": "localAmount",
+              "type": "decimal",
+              "optional": true
+            },
+            {
+              "name": "convertedAmount",
+              "type": "decimal",
+              "optional": true
+            },
+            {
+              "name": "description",
+              "type": "string",
+              "optional": true
+            }
+          ]
+        }
+      ]
+    },
+    "invoice-discarded": {
+      "name": "Invoice Discarded",
+      "swimlaneId": "billing",
+      "aggregate": "invoice",
+      "fields": [
+        {
+          "name": "invoiceId",
+          "type": "string",
+          "idAttribute": true
+        }
+      ]
+    }
+  },
+  "commands": {
+    "draft-invoice": {
+      "name": "Draft Invoice",
+      "aggregate": "invoice",
+      "fields": [
+        {
+          "name": "customerId",
+          "type": "string"
+        }
+      ]
+    },
+    "issue-invoice": {
+      "name": "Issue Invoice",
+      "aggregate": "invoice",
+      "fields": [
+        {
+          "name": "invoiceCurrency",
+          "type": "string"
+        }
+      ]
+    },
+    "discard-invoice": {
+      "name": "Discard Invoice",
+      "aggregate": "invoice",
+      "fields": []
+    }
+  },
+  "readModels": {
+    "invoice-parts": {
+      "name": "Invoice Parts",
+      "question": "What is each project's part of each invoice: its lines, their subtotal, and the invoice's status and number?",
+      "builtFromEventIds": [
+        "invoice-drafted",
+        "invoice-issued",
+        "invoice-discarded"
+      ],
+      "removedByEventIds": [
+        "invoice-discarded"
+      ],
+      "rowsPerListItem": {
+        "listField": "lines",
+        "groupBy": "projectId"
+      },
+      "fields": [
+        {
+          "name": "partId",
+          "type": "string",
+          "idAttribute": true,
+          "description": "<invoice stream>|<projectId>"
+        },
+        {
+          "name": "invoiceId",
+          "type": "string"
+        },
+        {
+          "name": "projectId",
+          "type": "string"
+        },
+        {
+          "name": "customerId",
+          "type": "string"
+        },
+        {
+          "name": "invoiceNumber",
+          "type": "string"
+        },
+        {
+          "name": "invoiceCurrency",
+          "type": "string"
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "derivation": {
+            "kind": "byEvent",
+            "values": {
+              "invoice-drafted": "draft",
+              "invoice-issued": "issued"
+            }
+          }
+        },
+        {
+          "name": "lines",
+          "type": "custom",
+          "cardinality": "list",
+          "description": "The project's own lines.",
+          "subfields": [
+            {
+              "name": "entryId",
+              "type": "string"
+            },
+            {
+              "name": "projectId",
+              "type": "string",
+              "optional": true
+            },
+            {
+              "name": "localAmount",
+              "type": "decimal",
+              "optional": true
+            },
+            {
+              "name": "convertedAmount",
+              "type": "decimal",
+              "optional": true
+            },
+            {
+              "name": "description",
+              "type": "string",
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "subtotal",
+          "type": "decimal",
+          "derivation": {
+            "kind": "sumOfItems",
+            "subfield": "convertedAmount"
+          },
+          "description": "The project's lines in the invoice currency, once every one of them is converted."
+        }
+      ]
+    }
+  },
+  "screens": {
+    "billing-screen": {
+      "name": "Billing"
+    }
+  },
+  "slices": [
+    {
+      "id": "draft-invoice-slice",
+      "name": "Draft Invoice",
+      "pattern": "stateChange",
+      "swimlaneId": "billing",
+      "status": "created",
+      "screenId": "billing-screen",
+      "commandId": "draft-invoice",
+      "eventIds": [
+        "invoice-drafted"
+      ],
+      "scenarios": []
+    },
+    {
+      "id": "issue-invoice-slice",
+      "name": "Issue Invoice",
+      "pattern": "stateChange",
+      "swimlaneId": "billing",
+      "status": "created",
+      "screenId": "billing-screen",
+      "commandId": "issue-invoice",
+      "eventIds": [
+        "invoice-issued"
+      ],
+      "scenarios": []
+    },
+    {
+      "id": "discard-invoice-slice",
+      "name": "Discard Invoice",
+      "pattern": "stateChange",
+      "swimlaneId": "billing",
+      "status": "created",
+      "screenId": "billing-screen",
+      "commandId": "discard-invoice",
+      "eventIds": [
+        "invoice-discarded"
+      ],
+      "scenarios": []
+    },
+    {
+      "id": "view-invoice-parts-slice",
+      "name": "View Invoice Parts",
+      "pattern": "stateView",
+      "swimlaneId": "billing",
+      "status": "created",
+      "screenId": "billing-screen",
+      "readModelId": "invoice-parts",
+      "scenarios": [
+        {
+          "id": "issued-invoice-has-a-part-per-project",
+          "kind": "stateView",
+          "name": "An issued USD invoice has a part per project: p1's two lines of 306.00 are 612.00, p2's one is 136.00; the conversion margin of 22.44 has no project and is in neither",
+          "given": [
+            {
+              "eventId": "invoice-drafted",
+              "data": {
+                "invoiceId": "inv-1",
+                "customerId": "c1",
+                "lines": [
+                  {
+                    "entryId": "t1",
+                    "projectId": "p1",
+                    "localAmount": 225
+                  },
+                  {
+                    "entryId": "t2",
+                    "projectId": "p1",
+                    "localAmount": 225
+                  },
+                  {
+                    "entryId": "t3",
+                    "projectId": "p2",
+                    "localAmount": 100
+                  }
+                ]
+              }
+            },
+            {
+              "eventId": "invoice-issued",
+              "data": {
+                "invoiceId": "inv-1",
+                "invoiceNumber": "SI-7",
+                "invoiceCurrency": "USD",
+                "lines": [
+                  {
+                    "entryId": "t1",
+                    "projectId": "p1",
+                    "localAmount": 225,
+                    "convertedAmount": 306
+                  },
+                  {
+                    "entryId": "t2",
+                    "projectId": "p1",
+                    "localAmount": 225,
+                    "convertedAmount": 306
+                  },
+                  {
+                    "entryId": "t3",
+                    "projectId": "p2",
+                    "localAmount": 100,
+                    "convertedAmount": 136
+                  },
+                  {
+                    "entryId": "currency-conversion",
+                    "convertedAmount": 22.44,
+                    "description": "Currency conversion"
+                  }
+                ]
+              }
+            }
+          ],
+          "when": {
+            "readModelId": "invoice-parts"
+          },
+          "then": {
+            "result": {
+              "entries": [
+                {
+                  "invoiceId": "inv-1",
+                  "projectId": "p1",
+                  "customerId": "c1",
+                  "invoiceNumber": "SI-7",
+                  "status": "issued",
+                  "subtotal": 612
+                },
+                {
+                  "invoiceId": "inv-1",
+                  "projectId": "p2",
+                  "customerId": "c1",
+                  "invoiceNumber": "SI-7",
+                  "status": "issued",
+                  "subtotal": 136
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "a-drafts-parts-have-no-subtotal",
+          "kind": "stateView",
+          "name": "A draft's parts have their lines but no subtotal: the lines are in pounds, not yet converted",
+          "given": [
+            {
+              "eventId": "invoice-drafted",
+              "data": {
+                "invoiceId": "inv-1",
+                "customerId": "c1",
+                "lines": [
+                  {
+                    "entryId": "t1",
+                    "projectId": "p1",
+                    "localAmount": 225
+                  },
+                  {
+                    "entryId": "t2",
+                    "projectId": "p1",
+                    "localAmount": 225
+                  },
+                  {
+                    "entryId": "t3",
+                    "projectId": "p2",
+                    "localAmount": 100
+                  }
+                ]
+              }
+            }
+          ],
+          "when": {
+            "readModelId": "invoice-parts"
+          },
+          "then": {
+            "result": {
+              "entries": [
+                {
+                  "invoiceId": "inv-1",
+                  "projectId": "p1",
+                  "status": "draft",
+                  "subtotal": null
+                },
+                {
+                  "invoiceId": "inv-1",
+                  "projectId": "p2",
+                  "status": "draft",
+                  "subtotal": null
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "a-discarded-drafts-parts-leave",
+          "kind": "stateView",
+          "name": "A discarded draft's parts leave",
+          "given": [
+            {
+              "eventId": "invoice-drafted",
+              "data": {
+                "invoiceId": "inv-1",
+                "customerId": "c1",
+                "lines": [
+                  {
+                    "entryId": "t1",
+                    "projectId": "p1",
+                    "localAmount": 225
+                  },
+                  {
+                    "entryId": "t2",
+                    "projectId": "p1",
+                    "localAmount": 225
+                  },
+                  {
+                    "entryId": "t3",
+                    "projectId": "p2",
+                    "localAmount": 100
+                  }
+                ]
+              }
+            },
+            {
+              "eventId": "invoice-discarded",
+              "data": {
+                "invoiceId": "inv-1"
+              }
+            }
+          ],
+          "when": {
+            "readModelId": "invoice-parts"
+          },
+          "then": {
+            "result": {
+              "entries": []
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

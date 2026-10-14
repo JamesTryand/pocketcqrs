@@ -17,7 +17,10 @@ import (
 func TestSchemaImportReturnsErrorOnRefusal(t *testing.T) {
 	dir := t.TempDir()
 	bogus := filepath.Join(dir, "bogus.json")
-	if err := os.WriteFile(bogus, []byte(`{"not":"a schema"}`), 0o644); err != nil {
+	// a document lint refuses: the translation pattern was removed in v2
+	body := `{"swimlanes":[{"id":"s","name":"S","kind":"team"}],
+		"slices":[{"id":"t","name":"T","pattern":"translation","swimlaneId":"s","status":"planned","scenarios":[]}]}`
+	if err := os.WriteFile(bogus, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -53,11 +56,7 @@ func TestSchemaImportReturnsErrorOnMissingFile(t *testing.T) {
 func TestSchemaImportReturnsNilOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	doc := filepath.Join(dir, "good.json")
-	body := `{"swimlanes":[{"aggregate":"widget","elements":[
-		{"kind":"command","name":"CreateWidget"},
-		{"kind":"event","name":"WidgetCreated"}
-	]}]}`
-	if err := os.WriteFile(doc, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(doc, []byte(widgetDoc), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,7 +64,8 @@ func TestSchemaImportReturnsNilOnSuccess(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{doc, "--skip-scenarios"})
+	cmd.SetArgs([]string{doc, "--skip-scenarios", "--aggregate", "create-widget=widget",
+		"--aggregate", "widget-created=widget", "--out", filepath.Join(dir, "out")})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("a valid document was refused: %v\n%s", err, out.String())
