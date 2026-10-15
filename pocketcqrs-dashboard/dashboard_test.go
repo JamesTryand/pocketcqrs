@@ -210,6 +210,16 @@ func fakeBackend(t *testing.T) *httptest.Server {
 			{ID: 4, Resolved: true},
 		}})
 	}))
+	// a rebuild request: the backend records it for its engine (202)
+	mux.HandleFunc("POST /api/cqrs/admin/projections/{name}/rebuild", authed(func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("name") != "tasks" {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"code":404,"message":"adminapi: no such projection"}`))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"requested": "tasks"})
+	}))
 	mux.HandleFunc("POST /api/cqrs/deadletters/{id}/dismiss", authed(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"id": r.PathValue("id"), "resolved": true})
 	}))
@@ -1393,4 +1403,44 @@ func hasCookieDeleted(resp *http.Response, name string) bool {
 		}
 	}
 	return false
+}
+
+// A projection's row on the consumers page offers a rebuild; a reactor's
+// doesn't (only a projection can be rebuilt). The button only RECORDS a
+// request with the backend, whose engine carries it out, and says so.
+func TestProjectionRebuildRequest(t *testing.T) {
+	backend := fakeBackend(t)
+	dash := httptest.NewServer(newServer(backend.URL).routes())
+	t.Cleanup(dash.Close)
+	client := dashboardClient(t)
+	login(t, client, dash.URL)
+
+	resp := htmxRequest(t, client, http.MethodGet, dash.URL+"/fragments/checkpoints")
+	body := readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, `hx-post="/consumers/tasks/rebuild"`) {
+		t.Errorf("the tasks projection has no rebuild button:\n%s", body)
+	}
+	if strings.Contains(body, `/consumers/fulfillment/rebuild`) {
+		t.Errorf("a reactor must not offer a rebuild:\n%s", body)
+	}
+
+	resp = htmxRequest(t, client, http.MethodPost, dash.URL+"/consumers/tasks/rebuild")
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %s", resp.Status)
+	}
+	for _, want := range []string{`id="checkpoints-body"`, `id="checkpoints-flash" hx-swap-oob="true"`, `Rebuild of tasks requested`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rebuild response missing %q:\n%s", want, body)
+		}
+	}
+
+	resp = htmxRequest(t, client, http.MethodPost, dash.URL+"/consumers/nope/rebuild")
+	body = readBody(t, resp)
+	resp.Body.Close()
+	if !strings.Contains(body, "The rebuild request failed") {
+		t.Errorf("a refused request must be reported:\n%s", body)
+	}
 }

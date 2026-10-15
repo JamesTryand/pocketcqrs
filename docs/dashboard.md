@@ -60,6 +60,13 @@ effect functions alike — with its checkpoint and how far behind it is.
 Behind-by is measured against the **head of the log**
 (`totals.maxPosition − checkpoint`), never against an event count.
 
+A projection's row has **Rebuild**. It records a rebuild request with the
+backend, the same as `pocketcqrs projection rebuild`; the backend's own engine
+wipes the projection and replays the log on its next pass, so you see the row's
+checkpoint drop and catch up again. Its read model is partial meanwhile.
+Reactors and effect functions have no rebuild: replaying them would act on the
+world again.
+
 Below it, the dead-letter queue: failed effect-function deliveries captured
 with their whole event envelope. The checkpoint still advances, so a poison
 message never blocks the log.

@@ -264,6 +264,13 @@ func (c *BackendClient) DismissDeadLetter(ctx context.Context, token string, id 
 	return c.do(ctx, http.MethodPost, path, token, nil, nil)
 }
 
+// RequestRebuild asks the backend to rebuild a projection. It only records
+// the request: the backend's engine wipes and replays the projection
+// between its passes.
+func (c *BackendClient) RequestRebuild(ctx context.Context, token, name string) error {
+	return c.do(ctx, http.MethodPost, "/api/cqrs/admin/projections/"+url.PathEscape(name)+"/rebuild", token, nil, nil)
+}
+
 // FunctionFiles lists the backend's functions directory.
 func (c *BackendClient) FunctionFiles(ctx context.Context, token string) ([]FunctionFile, string, error) {
 	var out struct {

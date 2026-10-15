@@ -100,6 +100,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /consumers/deadletters/retry", s.requireAuth(s.deadLetterRetryAll))
 	mux.HandleFunc("POST /consumers/deadletters/{id}/retry", s.requireAuth(s.deadLetterRetry))
 	mux.HandleFunc("POST /consumers/deadletters/{id}/dismiss", s.requireAuth(s.deadLetterDismiss))
+	mux.HandleFunc("POST /consumers/{name}/rebuild", s.requireAuth(s.projectionRebuild))
 
 	// htmx fragments: the same {{define}}s the pages render, on their own
 	mux.HandleFunc("GET /fragments/overview", s.requireAuth(s.overviewFragment))
@@ -1137,6 +1138,39 @@ func (s *server) deadLetterDismiss(w http.ResponseWriter, r *http.Request, token
 	err = s.backend.DismissDeadLetter(r.Context(), token, id)
 	s.afterDeadLetterAction(w, r, token,
 		flashMessage{"neutral", fmt.Sprintf("Dead letter #%d dismissed without retrying.", id)}, err)
+}
+
+// projectionRebuild asks the backend to rebuild a projection. The backend
+// only records it; its engine wipes and replays the projection between its
+// passes, so the row shows the rebuild as it happens (the checkpoint drops
+// and catches up again) on the table's own poll.
+func (s *server) projectionRebuild(w http.ResponseWriter, r *http.Request, token string) {
+	name := r.PathValue("name")
+	err := s.backend.RequestRebuild(r.Context(), token, name)
+	w.Header().Set("Vary", "HX-Request")
+	if errors.Is(err, ErrUnauthorized) {
+		clearAuthCookie(w)
+		s.redirectToLogin(w, r)
+		return
+	}
+	if !isHTMX(r) {
+		http.Redirect(w, r, "/consumers", http.StatusSeeOther)
+		return
+	}
+	flash := flashMessage{"success", "Rebuild of " + name + " requested. The engine wipes it and replays the log on its next pass; its read model is partial until it catches up."}
+	if err != nil {
+		flash = flashMessage{"danger", "The rebuild request failed: " + err.Error()}
+	}
+	data := map[string]any{"Poll": livePoll, "Fragment": true, "Flash": flash}
+	cat, err := s.backend.Catalog(r.Context(), token)
+	if msg, handled := s.fragmentBackendErr(w, r, err); handled {
+		return
+	} else if msg != "" {
+		data["Error"] = msg
+	} else {
+		checkpoints(data, cat)
+	}
+	s.render(w, "consumers", "checkpoints-body", data)
 }
 
 // flashMessage is the one-line outcome shown above the dead-letter table.

@@ -15,7 +15,7 @@
 <tbody id="checkpoints-body" hx-get="/fragments/checkpoints" hx-trigger="{{.Poll}}" hx-swap="outerHTML">
   {{if .Error}}
   <tr>
-    <td colspan="6">
+    <td colspan="7">
       <span class="wa-caption-m stat-danger"><wa-icon name="circle-xmark" library="system" label="error"></wa-icon> {{.Error}}</span>
     </td>
   </tr>
@@ -41,10 +41,22 @@
       <wa-tag size="s" variant="success" appearance="outlined"><wa-icon name="check" library="system"></wa-icon> caught up</wa-tag>
       {{end}}
     </td>
+    <td>
+      {{/* only a projection (it owns collections) can be rebuilt; the
+           button records a request, and the backend's own engine wipes and
+           replays it, so this row shows it happening on the next polls */}}
+      {{if .Collections}}
+      <form method="post" action="/consumers/{{.Name}}/rebuild"
+            hx-post="/consumers/{{.Name}}/rebuild" hx-target="#checkpoints-body" hx-swap="outerHTML"
+            hx-confirm="Rebuild {{.Name}}? Its collections are wiped and replayed from the log; its read model is partial until it catches up.">
+        <wa-button type="submit" size="s" appearance="outlined">Rebuild</wa-button>
+      </form>
+      {{end}}
+    </td>
   </tr>
   {{else}}
   <tr>
-    <td colspan="6"><span class="wa-caption-m">No consumers are registered &mdash; nothing is projecting or reacting to the log yet.</span></td>
+    <td colspan="7"><span class="wa-caption-m">No consumers are registered &mdash; nothing is projecting or reacting to the log yet.</span></td>
   </tr>
   {{end}}
   {{end}}
@@ -55,6 +67,14 @@
      hoist them out of it. */}}
 {{if and .Fragment (not .Error)}}
 <span id="log-head" hx-swap-oob="true" class="wa-caption-m">head of log: position {{.MaxPosition}}</span>
+{{if .Flash}}{{if .Flash.Text}}
+<div id="checkpoints-flash" hx-swap-oob="true">
+  <wa-callout variant="{{.Flash.Variant}}" size="s" aria-live="polite">
+    <wa-icon slot="icon" name="{{if eq .Flash.Variant "success"}}check{{else}}circle-xmark{{end}}" library="system"></wa-icon>
+    {{.Flash.Text}}
+  </wa-callout>
+</div>
+{{end}}{{end}}
 <span id="dl-pending" hx-swap-oob="true">
   {{if gt .Pending 0}}<wa-tag size="s" variant="danger">{{.Pending}} pending</wa-tag>{{else}}<wa-tag size="s" variant="success" appearance="outlined">none pending</wa-tag>{{end}}
 </span>
@@ -189,6 +209,7 @@
      and effect functions alike, so behind-by resolves uniformly. It is
      measured against the head of the log rather than the event count —
      position is AUTOINCREMENT and conflict retries burn values. */}}
+<div id="checkpoints-flash"></div>
 <wa-card>
   <h2 slot="header">Checkpoints</h2>
   <wa-scroller>
@@ -202,6 +223,7 @@
           <th scope="col">Collections</th>
           <th scope="col" class="wa-text-end">Checkpoint</th>
           <th scope="col">Behind by</th>
+          <th scope="col">Actions</th>
         </tr>
       </thead>
       {{template "checkpoints-body" .}}

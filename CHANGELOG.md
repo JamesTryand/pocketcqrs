@@ -80,6 +80,8 @@ All notable changes to PocketCQRS. Format loosely follows
   and no lock or "server running" flag is needed. A repeated request is one request. While it
   replays, the read model is partial, and command authorization that reads it (`via` ownership,
   `scope`) refuses until it catches up: see [docs/reference/cli.md](docs/reference/cli.md#projection).
+  The dashboard's Consumers page has a **Rebuild** button on each projection's row, which makes the
+  same request.
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.
