@@ -83,13 +83,21 @@ type verifier struct {
 	// decider handles it, so a scenario's `given` can be sorted into the
 	// stream it belongs to.
 	eventAggregate map[string]string
+	// readModels maps a generated collection to its read model, for the
+	// rule sandbox's column types.
+	readModels map[string]scaffold.ReadModel
+	// roleField and subjectField are the auth-record fields the generated
+	// read rules read (the import's --roleField/--subjectField).
+	roleField, subjectField string
 }
 
 func (v *verifier) indexSources(mapped *Mapped) error {
 	v.aggregateOf = map[string]string{}
 	v.collectionOf = map[string]string{}
 	v.eventAggregate = map[string]string{}
+	v.readModels = map[string]scaffold.ReadModel{}
 	for _, d := range mapped.Domains {
+		v.roleField, v.subjectField = d.RoleField, d.SubjectField
 		files, err := d.GenerateForDryRun()
 		if err != nil {
 			return fmt.Errorf("generating %s for verification: %w", d.Aggregate, err)
@@ -102,6 +110,7 @@ func (v *verifier) indexSources(mapped *Mapped) error {
 		}
 		for _, rm := range d.ReadModels {
 			v.collectionOf[rm.Collection] = d.Aggregate
+			v.readModels[rm.Collection] = rm
 		}
 		for _, t := range d.Events() {
 			v.eventAggregate[t] = d.Aggregate
@@ -368,7 +377,17 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 	}
 
 	rows := run.Rows[collection]
-	scopedRows, remainingParams, scopeErr := v.filterByScopes(rm, rows, q.QueryParams, sc.Given, sharedDefault)
+	// who reads: a named caller sees what the generated rule lets them
+	if q.Caller != nil {
+		visible, detail := v.visibleTo(*q.Caller, collection, rows, sc.Given, sharedDefault, sc.ID)
+		if detail != "" {
+			res.Detail = detail
+			return
+		}
+		rows = visible
+	}
+	rows, queryParams := bindCaller(rm, rows, q.QueryParams, q.Caller)
+	scopedRows, remainingParams, scopeErr := v.filterByScopes(rm, rows, queryParams, sc.Given, sharedDefault)
 	if scopeErr != "" {
 		res.Detail = scopeErr
 		return

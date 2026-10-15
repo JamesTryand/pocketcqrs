@@ -52,7 +52,6 @@ func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 		},
 		"examples/read-access.json": {
 			"/readModels/project-managers/removedByEventIds",
-			"/slices/3/scenarios/0/when/caller",
 		},
 		"examples/conditional-outcomes.json": {"/commands/log-entry/refuseWhen", "/slices/0/outcomes"},
 		"examples/state-ownership.json":      {"/commands/update-expense/requiredOwnership/stateField"},
@@ -141,8 +140,8 @@ func TestUnknownFilterKindIsRefused(t *testing.T) {
 }
 
 // Scenario `when` and `then` are kind-dependent and were raw JSON here, so
-// a stateView scenario's 3.8.0 `caller` and a 3.5.0 `elapsed` step in
-// `given` must still be seen.
+// an unknown key in a stateView scenario's `when` and a 3.5.0 `elapsed` step
+// in `given` must still be seen.
 func TestScenarioShapesAreChecked(t *testing.T) {
 	p := writeDoc(t, docHead+`
 		"events":{"e":{"name":"E","swimlaneId":"s"}},
@@ -151,11 +150,11 @@ func TestScenarioShapesAreChecked(t *testing.T) {
 		"slices":[{"id":"v","name":"V","pattern":"stateView","swimlaneId":"s","status":"planned",
 			"screenId":"sc","readModelId":"r","scenarios":[
 			{"id":"x","name":"X","kind":"stateView","given":[{"eventId":"e"},{"elapsed":"P1D"}],
-			 "when":{"readModelId":"r","caller":{"subjectId":"u1"}},
+			 "when":{"readModelId":"r","impersonating":{"subjectId":"u1"}},
 			 "then":{"result":{}}}]}]}`)
 	wantRefused(t, refusedAt(t, p),
 		"/slices/0/scenarios/0/given/1/elapsed",
-		"/slices/0/scenarios/0/when/caller")
+		"/slices/0/scenarios/0/when/impersonating")
 }
 
 // Example data (event and command payloads, query params, expected results)

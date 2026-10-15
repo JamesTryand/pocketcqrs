@@ -479,6 +479,10 @@ type ReadModelQuery struct {
 	// Added in schema 2.6.0, ported from dotnetcqrs's own verify-runner
 	// support (commit 2febf60, v0.7.0) the same day.
 	AsOf *string `json:"asOf,omitempty"`
+	// Caller (schema 3.8.0) is who the query reads as; verify runs the
+	// generated read rule for them (callerverify.go). Absent: a caller
+	// holding the read model's requiredRole.
+	Caller *ScenarioCaller `json:"caller,omitempty"`
 }
 
 // EventsThen is a stateChange scenario's `then`.

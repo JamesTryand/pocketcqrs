@@ -101,6 +101,10 @@ All notable changes to PocketCQRS. Format loosely follows
   none is `authenticated` (3.8.0: every signed-in caller), no longer the deployment default.
   `schema import --roleField`/`--subjectField` name the auth-record fields the rules read. Tested
   by running the generated rules through PocketBase's own record API as each kind of caller.
+- **Scenarios can name their `caller` (3.8.0), and verify runs the generated rule for them.** A
+  `stateView` scenario's rows go into a scratch PocketBase app with the exact `//@rule` the import
+  generated (and the collections a granting scope joins), and only what PocketBase's own rule engine
+  lets that caller see is compared. `caller` leaves the importer's refused set.
 - **The Go target's read route applies the same rule.** `queryroute.Spec` gains `SelfParam` and
   `Grants`, and `SelfSubject` now comes from the read model's `selfAccess`, not from its personal
   data. **Breaking:** a personal-data read model that declares no `selfAccess` no longer lets a

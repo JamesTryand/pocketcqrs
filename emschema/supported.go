@@ -71,7 +71,6 @@ var laterFeatures = map[string]string{
 	"partitioning":      "partitioning (schema 3.7.0)",
 	"partitioned":       "partitioned, opting out of partitioning (schema 3.7.0)",
 	"partitionFrom":     "partitionFrom (schema 3.7.0)",
-	"caller":            "a scenario's caller (schema 3.8.0)",
 	"removedByEventIds": "removedByEventIds, events that remove a read model's row (schema 3.9.0)",
 	"refuseWhen":        "refuseWhen, rules that refuse a command (schema 3.10.0; numeric operators 3.11.0)",
 	"rowKeyField":       "a read model's rowKeyField (schema 3.14.0)",
