@@ -80,8 +80,8 @@ and the pointer starts with the file's path.
 
 Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
 ingresses, delays, schedules and `elapsed`, automation `effect`,
-partitioning, `rowsPerListItem`, the `sumOfItems` derivation, and
-`projection`. Each leaves this list as it is implemented.
+partitioning, and `projection`. Each leaves this list as it is
+implemented.
 
 ### Who may read a read model
 
@@ -179,6 +179,26 @@ after the event's own row update, so the event's other fields still land; an
 event it doesn't name leaves the field as it was, and a removing event removes
 the row as usual. A literal of the wrong type for its field is refused at
 import.
+
+### A row per group of a list
+
+A read model's `rowsPerListItem` (3.16.0) makes a row per group of a stream's
+list items in place of one row per stream: an invoice's lines become a part
+per project, keyed `<stream>|<group>`. An event carrying the list replaces it;
+the read model's other fields merge from the stream's events onto every row
+(so a customer named only when the invoice was drafted is still on the rows
+its issue rebuilt). A group that leaves the list loses its row, an item with
+no group is in no row, and a removing event removes all of the stream's rows.
+A `sumOfItems` field is the sum of a subfield over the row's items, and null
+until every one of them carries it.
+
+The host keeps each stream's merged fields and list in a companion
+collection, `<collection>_streams`, readable by superusers only
+(`//@rule <collection>_streams superuser`), so the projection never reads its
+own rows back and a scenario verifies the same as the live run. The Go target
+plans the rows with the same code (`projections/itemrows`); both its
+collections are your migrations, as ever. Not with `rowKeyField`, and the
+rows fold no toggle, count, sum or groupBy derivations.
 
 ### Removals
 

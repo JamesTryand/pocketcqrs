@@ -46,8 +46,7 @@ func wantRefused(t *testing.T, got []string, want ...string) {
 // removals while looking complete.
 func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 	cases := map[string][]string{
-		"examples/rows-per-list-item.json": {"/readModels/invoice-parts/rowsPerListItem"},
-		"examples/hand-projection.json":    {"/readModels/late-orders/projection"},
+		"examples/hand-projection.json": {"/readModels/late-orders/projection"},
 		"examples/order-fulfillment.json": {
 			"/dataSubjects",
 			"/ingresses",
@@ -108,16 +107,16 @@ func TestUnknownKeysAreRefusedAtAnyDepth(t *testing.T) {
 	wantRefused(t, refusedAt(t, p), "/readModels/r/fields/0/subfields/0/futureThing")
 }
 
-// A derivation kind added later (3.16.0's sumOfItems) carries a
+// A derivation kind this importer doesn't know carries a
 // meaning the projection generator would otherwise skip without a word.
 func TestUnknownDerivationKindIsRefused(t *testing.T) {
 	p := writeDoc(t, docHead+`
 		"readModels":{"r":{"name":"R","fields":[
-			{"name":"status","type":"string","derivation":{"kind":"sumOfItems","subfield":"amount"}}]}},
+			{"name":"status","type":"string","derivation":{"kind":"median","of":"amount"}}]}},
 		"slices":[]}`)
 	wantRefused(t, refusedAt(t, p),
 		"/readModels/r/fields/0/derivation/kind",
-		"/readModels/r/fields/0/derivation/subfield")
+		"/readModels/r/fields/0/derivation/of")
 }
 
 // A filter kind this importer does not know is refused the same way.

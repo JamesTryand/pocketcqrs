@@ -111,15 +111,32 @@ func resolveRuleValue(value string) string {
 	}
 }
 
+// RuleSuperuser is the //@rule value for a collection no record-API caller
+// reads: PocketBase's nil rule, superusers only. A projection's own working
+// state (rowsPerListItem's companion) is declared with it.
+const RuleSuperuser = "superuser"
+
 // readRule is the collection's List/View rule. Precedence: its own
 // //@rule, else the deployment-wide --cqrsSchemaDefaultRule, else public
-// (the pre-Item-9 default).
-func (s *SchemaSpec) readRule(defaultRule string) string {
+// (the pre-Item-9 default). nil is superusers only (RuleSuperuser).
+func (s *SchemaSpec) readRule(defaultRule string) *string {
 	rule := defaultRule
 	if s.RuleOverride != nil {
 		rule = *s.RuleOverride
 	}
-	return resolveRuleValue(rule)
+	if rule == RuleSuperuser {
+		return nil
+	}
+	return types.Pointer(resolveRuleValue(rule))
+}
+
+// sameRule reports whether two PocketBase rules are the same, nil (superusers
+// only) being its own value.
+func sameRule(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // uniqueIndexSQL builds the key index DDL. Names are regex-validated above.
@@ -177,11 +194,15 @@ func reconcileBase(app core.App, spec *ProjectionSpec, s *SchemaSpec, defaultRul
 	// that already exists, or it stays as open as it was first made.
 	changed := false
 	want := s.readRule(defaultRule)
-	if col.ListRule == nil || *col.ListRule != want || col.ViewRule == nil || *col.ViewRule != want {
+	if !sameRule(col.ListRule, want) || !sameRule(col.ViewRule, want) {
+		shown := RuleSuperuser
+		if want != nil {
+			shown = *want
+		}
 		spec.runtime.logger("schema read rule changed to follow the declaration",
-			"collection", s.Collection, "rule", want)
-		col.ListRule = types.Pointer(want)
-		col.ViewRule = types.Pointer(want)
+			"collection", s.Collection, "rule", shown)
+		col.ListRule = want
+		col.ViewRule = want
 		changed = true
 	}
 	for _, f := range s.Fields {
@@ -261,9 +282,8 @@ func createCollection(app core.App, s *SchemaSpec, defaultRule string) error {
 	col := core.NewBaseCollection(s.Collection)
 	// read side: writes are rejected by the writeguard regardless of this
 	// rule (see readRule; reconcileBase keeps it in step afterwards)
-	expr := s.readRule(defaultRule)
-	col.ListRule = types.Pointer(expr)
-	col.ViewRule = types.Pointer(expr)
+	col.ListRule = s.readRule(defaultRule)
+	col.ViewRule = s.readRule(defaultRule)
 	for _, f := range s.Fields {
 		if f.Type == "relation" {
 			continue // pass 2: the target collection may not exist yet

@@ -59,29 +59,25 @@ func (e *UnsupportedError) Error() string {
 // importer applies, for the message only. Refusal does not depend on this
 // table: an unknown key is refused whether or not it is listed here.
 var laterFeatures = map[string]string{
-	"via":             "selfAccess.via, a subject id resolved through a read model (schema 3.2.0)",
-	"dataSubjects":    "dataSubjects.erasure, who may request erasure (schema 3.2.0)",
-	"ingresses":       "an ingress (schema 3.4.0)",
-	"ingressId":       "a slice started by an ingress (schema 3.4.0)",
-	"delay":           "an automation started by a delay (schema 3.5.0)",
-	"schedule":        "an automation started by a schedule (schema 3.5.0)",
-	"elapsed":         "an elapsed step in a scenario (schema 3.5.0)",
-	"effect":          "an automation effect (schema 3.6.0)",
-	"partitioning":    "partitioning (schema 3.7.0)",
-	"partitioned":     "partitioned, opting out of partitioning (schema 3.7.0)",
-	"partitionFrom":   "partitionFrom (schema 3.7.0)",
-	"rowsPerListItem": "rowsPerListItem, a row per group of a stream's list items (schema 3.16.0)",
-	"subfield":        "a sumOfItems derivation (schema 3.16.0)",
-	"projection":      "projection: a read model built by a hand-written projection (schema 3.17.0)",
+	"via":           "selfAccess.via, a subject id resolved through a read model (schema 3.2.0)",
+	"dataSubjects":  "dataSubjects.erasure, who may request erasure (schema 3.2.0)",
+	"ingresses":     "an ingress (schema 3.4.0)",
+	"ingressId":     "a slice started by an ingress (schema 3.4.0)",
+	"delay":         "an automation started by a delay (schema 3.5.0)",
+	"schedule":      "an automation started by a schedule (schema 3.5.0)",
+	"elapsed":       "an elapsed step in a scenario (schema 3.5.0)",
+	"effect":        "an automation effect (schema 3.6.0)",
+	"partitioning":  "partitioning (schema 3.7.0)",
+	"partitioned":   "partitioned, opting out of partitioning (schema 3.7.0)",
+	"partitionFrom": "partitionFrom (schema 3.7.0)",
+	"projection":    "projection: a read model built by a hand-written projection (schema 3.17.0)",
 }
 
 // laterKinds names the enum values added later, for the message only.
-var laterKinds = map[string]string{
-	"sumOfItems": "derivation kind sumOfItems (schema 3.16.0)",
-}
+var laterKinds = map[string]string{}
 
 var (
-	derivationKinds = map[string]bool{DerivationToggle: true, DerivationCount: true, DerivationSum: true, DerivationGroupBy: true, DerivationByEvent: true}
+	derivationKinds = map[string]bool{DerivationToggle: true, DerivationCount: true, DerivationSum: true, DerivationGroupBy: true, DerivationByEvent: true, DerivationSumOfItems: true}
 	filterKinds     = map[string]bool{FilterDateRange: true, FilterMatch: true}
 	rawMessageType  = reflect.TypeOf(json.RawMessage{})
 )

@@ -121,3 +121,10 @@ func TestUpstreamRefusalsExample(t *testing.T) {
 func TestUpstreamStateOwnershipExample(t *testing.T) {
 	verifyExample(t, "examples/state-ownership.json", Options{})
 }
+
+// rows-per-list-item.json (3.16.0): an invoice's lines as a part per
+// project, its subtotal once every line is converted (sumOfItems), its
+// status by event (byEvent); a discard removes every part.
+func TestUpstreamRowsPerListItemExample(t *testing.T) {
+	verifyExample(t, "examples/rows-per-list-item.json", Options{})
+}

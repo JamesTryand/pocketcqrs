@@ -276,6 +276,9 @@ type ReadModel struct {
 	// is built from (and removed by) that names the row it updates, in
 	// place of the event's stream. Every such event must carry it.
 	RowKeyField string `json:"rowKeyField,omitempty"`
+	// RowsPerListItem (schema 3.16.0): a row per group of a stream's list
+	// items. Not with RowKeyField.
+	RowsPerListItem *RowsPerListItem `json:"rowsPerListItem,omitempty"`
 	// RemovedByEventIDs (schema 3.9.0): events that each remove the row
 	// they target (their stream). Each must also be in BuiltFromEventIDs.
 	RemovedByEventIDs []string `json:"removedByEventIds,omitempty"`
@@ -403,11 +406,12 @@ type Field struct {
 
 // Derivation kinds, as the schema 2.3.0 discriminated union defines them.
 const (
-	DerivationToggle  = "toggle"
-	DerivationCount   = "count"
-	DerivationSum     = "sum"
-	DerivationGroupBy = "groupBy"
-	DerivationByEvent = "byEvent"
+	DerivationToggle     = "toggle"
+	DerivationCount      = "count"
+	DerivationSum        = "sum"
+	DerivationGroupBy    = "groupBy"
+	DerivationByEvent    = "byEvent"
+	DerivationSumOfItems = "sumOfItems"
 )
 
 // FieldDerivation computes a read-model field as a fold over named events.
@@ -455,6 +459,17 @@ type FieldDerivation struct {
 	// byEvent (schema 3.16.0): Values maps an event id to the literal the
 	// field takes when that event lands.
 	Values map[string]json.RawMessage `json:"values,omitempty"`
+
+	// sumOfItems (schema 3.16.0, rowsPerListItem only): the item subfield
+	// summed over the row's items.
+	Subfield string `json:"subfield,omitempty"`
+}
+
+// RowsPerListItem (schema 3.16.0): ListField is a list field the read
+// model's events carry; GroupBy is the item subfield naming an item's group.
+type RowsPerListItem struct {
+	ListField string `json:"listField"`
+	GroupBy   string `json:"groupBy"`
 }
 
 // Slice is one vertical slice. The pattern-specific fields are flattened

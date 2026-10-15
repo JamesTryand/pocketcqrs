@@ -79,7 +79,7 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 	if ignored > 0 {
 		p.spec.runtime.logger("projection returned values that are not row ops, ignored",
 			"projection", p.spec.Name, "event", ev.Type, "position", ev.Position, "ignored", ignored,
-			"hint", "project(event) must return {upsert:{key,fields}}, {delete:key}, {increment:{key,field,delta}} or {groupByBump:{key,field,groupField,groupValue,subfield,delta}}")
+			"hint", "project(event) must return {upsert:{key,fields}}, {delete:key}, {increment:{key,field,delta}} or {groupByBump:{key,field,groupField,groupValue,subfield,delta}} or {itemRows:{...}}")
 	}
 
 	ctx = writeguard.MarkInternal(ctx)
@@ -87,6 +87,12 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 		s, err := p.spec.resolveSchema(op)
 		if err != nil {
 			return fmt.Errorf("projection %s: %w", p.spec.Name, err)
+		}
+		if op.itemRows != nil {
+			if err := p.spec.applyItemRows(ctx, s, op.itemRows); err != nil {
+				return fmt.Errorf("projection %s: %w", p.spec.Name, err)
+			}
+			continue
 		}
 		if err := p.spec.applyOp(ctx, s, op); err != nil {
 			return fmt.Errorf("projection %s: %w", p.spec.Name, err)
@@ -216,6 +222,9 @@ type rowOp struct {
 	groupKeyField string
 	groupKeyValue any
 	subfield      string
+
+	// itemRows is rowsPerListItem's op (schema 3.16.0): see itemrows.go.
+	itemRows *itemRowsOp
 }
 
 // normalizeOps converts the project() return value into row ops:
@@ -325,6 +334,13 @@ func normalizeOp(v any) (rowOp, bool, error) {
 		}
 		return rowOp{collection: collection, groupBy: true, key: gm["key"], groupByField: field,
 			groupKeyField: groupField, groupKeyValue: gm["groupValue"], subfield: subfield, delta: delta}, true, nil
+	}
+	if ir, ok := m["itemRows"]; ok {
+		op, err := parseItemRows(ir)
+		if err != nil {
+			return rowOp{}, false, err
+		}
+		return rowOp{collection: collection, itemRows: op}, true, nil
 	}
 	return rowOp{}, false, nil
 }

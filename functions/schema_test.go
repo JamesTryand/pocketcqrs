@@ -392,3 +392,39 @@ func TestExistingCollectionRuleFollowsTheDeclaration(t *testing.T) {
 		t.Fatalf("back to the deployment default: %q %q", l, v)
 	}
 }
+
+// "superuser" is PocketBase's nil rule: no record-API caller reads the
+// collection, at creation and when an existing collection is reconciled.
+func TestSuperuserRuleIsNil(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	rt := NewGojaRuntime(nil)
+	open, locked := "public", "superuser"
+	spec := func(rule *string) []*ProjectionSpec {
+		return []*ProjectionSpec{{Name: "p", runtime: rt, Schemas: []*SchemaSpec{
+			{Collection: "hidden", Key: "k", Fields: []FieldSpec{{Name: "k", Type: "text"}}, RuleOverride: rule},
+		}}}
+	}
+	for _, step := range []struct {
+		name string
+		rule *string
+	}{{"created", &locked}, {"opened", &open}, {"locked again", &locked}} {
+		if err := ReconcileSchemas(app, spec(step.rule), "authenticated"); err != nil {
+			t.Fatal(err)
+		}
+		col, err := app.FindCollectionByNameOrId("hidden")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *step.rule == "superuser" && (col.ListRule != nil || col.ViewRule != nil) {
+			t.Errorf("%s: rules = list:%v view:%v, want nil", step.name, col.ListRule, col.ViewRule)
+		}
+		if *step.rule == "public" && (col.ListRule == nil || *col.ListRule != "") {
+			t.Errorf("%s: list rule = %v, want public", step.name, col.ListRule)
+		}
+	}
+}

@@ -116,6 +116,7 @@ one of:
 | --- | --- |
 | `public` (or omitting the directive with no deployment default set) | `""` — no restriction |
 | `authenticated` | `@request.auth.id != ""` |
+| `superuser` | no rule at all (PocketBase's nil): superusers only, no record-API caller |
 | anything else | used verbatim as a raw PocketBase rule expression |
 
 ```js

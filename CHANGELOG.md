@@ -111,6 +111,14 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **A row per group of a list (schema 3.16.0 `rowsPerListItem`, `sumOfItems`).** A read model can
+  keep a row per group of a stream's list items (an invoice's part per project), keyed
+  `<stream>|<group>`, with a subtotal summed over the row's items once every item carries it. A new
+  host op, `itemRows`, plans the rows from the stream's state, which the host keeps in a
+  superusers-only companion collection `<collection>_streams`; the dry run plans them the same way,
+  so scenarios verify. The Go target uses the same planner, `projections/itemrows`. Upstream's
+  `rows-per-list-item.json` imports and verifies.
+- **`//@rule <collection> superuser`.** PocketBase's nil rule: superusers only.
 - **Fields set by event (schema 3.16.0 `byEvent`).** A read-model field set to a literal per event,
   applied after the event's own row update in both generated projections (JS and Go), so it sits
   beside a plain merge or a count/sum. Events it doesn't name leave it as it was; a literal of the

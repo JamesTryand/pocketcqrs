@@ -270,6 +270,12 @@ func runProjectionOver(spec *ProjectionSpec, log []events.Event, isolated bool) 
 			if err != nil {
 				return nil, fmt.Errorf("dryrun: projection %s: %w", spec.Name, err)
 			}
+			if op.itemRows != nil {
+				if err := spec.simulateItemRows(out, s, op.itemRows); err != nil {
+					return nil, fmt.Errorf("dryrun: projection %s: %w", spec.Name, err)
+				}
+				continue
+			}
 			rows := out.Rows[s.Collection]
 			if rows == nil {
 				rows = map[string]map[string]any{}

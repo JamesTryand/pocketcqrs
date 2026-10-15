@@ -469,6 +469,7 @@ func (m *mapper) mapDerivation(in *FieldDerivation) *scaffold.FieldDerivation {
 		RowKeyField:         scaffold.SanitizeName(in.RowKeyField),
 		GroupByField:        scaffold.SanitizeName(in.GroupByField),
 		Values:              m.byEventValues(in.Values),
+		Subfield:            scaffold.SanitizeName(in.Subfield),
 	}
 }
 
@@ -534,16 +535,17 @@ func (m *mapper) mapReadModels() {
 			m.rep.warnf("%s", keyNote)
 		}
 		m.domain(owner).ReadModels = append(m.domain(owner).ReadModels, scaffold.ReadModel{
-			Collection:   scaffold.SanitizeName(ReadModelCollectionName(rm.Name, id)),
-			Key:          key,
-			Fields:       m.fields("read model "+id, rm.Fields),
-			On:           on,
-			Scopes:       m.mapScopes(id, rm),
-			Filters:      m.mapFilters(id, rm),
-			RequiredRole: append([]string(nil), rm.RequiredRole...),
-			SelfAccess:   m.mapSelfAccess(id, rm),
-			RemovedBy:    m.mapRemovals(id, rm),
-			RowKeyField:  m.mapRowKeyField(id, rm),
+			Collection:      scaffold.SanitizeName(ReadModelCollectionName(rm.Name, id)),
+			Key:             key,
+			Fields:          m.fields("read model "+id, rm.Fields),
+			On:              on,
+			Scopes:          m.mapScopes(id, rm),
+			Filters:         m.mapFilters(id, rm),
+			RequiredRole:    append([]string(nil), rm.RequiredRole...),
+			SelfAccess:      m.mapSelfAccess(id, rm),
+			RemovedBy:       m.mapRemovals(id, rm),
+			RowKeyField:     m.mapRowKeyField(id, rm),
+			RowsPerListItem: m.mapRowsPerListItem(id, rm),
 		})
 	}
 }
@@ -680,6 +682,29 @@ func refusalOperand(raw json.RawMessage) (*scaffold.RefusalOperand, error) {
 		return &scaffold.RefusalOperand{Literal: lit}, nil
 	}
 	return nil, fmt.Errorf("an operand is a string, number, bool, or {state|command: field}")
+}
+
+// mapRowsPerListItem carries rowsPerListItem (schema 3.16.0) through. Its
+// listField must be a list field of some event the read model is built
+// from, with the groupBy subfield, or no row could ever be made.
+func (m *mapper) mapRowsPerListItem(id string, rm ReadModel) *scaffold.RowsPerListItem {
+	rp := rm.RowsPerListItem
+	if rp == nil {
+		return nil
+	}
+	carried := false
+	for _, evID := range rm.BuiltFromEventIDs {
+		for _, f := range m.doc.Events[evID].Fields {
+			if f.Name == rp.ListField && hasField(f.Subfields, rp.GroupBy) {
+				carried = true
+			}
+		}
+	}
+	if !carried {
+		m.rep.errorf("read model %q: rowsPerListItem's listField %q with subfield %q is on none of the events it is built from",
+			id, rp.ListField, rp.GroupBy)
+	}
+	return &scaffold.RowsPerListItem{ListField: scaffold.SanitizeName(rp.ListField), GroupBy: scaffold.SanitizeName(rp.GroupBy)}
 }
 
 // mapRowKeyField carries rowKeyField (schema 3.14.0) through. Every event

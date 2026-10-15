@@ -643,6 +643,9 @@ func (d Domain) writeProtectorGo(b *strings.Builder, fields []namedField, eventH
 // projectionGo is the Go projection for rm, keyed by a rowKeyField
 // (schema 3.14.0) where there is one; see projection.
 func (d Domain) projectionGo(pkg string, rm ReadModel) string {
+	if rm.RowsPerListItem != nil {
+		return d.itemRowsProjectionGo(pkg, rm)
+	}
 	src := d.projectionGoBody(pkg, rm)
 	if values := byEventValues(rm); len(values) > 0 {
 		src = goByEvent(src, rm, values)

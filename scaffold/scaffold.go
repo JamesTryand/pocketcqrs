@@ -213,6 +213,9 @@ type FieldDerivation struct {
 	// byEvent: Values maps an event type to the literal the field takes
 	// when that event lands.
 	Values map[string]any `json:"values,omitempty"`
+
+	// sumOfItems: Subfield is the item subfield summed over the row's items.
+	Subfield string `json:"subfield,omitempty"`
 }
 
 // ReadModel is a projection's target collection.
@@ -257,6 +260,9 @@ type ReadModel struct {
 	// stream). A later event for that stream creates the row again. They
 	// must also be in On.
 	RemovedBy []string `json:"removedBy,omitempty"`
+	// RowsPerListItem (schema 3.16.0): a row per group of a stream's list
+	// items, in place of one row per stream. See itemrows.go.
+	RowsPerListItem *RowsPerListItem `json:"rowsPerListItem,omitempty"`
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
@@ -425,8 +431,13 @@ func (d Domain) Validate() error {
 	// slices, and refusing that would make a well-formed document
 	// unimportable for what would look like a generator bug.
 
+	allCollections := map[string]bool{}
+	for _, rm := range d.ReadModels {
+		allCollections[rm.Collection] = true
+	}
 	seenCollection := map[string]bool{}
 	for _, rm := range d.ReadModels {
+		validateItemRows(rm, allCollections, add)
 		if !identifier.MatchString(rm.Collection) {
 			add("read model collection %q must be a letter followed by letters, digits or underscores", rm.Collection)
 		}
@@ -446,6 +457,7 @@ func (d Domain) Validate() error {
 			}
 			if dv := f.Derivation; dv != nil {
 				switch dv.Kind {
+				case DerivationSumOfItems: // validateItemRows
 				case DerivationByEvent:
 					if len(dv.Values) == 0 {
 						add("read model %q: field %q is a byEvent derivation but names no event", rm.Collection, f.Name)
@@ -511,7 +523,7 @@ func (d Domain) Validate() error {
 						}
 					}
 				default:
-					add("read model %q: field %q has derivation kind %q; use toggle, count, sum or groupBy",
+					add("read model %q: field %q has derivation kind %q; use toggle, count, sum, groupBy, byEvent or sumOfItems",
 						rm.Collection, f.Name, dv.Kind)
 				}
 			}
@@ -879,6 +891,9 @@ func (d Domain) decider() string {
 // field of the event instead: within a projection, event.aggregateId is
 // only ever a row key (count and sum derivations key by their own field).
 func (d Domain) projection(rm ReadModel) string {
+	if rm.RowsPerListItem != nil {
+		return d.itemRowsProjection(rm)
+	}
 	src := d.projectionBody(rm)
 	if values := byEventValues(rm); len(values) > 0 {
 		// byEvent (schema 3.16.0): on top of an event's own row op, the
