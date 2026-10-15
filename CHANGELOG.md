@@ -70,6 +70,16 @@ All notable changes to PocketCQRS. Format loosely follows
   `packs.ImportEvents` loses its checkpoint and consumer-name parameters and
   `ImportEventsResult.AdvancedCheckpoints`. **Breaking** for a Go embedder calling it, or with an
   effect consumer of its own: implement `consumers.Effect`.
+- **`projection rebuild` is a request the server's engine carries out.** It used to wipe the
+  collections, reset the checkpoint and replay with an engine of its own, beside the server's: rows
+  deleted under the server's engine, events applied twice, two checkpoints overwriting each other
+  (and on a secondary it failed outright). Now the CLI, and the new
+  `POST /api/cqrs/admin/projections/{name}/rebuild`, only record the request in the node's own
+  `data.db` (`projections.RebuildRequests`). The engine wipes, resets and replays between its
+  passes (`consumers.Engine.Rebuilds`/`Wipe`), so it stays the only thing that runs a projection,
+  and no lock or "server running" flag is needed. A repeated request is one request. While it
+  replays, the read model is partial, and command authorization that reads it (`via` ownership,
+  `scope`) refuses until it catches up: see [docs/reference/cli.md](docs/reference/cli.md#projection).
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.

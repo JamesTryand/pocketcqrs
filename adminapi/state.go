@@ -97,6 +97,11 @@ type State struct {
 	// maintenance-mode reload.
 	SchemaDefaultRule string
 
+	// Rebuilds records projection rebuild requests in this node's data.db,
+	// for the engine to carry out (see RequestRebuild). Set once at boot,
+	// alongside Engine.Rebuilds.
+	Rebuilds *projections.RebuildRequests
+
 	// Tutorial mirrors --tutorial. allProjections (via buildCatalog) reads
 	// it to decide whether the example projections are included in the
 	// platform catalog — the only admin-surface behavior the stock CLI's

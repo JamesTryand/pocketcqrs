@@ -2,15 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/spf13/cobra"
 
-	"github.com/jamestryand/pocketcqrs/consumers"
 	"github.com/jamestryand/pocketcqrs/projections"
-	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
 // allProjections is the single source of truth for the platform's Go
@@ -38,66 +34,20 @@ func newProjectionCommand(c *components) *cobra.Command {
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "rebuild <name>",
-		Short: "Wipe a projection's collections and rebuild them by replaying the event log",
-		Args:  cobra.ExactArgs(1),
+		Short: "Request a projection rebuild: the server's engine wipes its collections and replays the log",
+		Long: "Records a rebuild request in this node's data.db. The running server's engine carries it out\n" +
+			"between its passes (wipe the projection's collections, reset its checkpoint, replay the log), so\n" +
+			"it stays the only thing that runs the projection. If no server is running, the rebuild happens\n" +
+			"when one starts. The read model is empty or partial until the replay catches up. Works on a\n" +
+			"secondary too (its checkpoints and data.db are its own). Requesting it again is harmless.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-
-			var target projections.Projection
-			for _, p := range c.allProjections(c.App) {
-				if p.Name() == name {
-					target = p
-					break
-				}
-			}
-			if target == nil {
-				for _, p := range c.JSProjs {
-					if p.Name() == name {
-						target = p
-						break
-					}
-				}
-			}
-			if target == nil {
-				return fmt.Errorf("unknown projection %q", name)
-			}
-			if c.Store == nil {
-				return errors.New("event store not initialized")
-			}
-
-			ctx := context.Background()
-
-			// wipe the target collections (internal writes pass the writeguard)
-			wiped := 0
-			for _, colName := range target.Collections() {
-				recs, err := c.App.FindRecordsByFilter(colName, "", "", -1, 0)
-				if err != nil {
-					return fmt.Errorf("failed listing %q records: %w", colName, err)
-				}
-				for _, rec := range recs {
-					if err := c.App.DeleteWithContext(writeguard.MarkInternal(ctx), rec); err != nil {
-						return fmt.Errorf("failed deleting %q record %q: %w", colName, rec.Id, err)
-					}
-					wiped++
-				}
-			}
-
-			// reset the durable checkpoint and replay the log
-			if err := c.Store.SaveCheckpoint(ctx, target.Name(), 0); err != nil {
+			if err := c.RequestRebuild(context.Background(), name); err != nil {
 				return err
 			}
-
-			engine := consumers.NewEngine(c.Store, nil)
-			engine.Register(target)
-			if err := engine.RunOnce(ctx); err != nil {
-				return fmt.Errorf("replay failed: %w", err)
-			}
-
-			pos, err := c.Store.Checkpoint(ctx, target.Name())
-			if err != nil {
-				return err
-			}
-			cmd.Printf("Projection %q rebuilt: wiped %d record(s), replayed to position %d.\n", name, wiped, pos)
+			cmd.Printf("Rebuild of projection %q requested. The server's engine wipes and replays it on its next pass "+
+				"(at once if it is running, otherwise when it starts); its read model is partial until then.\n", name)
 			return nil
 		},
 	})

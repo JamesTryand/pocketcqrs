@@ -522,10 +522,34 @@ was in this feature's scoped shape.
 pocketcqrs projection rebuild <name>
 ```
 
-Offline (stop `serve` first). Wipes the projection's collections, resets its
-durable checkpoint and replays the whole event log through the current code.
-Works for JS projections and, under `--tutorial`, the example Go projections
-(`tasks`, `orders`) alike.
+**Records a request; the server does the rebuild.** The command writes "rebuild
+`<name>`" into this node's `data.db` and exits. The running server's engine
+carries it out between its passes: it wipes the projection's collections,
+resets its checkpoint to 0 and replays the event log through the current code
+in its normal passes. If no server is running, it happens when one starts. The
+same request can be made with `POST /api/cqrs/admin/projections/{name}/rebuild`
+(superuser, answers `202`). Works for JS projections and, under `--tutorial`,
+the example Go projections (`tasks`, `orders`), and on a secondary too (its
+checkpoints and `data.db` are its own). Requesting it again before it runs is
+the same request. Only a projection can be rebuilt, never a reactor or an
+effect function.
+
+The engine is the only thing that ever runs a projection. A rebuild with its
+own engine beside the server's, as this command used to run, could apply the
+same events twice, and two checkpoints overwrote each other.
+
+**While it replays, the read model is empty or partial.** That is fine for
+views (eventual consistency), and a live view shows it filling. It is not fine
+for a **write-path read** of that projection. Today those are the command
+authorization declarations that read a read model:
+- `requiredOwnership.via`: refused (`403`) while the owning row is missing;
+- `scope` (`resolveVia`, `memberOfVia`): refused while either row is missing.
+
+They fail closed, so a rebuild refuses commands it would otherwise allow until
+the replay passes those rows. Schema 3.15's `requiredOwnership.stateField`
+(ownership decided from the aggregate's own stream) removes the first case
+once it is supported; `scope` remains a read of another aggregate's read
+model.
 
 ## deadletter
 

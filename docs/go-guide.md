@@ -218,8 +218,12 @@ content; add yours unconditionally rather than inside that branch. The target
 collection is created by a **PocketBase Go migration** in `migrations/`
 (collections-as-DDL), not by the projection.
 
-Rebuild offline: `pocketcqrs projection rebuild <name>` — wipe, reset
-checkpoint, replay.
+Rebuild with `pocketcqrs projection rebuild <name>` (or the admin API): it
+records a request, and the running server's engine wipes, resets the
+checkpoint and replays, so it stays the only thing that runs the projection.
+An embedder wires the same: set `Engine.Rebuilds` (a
+`projections.NewRebuildRequests(app.DB())`) and `Engine.Wipe`
+(`projections.Wipe(app)`) before starting the engine.
 
 ## A reactor (saga)
 

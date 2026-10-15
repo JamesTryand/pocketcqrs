@@ -92,7 +92,7 @@ same as CRUD would show you.
 The differences only show up when you think about *how that row got
 there*: a projection is disposable and reproducible. If you change how a
 projection folds events, or discover a bug in it, you don't migrate the
-row — you fix the code and run `pocketcqrs projection rebuild <name>`,
+row — you fix the code and run `pocketcqrs projection rebuild <name>` (the server replays it),
 which replays the whole log from scratch and produces a correct collection.
 A CRUD table has no equivalent operation, because it has no log behind it
 to replay.

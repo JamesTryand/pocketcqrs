@@ -91,6 +91,66 @@ func deliver(ctx context.Context, c Consumer, ev events.Event) error {
 	return c.Apply(ctx, ev)
 }
 
+// RebuildRequests is where "rebuild this projection" is recorded, by the
+// CLI, the admin API or the dashboard, for the engine to consume. It belongs
+// to the node whose engine acts on it (the node's own data, never the
+// replicated log). A request is per name, so a repeated one is harmless.
+type RebuildRequests interface {
+	// Pending lists the names with a rebuild requested.
+	Pending(ctx context.Context) ([]string, error)
+	// Done takes a request off once the engine has acted on it.
+	Done(ctx context.Context, name string) error
+}
+
+// takeRebuilds consumes the pending rebuild requests, between passes. A
+// rebuild is done by this engine, never by a second one beside it: wipe the
+// projection's collections (e.Wipe), reset its checkpoint to 0, take the
+// request off, and let the pass replay it from the start. The projection's
+// read model is empty or partial until the replay catches up, which is
+// accepted (eventual consistency). Each step is repeatable, so a crash
+// anywhere leaves the request to be done again from the start.
+func (e *Engine) takeRebuilds(ctx context.Context, cs []Consumer) {
+	if e.Rebuilds == nil || e.Wipe == nil {
+		return
+	}
+	names, err := e.Rebuilds.Pending(ctx)
+	if err != nil {
+		e.logger("rebuild requests unreadable", "error", err)
+		return
+	}
+	for _, name := range names {
+		var c Consumer
+		for _, candidate := range cs {
+			if candidate.Name() == name {
+				c = candidate
+				break
+			}
+		}
+		if c == nil {
+			continue // not run by this engine (yet): kept for when it is
+		}
+		if _, ok := c.(interface{ Collections() []string }); !ok {
+			e.logger("only a projection can be rebuilt; request dropped", "consumer", name)
+			if err := e.Rebuilds.Done(ctx, name); err != nil {
+				e.logger("rebuild request not taken off", "consumer", name, "error", err)
+			}
+			continue
+		}
+		if err := e.Wipe(ctx, c); err != nil {
+			e.logger("rebuild: wiping the projection failed; retrying next pass", "projection", name, "error", err)
+			continue
+		}
+		if err := e.checkpointsFor(c).SaveCheckpoint(ctx, name, 0); err != nil {
+			e.logger("rebuild: resetting the checkpoint failed; retrying next pass", "projection", name, "error", err)
+			continue
+		}
+		if err := e.Rebuilds.Done(ctx, name); err != nil {
+			e.logger("rebuild request not taken off; it will be done again", "projection", name, "error", err)
+		}
+		e.logger("projection rebuild started: replaying from the start", "projection", name)
+	}
+}
+
 // OwnCheckpoints is an optional interface a Consumer implements to keep its
 // position somewhere other than the engine's checkpoint store. For a consumer
 // whose progress belongs to the process rather than the database: the
@@ -228,6 +288,13 @@ type Engine struct {
 	// LagThreshold is how old the oldest unapplied event may be before a
 	// consumer counts as Behind rather than Current. Set it before Start.
 	LagThreshold time.Duration
+
+	// Rebuilds and Wipe, set together before Start, let the engine rebuild
+	// a projection on request (see takeRebuilds): Rebuilds is where the
+	// requests are recorded, Wipe empties a projection's collections. With
+	// either nil, requests are not consumed.
+	Rebuilds RebuildRequests
+	Wipe     func(ctx context.Context, c Consumer) error
 
 	// progressMu guards progress: each consumer's progress as of its latest
 	// pass, for Status. Written only by the pass.
@@ -469,6 +536,7 @@ func (e *Engine) runOnce(ctx, stop context.Context) error {
 	e.mu.RLock()
 	consumers := append([]Consumer(nil), e.consumers...)
 	e.mu.RUnlock()
+	e.takeRebuilds(ctx, consumers)
 	// read once per pass, for each consumer's lag in positions; a failure
 	// here is the store being unreachable, which every consumer is about to
 	// report as blocked anyway

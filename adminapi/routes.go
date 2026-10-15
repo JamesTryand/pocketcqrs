@@ -30,4 +30,5 @@ func RegisterRoutes(e *core.ServeEvent, s *State, cfg Config) {
 	RegisterOpsRoutes(e, s)
 	RegisterReloadRoute(e, s, cfg.FunctionsDir)
 	RegisterFunctionAdminRoutes(e, s, cfg.FunctionsDir)
+	RegisterRebuildRoute(e, s)
 }

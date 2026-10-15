@@ -826,6 +826,15 @@ func main() {
 			c.Engine = consumers.NewEngine(store, engineLogger)
 		}
 		c.Engine.LagThreshold = lagThreshold
+		// projection rebuilds are requests this engine consumes between its
+		// passes; the requests live in this node's own data.db
+		rebuilds, err := projections.NewRebuildRequests(e.App.DB())
+		if err != nil {
+			return err
+		}
+		c.Rebuilds = rebuilds
+		c.Engine.Rebuilds = rebuilds
+		c.Engine.Wipe = projections.Wipe(e.App)
 
 		// command batching (item 4): on by default, and never on a
 		// secondary -- it has no writable store to enqueue into or commit
