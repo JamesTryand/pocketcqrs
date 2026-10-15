@@ -292,7 +292,10 @@ reproducibility, which is the guarantee everything else rests on.
 3. `functions.LoadDir` → validate JS deciders → register validated ones
 4. `store.SetUpcaster(BuildUpcaster(validated))` — store-level upcasting
 5. `ReconcileSchemas` — JS projection schemas (additive, two-pass)
-6. engine: Go projections → JS projections → reactors → effect functions
+6. engine: Go projections → JS projections → reactors → effect functions. This is the order
+   each runs in a pass, not a guarantee: each consumer reads to the head as it is when its turn
+   comes, so a later one can be ahead of an earlier one. Never decide from another consumer's
+   output.
 7. write-guard over all projection-owned collections; cron jobs
 8. gateway + `/api/fn` + `/api/cqrs/admin/reload` routes on serve
 

@@ -331,3 +331,49 @@ func TestRunStopsBetweenEventsAndFinishesTheInFlightOne(t *testing.T) {
 		t.Fatalf("the in-flight event finished but its checkpoint is %d, want %d", pos, applied[0])
 	}
 }
+
+// appender is a consumer whose first Apply appends one more event: a stand-in
+// for a commit landing from elsewhere after earlier consumers have finished
+// their turn in the pass.
+type appender struct {
+	name  string
+	store *events.Store
+	done  bool
+}
+
+func (a *appender) Name() string { return a.name }
+func (a *appender) Apply(ctx context.Context, ev events.Event) error {
+	if !a.done {
+		a.done = true
+		_, err := a.store.Append(ctx, "task", "late", 0,
+			[]events.NewEvent{{Type: "TaskCreated", Data: json.RawMessage(`{}`)}})
+		return err
+	}
+	return nil
+}
+
+// R6: registration order is when a consumer runs in a pass, not a guarantee
+// about what it has seen. Each consumer reads to the head as it is when it
+// runs, so a consumer registered later can be AHEAD of one registered
+// earlier. Nothing may decide from another consumer's output on the strength
+// of the order (as dotnetcqrs's engine documents since 3e83ed0).
+func TestALaterConsumerCanBeAheadOfAnEarlierOne(t *testing.T) {
+	var dir string
+	store := openStore(t, &dir)
+	defer store.Close()
+	ctx := context.Background()
+	appendOne(t, store, "t1")
+
+	engine := NewEngine(store, func(string, ...any) {})
+	first := &recorder{}
+	engine.Register(first)
+	engine.Register(&appender{name: "second", store: store})
+	if err := engine.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	firstAt, _ := store.Checkpoint(ctx, first.Name())
+	secondAt, _ := store.Checkpoint(ctx, "second")
+	if firstAt != 1 || secondAt != 2 {
+		t.Fatalf("want the earlier consumer at 1 and the later one at 2 after one pass, got %d and %d", firstAt, secondAt)
+	}
+}

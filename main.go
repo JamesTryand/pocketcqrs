@@ -933,9 +933,11 @@ func main() {
 			return err
 		}
 
-		// engine registration order matters: Go projections first, then JS
-		// projections (which may read Go-maintained collections), then
-		// reactors and effect functions
+		// Go projections, then JS projections, then reactors and effect
+		// functions. The order is when each runs in a pass, not a guarantee
+		// about what another has seen (see consumers.Engine.Register): no
+		// projection may read another's collections, and no reactor a
+		// projection (R6)
 		for _, spec := range loaded.Projections {
 			c.JSProjs = append(c.JSProjs, spec.Consumer())
 		}

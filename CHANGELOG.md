@@ -47,6 +47,11 @@ All notable changes to PocketCQRS. Format loosely follows
   stream again after it (an assign after an unassign); the importer then sets the command's new
   `canBeginAgain`. An aggregate with no final end generates exactly as before. Same rule as
   dotnetcqrs. Regenerate a decider to pick it up; existing generated files are not rewritten.
+- **Consumer registration order is documented as when, not a guarantee (R6).** Each consumer reads
+  to the head as it is when its turn comes, so one registered later can be ahead of an earlier one.
+  `main.go` said JS projections "may read Go-maintained collections" (which rule 4 forbids) and the
+  search index's rotation claimed to need the order; it doesn't, since it switches over only once
+  the rebuild has caught up. An engine test now pins the claim, as in dotnetcqrs.
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.

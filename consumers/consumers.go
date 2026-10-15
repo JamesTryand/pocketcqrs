@@ -224,7 +224,12 @@ func NewEngineWithCheckpoints(source PollSource, checkpoints CheckpointStore, lo
 	}
 }
 
-// Register adds a consumer.
+// Register adds a consumer. Consumers run in registration order within a
+// pass, but that order is WHEN, not a guarantee about what each has seen:
+// every consumer reads to the head as it is when its turn comes, so one
+// registered later can be ahead of one registered earlier (a commit lands
+// in between). Never decide from another consumer's output on the strength
+// of the order; a projection reads only its own tables (R6).
 func (e *Engine) Register(c Consumer) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
