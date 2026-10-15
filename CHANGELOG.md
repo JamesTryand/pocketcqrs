@@ -111,6 +111,10 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **Fixed: an automation whose scenarios show its target stream both fresh and already there is an
+  upsert,** as dotnetcqrs maps it, not the stream's create. Two automations recording on one ledger
+  were both its create, and the import stopped ("a stream has one beginning"); the timesheets model
+  hit it.
 - **Hand-written projections (schema 3.17.0 `projection: "hand"`).** The import writes no projection
   for such a read model, only `<collection>.js.example` / `<collection>.go.example` to start from;
   its query route is still generated. Verify reports its view scenarios as HAND. Upstream's

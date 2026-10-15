@@ -315,10 +315,15 @@ func (m *mapper) mapAutomation(s Slice) {
 	// automation whose target is its own trigger's aggregate (auto-ship an
 	// order) is never a create either. Getting this wrong makes the command's
 	// own scenario fail with "does not exist", which is how it was found.
+	// Evidence of both a fresh and an existing target stream is an upsert,
+	// as for a stateChange command: neither guard applies (dotnetcqrs's
+	// MapAutomation). Two automations recording on one ledger were otherwise
+	// both its create, and the import stopped.
 	crossAggregate := source != agg
 	target := m.domain(agg)
-	isCreate := crossAggregate && m.hasCreateEvidence(s, agg)
-	c := m.command(agg, s.CommandID, cmd, s.ResultEventIDs, isCreate, !isCreate)
+	hasCreate := crossAggregate && m.hasCreateEvidence(s, agg)
+	isCreate := hasCreate && !m.hasUpdateEvidence(s, agg)
+	c := m.command(agg, s.CommandID, cmd, s.ResultEventIDs, isCreate, !hasCreate)
 	c.CanBeginAgain = isCreate && m.hasBeginAgainEvidence(s, agg)
 	c.Outcomes = m.mapOutcomes(s, s.ResultEventIDs, c.Events)
 	target.Commands = append(target.Commands, c)
