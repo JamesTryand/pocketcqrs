@@ -39,6 +39,12 @@ go run ./cmd/extcaller \
   -allowedHosts api.example.com
 ```
 
+**Run exactly one `extcaller` per deployment, against the master's `events.db`.** It writes no
+projection, so it may run beside the server as its own process, but each request must be handled by
+exactly one caller so it has only one result. Every replica holds the same log, so one per node would
+make every call once per node. It skips events brought in by `events import` (they already happened
+elsewhere; see `consumers.Effect`).
+
 `EXTCALLER_GATEWAY_TOKEN` must be set (an environment variable, never a flag). `extcaller.Config.Gateway`
 is a small interface (just the `Dispatch` method), not the concrete HTTP client under
 `internal/gatewayclient` — that package is unreachable from outside this module by Go's own
