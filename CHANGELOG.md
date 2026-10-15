@@ -111,6 +111,9 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **Fixed (layout change): `schema import --lang go` writes each aggregate to `<out>/<package>/`.** It
+  wrote every aggregate's package into one directory, which doesn't compile once there are two
+  (the timesheets model has fourteen). A single-aggregate import moves down one directory too.
 - **`schema verify`, standalone, and against a host's functions.** Runs a document's scenarios
   with nothing written and exits non-zero when one fails (HAND is not a failure); like `import`, it
   never boots PocketBase. `--functions <dir>` runs them against a host's own deciders, hand files

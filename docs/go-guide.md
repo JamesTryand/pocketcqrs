@@ -72,8 +72,9 @@ migration is caught immediately rather than silently.
 **`pocketcqrs schema import --lang go`** scaffolds the Go starting point
 directly from an EventModeling document, alongside the existing (default)
 JS output — same model, same validation, second output language. It writes
-one file per decider/projection/reactor (all in one package, named after
-the aggregate) and prints suggested `decider.Register`/`engine.Register`
+one file per decider/projection/reactor, each aggregate as its own package
+in its own directory (`<out>/<package>/`, the package named after the
+aggregate) and prints suggested `decider.Register`/`engine.Register`
 lines for `main.go` — printed, not applied, for the same reason
 `aggregates.RegisterAll` isn't patched automatically: a one-line edit isn't
 worth code-mod machinery, and there's no "graduated" bookkeeping to keep in

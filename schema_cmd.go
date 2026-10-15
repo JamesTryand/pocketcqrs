@@ -351,8 +351,14 @@ func writeSliceGo(mapped *emschema.Mapped, outDir string, force bool) (int, erro
 		if err != nil {
 			return written, fmt.Errorf("generating %s: %w", d.Aggregate, err)
 		}
+		// each aggregate is its own package, so its own directory: two
+		// packages in one directory don't compile
+		pkgDir := filepath.Join(outDir, scaffold.GoPackageName(d.Aggregate))
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			return written, err
+		}
 		for _, f := range files {
-			n, err := writeIfAbsent(filepath.Join(outDir, f.Name), f.Source, force)
+			n, err := writeIfAbsent(filepath.Join(pkgDir, f.Name), f.Source, force)
 			if err != nil {
 				return written, err
 			}

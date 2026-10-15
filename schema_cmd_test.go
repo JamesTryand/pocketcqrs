@@ -147,7 +147,7 @@ func TestSchemaImportLangGoWritesGoFiles(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("import failed: %v\n%s", err, out.String())
 	}
-	content, err := os.ReadFile(filepath.Join(outDir, "widget.go"))
+	content, err := os.ReadFile(filepath.Join(outDir, "widget", "widget.go"))
 	if err != nil {
 		t.Fatalf("expected widget.go with --lang go, got: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestSchemaImportLangGoSuggestionMatchesGeneratedCode(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("import failed: %v\n%s", err, out.String())
 	}
-	content, err := os.ReadFile(filepath.Join(outDir, "supportTicket.go"))
+	content, err := os.ReadFile(filepath.Join(outDir, "supportTicket", "supportTicket.go"))
 	if err != nil {
 		t.Fatalf("expected supportTicket.go with --lang go, got: %v", err)
 	}
@@ -305,5 +305,32 @@ func TestSchemaImportRejectsAppOnlyFlags(t *testing.T) {
 		t.Fatal("--dev was silently accepted; expected \"unknown flag\"")
 	} else if !strings.Contains(err.Error(), "unknown flag") {
 		t.Errorf("expected an unknown-flag error, got: %v", err)
+	}
+}
+
+// Each aggregate is its own Go package, so a --lang go import writes each
+// into its own directory, <out>/<package>/: two packages in one directory
+// don't compile (the timesheets import wrote fourteen there).
+func TestSchemaImportGoWritesAPackagePerAggregate(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "out")
+	cmd := newSchemaImportCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"testdata/eventmodelschema/examples/conditional-outcomes.json", "--skip-scenarios", "--out", outDir, "--lang", "go"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	for pkg, file := range map[string]string{"entry": "entry.go", "expense": "expense.go"} {
+		src, err := os.ReadFile(filepath.Join(outDir, pkg, file))
+		if err != nil {
+			t.Fatalf("%s: %v", pkg, err)
+		}
+		if !strings.HasPrefix(string(src), "package "+pkg+"\n") {
+			t.Errorf("%s/%s is not package %s", pkg, file, pkg)
+		}
+	}
+	if entries, _ := os.ReadDir(outDir); len(entries) != 2 {
+		t.Errorf("want only the two package directories in %s, got %d entries", outDir, len(entries))
 	}
 }
