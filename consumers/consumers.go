@@ -515,6 +515,16 @@ func (e *Engine) Run(ctx context.Context) {
 	e.loop(ctx)
 }
 
+// Nudge wakes the engine for a pass now rather than at its next tick: for a
+// writer in another process (a secondary's LiteFS watcher, R7), where the
+// store's own in-process notice never fires.
+func (e *Engine) Nudge() {
+	select {
+	case e.nudge <- struct{}{}:
+	default:
+	}
+}
+
 func (e *Engine) subscribe() {
 	e.source.Subscribe(func(events.Event) {
 		select {

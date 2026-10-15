@@ -33,6 +33,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/gateway"
 	"github.com/jamestryand/pocketcqrs/idempotency"
+	"github.com/jamestryand/pocketcqrs/litefswatch"
 	"github.com/jamestryand/pocketcqrs/migrations"
 	"github.com/jamestryand/pocketcqrs/nodeidentity"
 	"github.com/jamestryand/pocketcqrs/opsport"
@@ -78,6 +79,9 @@ type components struct {
 	// nil when --cqrsCommandBatching=false or this node is a roleSecondary,
 	// which never runs its own writer.
 	batchWriter *batching.Writer
+
+	// eventsPath is the log's file (its name is LiteFS's database name).
+	eventsPath string
 
 	// role mirrors --cqrsRole (roleMaster or roleSecondary), set once
 	// immediately after ParseFlags, same lifecycle as State.Tutorial.
@@ -449,6 +453,14 @@ func main() {
 	// events.ErrReadOnly in gateway.go) -- a deliberate choice, e.g. a
 	// pure reporting replica that should never accept write traffic even
 	// via forwarding.
+	var liteFSEvents string
+	app.RootCmd.PersistentFlags().StringVar(
+		&liteFSEvents,
+		"cqrsLiteFSEvents",
+		"",
+		"on --cqrsRole="+roleSecondary+", LiteFS's event stream (e.g. http://localhost:20202/events): the "+
+			"engine runs as soon as LiteFS has applied the master's transactions to this replica, "+
+			"instead of at its next tick (which stays as the guarantee). No effect on "+roleMaster)
 	var masterAddr string
 	app.RootCmd.PersistentFlags().StringVar(
 		&masterAddr,
@@ -753,6 +765,7 @@ func main() {
 		if eventsPath == "" {
 			eventsPath = filepath.Join(dataDir, "events.db")
 		}
+		c.eventsPath = eventsPath
 		var store *events.Store
 		var err error
 		if c.role == roleSecondary {
@@ -1182,6 +1195,12 @@ func main() {
 				}
 				return mode
 			})
+			if c.role == roleSecondary && liteFSEvents != "" {
+				// R7: wake on each transaction LiteFS applies to the log
+				watch := litefswatch.Config{URL: liteFSEvents, DB: filepath.Base(c.eventsPath), Notify: c.Engine.Nudge,
+					Logger: func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) }}
+				bg.Go(func(ctx context.Context) { litefswatch.Watch(ctx, watch) })
+			}
 			if c.role == roleSecondary {
 				monitor := opsport.NewReplicationMonitor(c.Store, &http.Client{Timeout: 2 * time.Second}, staleThreshold)
 				c.health.SetReplication(monitor.Current)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jamestryand/pocketcqrs/events"
 )
@@ -81,5 +82,35 @@ func TestACommitterRecordsItsOwnPosition(t *testing.T) {
 	}
 	if pos, _ := store.Checkpoint(ctx, "committer"); pos != 1 {
 		t.Fatalf("the engine's store must not move for a committer: %d", pos)
+	}
+}
+
+// Nudge wakes a running engine for a pass now, not at its next tick: a
+// secondary's LiteFS watcher calls it when the log has new transactions.
+func TestNudgeWakesTheEngine(t *testing.T) {
+	var dir string
+	store := openStore(t, &dir)
+	defer store.Close()
+	r := &recorder{}
+	ro, err := events.OpenReadOnly(dir + "/events.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	e := NewEngineWithCheckpoints(ro, &MemoryCheckpoints{}, nil)
+	e.Register(r)
+	e.tick = time.Hour // only the nudge can wake it in time
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+	time.Sleep(100 * time.Millisecond) // a first pass, then waiting for a tick
+	appendOne(t, store, "t1")          // another process's write: no in-process notice
+	e.Nudge()
+	deadline := time.Now().Add(3 * time.Second)
+	for r.count() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if r.count() != 1 {
+		t.Fatal("the nudge didn't wake the engine")
 	}
 }

@@ -111,6 +111,10 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **A secondary wakes when LiteFS applies the master's transactions (R7).** `--cqrsLiteFSEvents`
+  follows LiteFS's `/events` stream (package `litefswatch`) and nudges the engine (new
+  `Engine.Nudge`) on each transaction applied to the log, after it is readable; the 1 s tick stays as
+  the guarantee. A dropped stream is subscribed to again, 1 s doubling to 30 s.
 - **Effect functions run off the engine's pass (R4).** On the master the server records each effect
   function's work in `outbox.db` and its outbox worker runs it (the current code after a reload:
   `adminapi.State.RunQueuedEffect`); one attempt and a dead letter on a throw, as before.

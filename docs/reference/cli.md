@@ -200,6 +200,7 @@ provide) — a stated incompatibility, not a scale-dependent risk.
 | `--cqrsRequireExistingEventLog` | `false` | master only: refuse to start if `events.db` (at `--cqrsEventsPath`) does not already exist, instead of creating an empty log. Turn it on for a master whose log lives on a LiteFS mount once the log exists; leave it off for the first boot that creates it. A secondary always requires an existing log |
 | `--cqrsVFS` | *(none)* | **dead hook — not the cross-host mechanism.** A SQLite VFS name to open `events.db` through on a secondary, if one is already registered with the driver. Nothing in this codebase registers a VFS, and LiteFS (the actual decided mechanism) does not use this flag at all — it works by FUSE-mounting a directory, not by SQLite VFS registration. Leave this unset |
 | `--cqrsMasterAddr` | *(none)* | the master's base URL; when set on a secondary, commands are proxied there instead of refused |
+| `--cqrsLiteFSEvents` | *(none)* | on a secondary, LiteFS's event stream (e.g. `http://localhost:20202/events`): its engine runs as soon as LiteFS has applied a master transaction to the replica, rather than at its next 1 s tick (which stays as the guarantee). A dropped stream is subscribed to again after 1 s, doubling to 30 s while it keeps failing |
 | `--cqrsForwardAuth` | `false` | also route PocketBase's own auth-collection traffic (login, token refresh, `_users`/`_superusers` records — reads included) to the master, since a secondary's copies of those tables are unrelated local tables, not replicas |
 | `--cqrsVerifyAuth` | `false` | verify bearer tokens against the master with a bounded local verdict cache, so a secondary's own authenticated **local** reads work; implies `--cqrsForwardAuth` |
 | `--cqrsVerifyCacheTTL` | `5m` | how long a verdict is trusted before re-checking, always additionally capped by the token's own `exp`. Also the revocation-lag bound |
@@ -277,6 +278,7 @@ pocketcqrs serve --cqrsEventsPath /litefs/mnt/events.db ...
 pocketcqrs serve --cqrsRole secondary \
   --cqrsEventsPath /litefs/mnt/events.db \
   --cqrsMasterAddr http://master:8090 \
+  --cqrsLiteFSEvents http://localhost:20202/events \
   --cqrsVerifyAuth
 ```
 
