@@ -231,6 +231,17 @@ func main() {
 	// overrides it per collection. Every reconcile (boot and reload) keeps
 	// an existing collection's rule in step with what is declared, so an
 	// access rule added to the model reaches it.
+	// The caller's role and data-subject id, as fields of their auth
+	// record: what read models' access rules read (@request.auth.<field>;
+	// schema import's --roleField/--subjectField name the same fields).
+	// Core's users collection refuses self-service writes to both, so
+	// nobody can grant themselves a role.
+	var roleField, subjectField string
+	app.RootCmd.PersistentFlags().StringVar(&roleField, "cqrsRoleField", "role",
+		"the auth-record field holding a caller's role; users may not set it on themselves")
+	app.RootCmd.PersistentFlags().StringVar(&subjectField, "cqrsSubjectField", "",
+		"the auth-record field holding a caller's data-subject id (empty: the record's own id); users may not set it on themselves")
+
 	var schemaDefaultRule string
 	app.RootCmd.PersistentFlags().StringVar(
 		&schemaDefaultRule,
@@ -722,6 +733,9 @@ func main() {
 		// not a new risk this flag introduces, it's what a single instance
 		// already does today (docs/reference/cli.md's "Multi-node" section).
 		if err := e.App.RunAppMigrations(); err != nil {
+			return err
+		}
+		if err := users.LockFields(e.App, roleField, subjectField); err != nil {
 			return err
 		}
 

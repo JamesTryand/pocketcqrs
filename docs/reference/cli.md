@@ -17,6 +17,8 @@ PocketCQRS flags (persistent, on every command):
 | `--cqrsOutboundHost` | *(none)* | a hostname `$http` may call. Repeatable; deployment-wide, not per-function. **No entries permits nothing** |
 | `--cqrsAllowPrivateOutbound` | `false` | dev/internal: let `$http` reach loopback and private ranges. Link-local (`169.254.0.0/16`, the metadata endpoint) stays blocked regardless |
 | `--cqrsExternalCallerCollection` | *(none)* | name of a PocketBase auth collection whose authenticated records are external service integrations (e.g. `pocketcqrs-extensions`' `extcaller`), not end users or reactors — see [the Go guide](../go-guide.md) for the `"extcall:<name>"` actor shape this produces |
+| `--cqrsRoleField` | `role` | the auth-record field holding a caller's role, which read models' access rules read (`@request.auth.role`). The `users` collection refuses it on self-registration and on a user's own update: only a superuser, or a command handled server-side, sets it. Match `schema import --roleField` |
+| `--cqrsSubjectField` | *(none: the record's `id`)* | the auth-record field holding a caller's data-subject id (`selfAccess`, `grantsAccess`). Locked on `users` the same way. Match `schema import --subjectField` |
 | `--cqrsSchemaDefaultRule` | *(none, = `public`)* | default `ListRule`/`ViewRule` for newly created `//@schema` collections: `public`, `authenticated`, or a raw PocketBase rule expression. A [`//@rule <collection> <value>`](directives.md#rule-collection-value) directive overrides this per collection. Writes stay write-guarded either way. Existing collections follow the declared rule on every boot and reload |
 | `--cqrsSelfAddr` | `127.0.0.1:8090` | this node's own `--http` listen address, used only for the Microsoft/Entra sign-in callback's internal exchange call (Item 12, see below). Must match `--http` (or wherever this node actually listens) for that flow to work — an explicit, operator-supplied value, deliberately not derived from the incoming request |
 
@@ -472,6 +474,14 @@ already-existing `users` collection — so your app's own migration can
 safely fetch it (`app.FindCollectionByNameOrId("users")`) and add fields on
 top, the same additive pattern `//@schema` reconcile already uses, without
 fighting a later pocketcqrs boot reasserting a narrower shape.
+
+**One thing core does reassert on every boot:** the `CreateRule` and
+`UpdateRule` refuse a request that sets the role field (`--cqrsRoleField`) or
+the subject field (`--cqrsSubjectField`) — `@request.body.role:isset = false`
+is ANDed onto whatever rule your app set (a superuser-only rule stays as it
+is). Read models' access rules read those fields from the caller's auth
+record, so without this a user could register as, or promote themselves to,
+any role. Set them as a superuser or from a command handled server-side.
 
 #### Microsoft/Entra sign-in
 

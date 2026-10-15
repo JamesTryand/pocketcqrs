@@ -7,6 +7,14 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ### Security
 
+- **Nobody can give themselves a role through `users`.** Read models' access rules read the caller's
+  role from their auth record (`@request.auth.role`, schema 2.7.0's `requiredRole` already did), but
+  core's `users` collection allowed open registration and self-update of any field: with a `role`
+  field added, any user could register as, or promote themselves to, any role. Every boot now ANDs
+  `@request.body.<field>:isset = false` onto its CreateRule and UpdateRule for the role field
+  (`--cqrsRoleField`, default `role`) and the subject field (`--cqrsSubjectField`), keeping the app's
+  own rule. A superuser, or a command handled server-side, still sets them.
+
 - **A command's authorization declarations combine (S2).** `authorize.Authorizer` returned on the
   first declaration it met, so a role that satisfied `requiredRole` skipped `requiredOwnership` and
   `scope`, and a `fieldGatedRole` whose condition didn't apply allowed the command before `scope`
