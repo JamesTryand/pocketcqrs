@@ -32,6 +32,7 @@ type fixture struct {
 	srv    *httptest.Server
 	app    *tests.TestApp
 	kms    *kms.Memory
+	cache  *pii.Cache
 	tokens map[string]string
 }
 
@@ -124,8 +125,9 @@ func setup(t *testing.T, mutate func(app core.App, m *kms.Memory), client func(*
 		t.Fatal(err)
 	}
 	se := &core.ServeEvent{App: app, Router: router}
+	cache := pii.NewCache(0)
 	cfg := queryroute.Config{
-		PII:            &pii.Deps{KMS: c, Cache: pii.NewCache(0)},
+		PII:            &pii.Deps{KMS: c, Cache: cache},
 		ResolveOwnRole: func(a *core.Record) string { return a.GetString("role") },
 		SubjectOf:      func(a *core.Record) string { return a.GetString("subjectId") },
 	}
@@ -138,7 +140,7 @@ func setup(t *testing.T, mutate func(app core.App, m *kms.Memory), client func(*
 	}
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return &fixture{srv: srv, app: app, kms: m, tokens: tokens}
+	return &fixture{srv: srv, app: app, kms: m, cache: cache, tokens: tokens}
 }
 
 func (f *fixture) get(t *testing.T, who, path string) (int, string) {

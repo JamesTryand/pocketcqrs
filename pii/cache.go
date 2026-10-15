@@ -38,6 +38,7 @@ type Cache struct {
 	bySubject map[string]map[string]struct{}
 	lru       *list.List // front = most recently used
 	erased    map[string]struct{}
+	onErased  []func(subjectID string)
 }
 
 type cacheKey struct{ subject, cipher string }
@@ -116,11 +117,31 @@ func (c *Cache) Put(subjectID, ciphertext string, plaintext []byte) {
 	}
 }
 
-// MarkErased drops every entry for the subject and refuses future fills for
-// it. Idempotent.
-func (c *Cache) MarkErased(subjectID string) {
+// OnErased calls fn, outside the cache's lock, the first time a subject is
+// marked erased: a reader whose result held that subject's values (a live
+// view) can recompute it as redacted. fn must not block.
+func (c *Cache) OnErased(fn func(subjectID string)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.onErased = append(c.onErased, fn)
+}
+
+// MarkErased drops every entry for the subject and refuses future fills for
+// it. Idempotent: listeners hear of a subject once.
+func (c *Cache) MarkErased(subjectID string) {
+	c.mu.Lock()
+	_, already := c.erased[subjectID]
+	c.markErasedLocked(subjectID)
+	listeners := c.onErased
+	c.mu.Unlock()
+	if !already {
+		for _, fn := range listeners {
+			fn(subjectID)
+		}
+	}
+}
+
+func (c *Cache) markErasedLocked(subjectID string) {
 	c.erased[subjectID] = struct{}{}
 	for cipher := range c.bySubject[subjectID] {
 		if el, ok := c.entries[cacheKey{subjectID, cipher}]; ok {

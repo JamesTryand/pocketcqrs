@@ -195,6 +195,13 @@ func Register(se *core.ServeEvent, spec Spec, cfg Config) error {
 	se.Router.GET(PathPrefix+spec.Collection, func(re *core.RequestEvent) error {
 		return serve(re, spec, cfg)
 	}).Bind(apis.RequireAuth())
+	// its live route: the same result, pushed when it changes (see live).
+	// A read model whose record API is locked gets no PocketBase realtime,
+	// so this is how a screen stays current for it.
+	hubOf(se.App).watch(se.App, spec, cfg)
+	se.Router.GET(PathPrefix+spec.Collection+LiveSuffix, func(re *core.RequestEvent) error {
+		return live(re, spec, cfg)
+	}).Bind(apis.RequireAuth())
 	return nil
 }
 
@@ -221,11 +228,10 @@ func LockRecordAPI(app core.App, collection string, logger func(string, ...any))
 	return nil
 }
 
-func fail(re *core.RequestEvent, status int, msg string) error {
-	return re.JSON(status, map[string]string{"error": msg})
-}
-
-func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
+// answer is the route's result for this request: its status and its JSON
+// body. The read route sends it once; the live route sends it again
+// whenever it changes, so both apply the same access rules.
+func answer(re *core.RequestEvent, spec Spec, cfg Config) (int, any) {
 	// who may see what (the whole rule of schema 3.8.0): a role holder sees
 	// every row; anyone else their own rows (SelfSubject) and those a
 	// granting scope admits for their subject id; with none of those, a
@@ -246,7 +252,7 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 		if !hasRole(spec.RequiredRole, role) {
 			subject := subjectOf()
 			if subject == "" || (spec.SelfSubject == "" && len(spec.Grants) == 0) {
-				return fail(re, http.StatusForbidden, "not authorized to read "+spec.Collection)
+				return failed(http.StatusForbidden, "not authorized to read "+spec.Collection)
 			}
 			params["self"] = subject
 			if spec.SelfSubject != "" {
@@ -269,7 +275,7 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 			delete(query, spec.SelfParam)
 			subject := subjectOf()
 			if subject == "" {
-				return re.JSON(http.StatusOK, map[string]any{"items": []map[string]any{}, "page": 1, "perPage": defaultPerPage})
+				return http.StatusOK, map[string]any{"items": []map[string]any{}, "page": 1, "perPage": defaultPerPage}
 			}
 			params["self"] = subject
 			narrowToSelf = true
@@ -289,14 +295,14 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 		var bad *searchindex.BadTermError
 		switch {
 		case errors.As(err, &bad):
-			return fail(re, http.StatusBadRequest, bad.Msg)
+			return failed(http.StatusBadRequest, bad.Msg)
 		case errors.Is(err, searchindex.ErrTooBroad):
-			return fail(re, http.StatusBadRequest, fmt.Sprintf("'%s' matches too many rows; narrow the search", f.Param))
+			return failed(http.StatusBadRequest, fmt.Sprintf("'%s' matches too many rows; narrow the search", f.Param))
 		case kms.IsUnavailable(err):
 			re.Response.Header().Set("Retry-After", "1")
-			return fail(re, http.StatusServiceUnavailable, "search is unavailable: the key service could not hash the term")
+			return failed(http.StatusServiceUnavailable, "search is unavailable: the key service could not hash the term")
 		case err != nil:
-			return fail(re, http.StatusInternalServerError, "search failed: "+err.Error())
+			return failed(http.StatusInternalServerError, "search failed: "+err.Error())
 		}
 		if !searched {
 			keys, searched = found, true
@@ -306,12 +312,17 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 	}
 	page, perPage := 1, defaultPerPage
 	if searched && len(keys) == 0 {
-		return re.JSON(http.StatusOK, map[string]any{"items": []map[string]any{}, "page": page, "perPage": perPage})
+		return http.StatusOK, map[string]any{"items": []map[string]any{}, "page": page, "perPage": perPage}
 	}
 
 	filter, queryParams, sortExpr, page, perPage, err := parseQuery(query, spec)
 	if err != nil {
-		return fail(re, http.StatusBadRequest, err.Error())
+		return failed(http.StatusBadRequest, err.Error())
+	}
+	if sortExpr == "" {
+		// a stable order: pages don't shuffle, and a live view doesn't push
+		// the same rows again because SQLite returned them differently
+		sortExpr = spec.Key
 	}
 	for k, v := range params {
 		queryParams[k] = v
@@ -336,7 +347,7 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 	records, err := re.App.FindRecordsByFilter(spec.Collection, strings.Join(filter, " && "), sortExpr,
 		perPage, (page-1)*perPage, params)
 	if err != nil {
-		return fail(re, http.StatusInternalServerError, "query failed: "+err.Error())
+		return failed(http.StatusInternalServerError, "query failed: "+err.Error())
 	}
 
 	rows := make([]map[string]any, len(records))
@@ -350,7 +361,7 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 			if _, isPII := spec.PII[col]; isPII {
 				if err := queueReveal(buf, row, col, rec.GetString(col)); err != nil {
 					cfg.Logger("queryroute: personal-data column does not hold an envelope", "collection", spec.Collection, "column", col, "error", err)
-					return fail(re, http.StatusInternalServerError, fmt.Sprintf("%s.%s does not hold encrypted data; refusing to serve it", spec.Collection, col))
+					return failed(http.StatusInternalServerError, fmt.Sprintf("%s.%s does not hold encrypted data; refusing to serve it", spec.Collection, col))
 				}
 				continue
 			}
@@ -362,12 +373,21 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 		if err := buf.Flush(re.Request.Context()); err != nil {
 			if kms.IsUnavailable(err) {
 				re.Response.Header().Set("Retry-After", "1")
-				return fail(re, http.StatusServiceUnavailable, "dependency unavailable: the key service is unavailable; retry later")
+				return failed(http.StatusServiceUnavailable, "dependency unavailable: the key service is unavailable; retry later")
 			}
-			return fail(re, http.StatusInternalServerError, "revealing personal data failed: "+err.Error())
+			return failed(http.StatusInternalServerError, "revealing personal data failed: "+err.Error())
 		}
 	}
-	return re.JSON(http.StatusOK, map[string]any{"items": rows, "page": page, "perPage": perPage})
+	return http.StatusOK, map[string]any{"items": rows, "page": page, "perPage": perPage}
+}
+
+func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
+	status, body := answer(re, spec, cfg)
+	return re.JSON(status, body)
+}
+
+func failed(status int, msg string) (int, any) {
+	return status, map[string]string{"error": msg}
 }
 
 // queueReveal reads one pii cell: empty is null, an erased envelope is the

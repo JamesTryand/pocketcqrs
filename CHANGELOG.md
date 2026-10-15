@@ -105,6 +105,12 @@ All notable changes to PocketCQRS. Format loosely follows
   `stateView` scenario's rows go into a scratch PocketBase app with the exact `//@rule` the import
   generated (and the collections a granting scope joins), and only what PocketBase's own rule engine
   lets that caller see is compared. `caller` leaves the importer's refused set.
+- **Live read routes.** Every generated read route gets `GET /api/cqrs/rm/{collection}/live`
+  (server-sent events): the route's own result for the viewer, under the same access rules and
+  reveals, then a new one each time a committed write (PocketBase's after-commit record hooks) or an
+  erasure (`pii.Cache.OnErased`, new) changes it, coalesced, unchanged results not pushed; `event:
+  expired` when the token expires. This is option A for personal-data read models, whose locked
+  record API gets no PocketBase realtime. See [docs/personal-data.md](docs/personal-data.md).
 - **The Go target's read route applies the same rule.** `queryroute.Spec` gains `SelfParam` and
   `Grants`, and `SelfSubject` now comes from the read model's `selfAccess`, not from its personal
   data. **Breaking:** a personal-data read model that declares no `selfAccess` no longer lets a

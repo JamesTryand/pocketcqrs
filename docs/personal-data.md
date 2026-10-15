@@ -66,6 +66,29 @@ Each read model gets a generated route spec (`<collection>_query.go`) served by 
   superuser-only, so PocketBase's own record API (list, view, realtime, expand) refuses everyone
   else. The route is the only read path.
 
+## Watching it live
+
+Locking the record API also takes away PocketBase realtime, so every generated route has a live
+twin: `GET /api/cqrs/rm/{collection}/live`, server-sent events.
+
+- It sends `event: view` with the **same body** `GET /api/cqrs/rm/{collection}` returns for this
+  viewer: the same access rules, the same reveals, the same query params. A caller the read route
+  refuses is refused here too, before any stream.
+- Then it sends another `view` whenever a committed write to the collection changes **this
+  viewer's** result. The notice comes from PocketBase's after-commit record hooks, so the re-read
+  sees the new rows; notices landing during a re-read coalesce into one more; an unchanged result
+  is not pushed. Nothing polls.
+- **Erasure pushes the redacted result.** It changes no row, so the reveal cache tells the route
+  (`pii.Cache.OnErased`) when a subject is marked erased.
+- It ends when the viewer disconnects, or with `event: expired` when their token expires: open it
+  again with a fresh token. A failure while re-reading (the key service down) is `event: error`,
+  and the stream stays open.
+- Measured (200 personal-data rows, in-memory key service, this machine): a push costs about
+  3 ms with a warm reveal cache and about 4 ms with a cold one. The query and the HTTP write
+  are most of it. With a real key service, a cold page adds one round trip.
+- `EventSource` can't send an `Authorization` header: read the stream with `fetch` (as dotnetcqrs
+  hosts do), or put the session in a cookie the server reads.
+
 ## Searching it
 
 A `match` filter (schema 3.1.0) makes a field searchable by a query param. Indexes live in
