@@ -249,8 +249,9 @@ func (v *verifier) fieldsOf(collection string, rows map[string]map[string]any) [
 // bindCaller applies what a caller's own identity does to the query
 // params: a granting scope's param always names the caller, whatever value
 // it was given (3.8.0), and selfAccess.param narrows the caller, role
-// holders too, to their own rows. Without a caller there is no subject to
-// narrow to, so selfAccess.param admits nothing.
+// holders too, to their own rows. A scenario without a caller reads as a
+// role holder, and the value it sends names the subject (dotnetcqrs's
+// harness binds it the same way).
 func bindCaller(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage, caller *ScenarioCaller) (map[string]map[string]any, json.RawMessage) {
 	var params map[string]any
 	if len(queryParams) == 0 || json.Unmarshal(queryParams, &params) != nil || params == nil {
@@ -264,12 +265,16 @@ func bindCaller(rm ReadModel, rows map[string]map[string]any, queryParams json.R
 		}
 	}
 	if sa := rm.SelfAccess; sa != nil && sa.Param != "" {
-		if _, ok := params[sa.Param]; ok {
+		if sent, ok := params[sa.Param]; ok {
 			delete(params, sa.Param)
+			subject := sent
+			if caller != nil {
+				subject = caller.SubjectID
+			}
 			own := map[string]map[string]any{}
-			if caller != nil && caller.SubjectID != "" {
+			if subject != nil && subject != "" {
 				for key, row := range rows {
-					if jsonEq(row[scaffold.SanitizeName(sa.SubjectField)], caller.SubjectID) {
+					if jsonEq(row[scaffold.SanitizeName(sa.SubjectField)], subject) {
 						own[key] = row
 					}
 				}

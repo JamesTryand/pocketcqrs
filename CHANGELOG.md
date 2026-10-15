@@ -111,6 +111,9 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **Fixed: verify binds a self-access param a scenario sends without a caller.** Such a scenario
+  reads as a role holder, and the value it sends names the subject, as dotnetcqrs's harness does;
+  it admitted nothing. A named caller's own id still wins over the value sent.
 - **Fixed: a toggle's events merge their own fields too.** An event a toggle derives from was a
   derivation trigger only, so flagging an entry set `cleared` but never the reason it carried. Its
   fields now land on its row as well, in both projections, as dotnetcqrs seeds them. Count, sum and
