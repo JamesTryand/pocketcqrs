@@ -279,12 +279,23 @@ func (m *mapper) mapAutomation(s Slice) {
 			"`pb.findRecord`/`pb.query` are available inside reactTo() if the rule needs it",
 			s.ID, s.ReadModelID)
 	}
+	// Where the command goes (R3, as dotnetcqrs's mapper): an automation on
+	// its trigger's own aggregate acts on the trigger's own stream (no
+	// prefix; with one, auto-ship sent ShipOrder to a stream that never
+	// exists). Across aggregates the target id is derived from the source,
+	// and a create is keyed by the triggering EVENT, so every trigger event
+	// creates its own target, not just the first per source stream.
+	prefix := ""
+	if crossAggregate {
+		prefix = DeriveID(TypeName(s.Name, s.ID)) + "-"
+	}
 	m.domain(source).Reactors = append(m.domain(source).Reactors, scaffold.Reactor{
 		Name:      LowerFirst(scaffold.SanitizeName(TypeName(s.Name, s.ID))),
 		On:        triggers,
 		Aggregate: agg,
 		Command:   m.commandName(s.CommandID),
-		IDPrefix:  DeriveID(TypeName(s.Name, s.ID)) + "-",
+		IDPrefix:  prefix,
+		PerEvent:  isCreate,
 	})
 }
 

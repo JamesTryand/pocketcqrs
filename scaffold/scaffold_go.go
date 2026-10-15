@@ -1290,7 +1290,11 @@ func (d Domain) reactorGo(pkg string, r Reactor) string {
 	b.WriteString("\tdefault:\n\t\treturn nil\n\t}\n")
 	b.WriteString("\treturn []reactors.Reaction{{\n")
 	fmt.Fprintf(&b, "\t\tAggregate: %q,\n", r.Aggregate)
-	fmt.Fprintf(&b, "\t\tID:        %q + ev.AggregateID,\n", r.IDPrefix)
+	if r.PerEvent {
+		fmt.Fprintf(&b, "\t\tID:        %q + ev.ID,\n", r.IDPrefix)
+	} else {
+		fmt.Fprintf(&b, "\t\tID:        %q + ev.AggregateID,\n", r.IDPrefix)
+	}
 	b.WriteString("\t\tCommand:   decider.Command{Name: ")
 	fmt.Fprintf(&b, "%q, Payload: ev.Data},\n", r.Command)
 	b.WriteString("\t}}\n")

@@ -290,7 +290,13 @@ still refuse.
   standard pattern, shown above: derive the target id from the source event.
   A redelivery dispatches the same command to the same id, hits a domain
   rejection ("note already exists"), and that rejection is logged and
-  skipped rather than the reaction firing twice. `Math.random` is seeded
+  skipped rather than the reaction firing twice. Derive it from the
+  triggering **event** (`event.id`), not its stream (`event.aggregateId`),
+  when each trigger event should create its own target: keyed by the stream,
+  the second event on the same stream hits "already exists" and its create is
+  lost. (The example keys by stream because a task completes once.) A reactor
+  acting on the aggregate that triggered it targets `event.aggregateId`
+  itself, with no prefix. `Math.random` is seeded
   from the event position for the same reason — a retry has to make the
   same decision the attempt it's retrying made.
 

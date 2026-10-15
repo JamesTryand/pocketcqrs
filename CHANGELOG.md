@@ -52,6 +52,13 @@ All notable changes to PocketCQRS. Format loosely follows
   `main.go` said JS projections "may read Go-maintained collections" (which rule 4 forbids) and the
   search index's rotation claimed to need the order; it doesn't, since it switches over only once
   the rebuild has caught up. An engine test now pins the claim, as in dotnetcqrs.
+- **Generated reactors send their command to the right stream (R3).** An automation acting on its
+  trigger's own aggregate sent the command to `<prefix>-<id>`, a stream that never exists, so it was
+  refused: the worked example's auto-ship never shipped an order. It now targets the trigger's own
+  stream. A create on another aggregate was keyed by the source stream, so the second trigger event
+  on one stream hit "already exists" and its target was never created. It is now keyed by the
+  triggering event (`<prefix>-<event id>`), as dotnetcqrs's are; a redelivery still targets the same
+  id. The scaffold `Reactor` gains `perEvent`. Regenerate reactors to pick it up.
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.

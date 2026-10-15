@@ -275,8 +275,15 @@ type Reactor struct {
 	Command   string `json:"command"`
 	// IDPrefix prefixes the source aggregate id to build the target id
 	// (e.g. "fulfill-" → "fulfill-<orderId>"). Deterministic on purpose:
-	// a replay then hits the target's own "already exists" rule.
+	// a replay then hits the target's own "already exists" rule. Empty
+	// targets the triggering event's own stream (an automation acting on
+	// the aggregate that triggered it).
 	IDPrefix string `json:"idPrefix,omitempty"`
+	// PerEvent keys the target by the triggering EVENT's id instead of its
+	// stream's (IDPrefix + event id): a create per trigger event, so two
+	// events on one source stream create two targets (R3). A redelivery of
+	// the same event still targets the same id, and hits "already exists".
+	PerEvent bool `json:"perEvent,omitempty"`
 }
 
 // File is one generated source file.
@@ -1008,7 +1015,11 @@ func (d Domain) reactor(r Reactor) string {
 	b.WriteString("function reactTo(event) {\n")
 	b.WriteString("  return [{\n")
 	fmt.Fprintf(&b, "    aggregate: '%s',\n", r.Aggregate)
-	fmt.Fprintf(&b, "    id: '%s' + event.aggregateId,\n", r.IDPrefix)
+	if r.PerEvent {
+		fmt.Fprintf(&b, "    id: '%s' + event.id,\n", r.IDPrefix)
+	} else {
+		fmt.Fprintf(&b, "    id: '%s' + event.aggregateId,\n", r.IDPrefix)
+	}
 	fmt.Fprintf(&b, "    command: '%s',\n", r.Command)
 	b.WriteString("    payload: Object.assign({}, event.data)\n")
 	b.WriteString("  }];\n")
