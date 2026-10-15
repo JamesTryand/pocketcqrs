@@ -418,6 +418,11 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 	b.WriteString("// and test this against real history before relying on it.\n")
 	b.WriteString("type State struct {\n")
 	b.WriteString("\tExists bool\n")
+	if d.hasRefusals() {
+		b.WriteString("\t// Known is every event field as folded, for the refuseWhen rules: a field\n")
+		b.WriteString("\t// no event has set is absent, which a typed zero value can't say.\n")
+		b.WriteString("\tKnown map[string]any `json:\"-\"`\n")
+	}
 	if d.endsForGood() {
 		b.WriteString("\tEnded  bool\n")
 	}
@@ -474,6 +479,7 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 		if c.RequiresExisting {
 			fmt.Fprintf(&b, "\t\t\t\tif !s.Exists {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", d.Aggregate+" does not exist")
 		}
+		writeGoRefusals(&b, c)
 		if len(c.Events) > 1 {
 			names := eventNames(c.Events)
 			b.WriteString("\t\t\t\t// THIS COMMAND CAN RESULT IN MORE THAN ONE EVENT:\n")
@@ -530,6 +536,9 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 			}
 		}
 		fmt.Fprintf(&b, "\t\t\tcase %s:\n", name)
+		if d.hasRefusals() {
+			b.WriteString("\t\t\t\ts.Known = refusalFold(s.Known, ev.Data)\n")
+		}
 		if len(ef) == 0 {
 			fmt.Fprintf(&b, "\t\t\t\ts.Exists = %s\n", existsAfter)
 			continue
@@ -549,6 +558,9 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 	b.WriteString("\t\t\treturn s, nil\n")
 	b.WriteString("\t\t},\n")
 	b.WriteString("\t}\n}\n")
+	if d.hasRefusals() {
+		b.WriteString(goRefusalHelpers)
+	}
 	if hasPII {
 		d.writeProtectorGo(&b, fields, eventHasPII)
 	}

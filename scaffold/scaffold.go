@@ -85,6 +85,9 @@ type Command struct {
 	// RequiresExisting marks a command that needs the aggregate to exist
 	// already — everything after the create, usually.
 	RequiresExisting bool `json:"requiresExisting,omitempty"`
+	// Refusals are the command's refuseWhen rules (schema 3.10.0/3.11.0),
+	// checked in order after the existence checks.
+	Refusals []Refusal `json:"refusals,omitempty"`
 	// CanBeginAgain marks a Once command that may begin the stream again
 	// after an endsStream event (an assign after an unassign). Without it,
 	// an end is final (D28): the decider refuses to begin an ended stream,
@@ -557,6 +560,8 @@ func (d Domain) Validate() error {
 		}
 	}
 
+	d.checkRefusals(add)
+
 	if len(problems) > 0 {
 		return fmt.Errorf("scaffold: %s", strings.Join(problems, "; "))
 	}
@@ -743,6 +748,9 @@ func (d Domain) decider() string {
 		b.WriteString("function initialState() {\n  return { exists: false };\n}\n\n")
 	}
 
+	if d.hasRefusals() {
+		b.WriteString(jsRefusalHelpers)
+	}
 	b.WriteString("function decide(command, state) {\n")
 	b.WriteString("  switch (command.name) {\n")
 	for _, c := range d.Commands {
@@ -756,6 +764,7 @@ func (d Domain) decider() string {
 		if c.RequiresExisting {
 			fmt.Fprintf(&b, "      if (!state.exists) { throw new Error('%s does not exist'); }\n", d.Aggregate)
 		}
+		writeJSRefusals(&b, c)
 		// More than one possible event means the description said WHAT can
 		// result, not WHICH applies. The generator must not invent the rule:
 		// it returns the first and says so, and Warnings() counts it so the

@@ -101,6 +101,11 @@ All notable changes to PocketCQRS. Format loosely follows
   none is `authenticated` (3.8.0: every signed-in caller), no longer the deployment default.
   `schema import --roleField`/`--subjectField` name the auth-record fields the rules read. Tested
   by running the generated rules through PocketBase's own record API as each kind of caller.
+- **Refusals are generated (schema 3.10.0/3.11.0).** A command's `refuseWhen` rules become ordered
+  checks in both generated deciders after the existence checks, with one shared semantics (unset is
+  its own value; a numeric comparison with an unset value never holds). Fields are checked at
+  import. Upstream's `refusals.json` imports in full and all its scenarios pass; both targets run
+  the same 13 cases in tests (the Go one compiled and run in its own module).
 - **Removals are generated (schema 3.9.0).** A read model's `removedByEventIds` delete the row their
   stream targets, first thing in both generated projections; the import refuses one that isn't in
   `builtFromEventIds`. Upstream's `read-access.json` now imports in full, and all its scenarios pass.

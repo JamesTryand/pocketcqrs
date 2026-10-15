@@ -59,3 +59,10 @@ func TestRemovalMustBeBuiltFrom(t *testing.T) {
 		t.Fatalf("want a refusal naming pm-unassigned, got %v", err)
 	}
 }
+
+// refusals.json: refuseWhen rules (3.10.0) with numeric operators (3.11.0),
+// each with an error scenario naming its message, and scenarios naming
+// their actor and time.
+func TestUpstreamRefusalsExample(t *testing.T) {
+	verifyExample(t, "examples/refusals.json", Options{})
+}

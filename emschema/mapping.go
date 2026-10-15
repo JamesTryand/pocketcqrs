@@ -1,6 +1,7 @@
 package emschema
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -317,6 +318,7 @@ func (m *mapper) command(agg, id string, c Command, eventIDs []string, once, req
 		Fields:           m.fields("command "+id, c.Fields),
 		Once:             once,
 		RequiresExisting: requiresExisting,
+		Refusals:         m.mapRefusals(id, c.RefuseWhen),
 	}
 	for _, evID := range eventIDs {
 		ev := m.doc.Events[evID]
@@ -522,6 +524,89 @@ func (m *mapper) mapScopes(id string, rm ReadModel) []scaffold.ReadModelScope {
 		})
 	}
 	return out
+}
+
+// mapRefusals carries a command's refuseWhen rules through, field names
+// sanitised as state and payload fields are. Whether each field exists and
+// can be compared that way is checked by the generator (scaffold
+// Domain.Validate), once the aggregate's events are known.
+func (m *mapper) mapRefusals(id string, rules []CommandRefusal) []scaffold.Refusal {
+	var out []scaffold.Refusal
+	for _, rule := range rules {
+		r := scaffold.Refusal{Message: rule.Message}
+		for _, c := range rule.All {
+			cond, err := mapRefusalCondition(c)
+			if err != nil {
+				m.rep.errorf("command %q: refusal %q: %v", id, rule.Message, err)
+				continue
+			}
+			r.All = append(r.All, cond)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func mapRefusalCondition(c RefusalCondition) (scaffold.RefusalCondition, error) {
+	out := scaffold.RefusalCondition{Side: "state", Field: c.State}
+	if c.Command != "" {
+		out.Side, out.Field = "command", c.Command
+	}
+	if (c.State == "") == (c.Command == "") {
+		return out, fmt.Errorf("a condition reads exactly one of state or command")
+	}
+	out.Field = scaffold.SanitizeName(out.Field)
+	ops := []struct {
+		name string
+		raw  json.RawMessage
+	}{{"equals", c.Equals}, {"notEquals", c.NotEquals}, {"contains", c.Contains}, {"lessThan", c.LessThan},
+		{"atMost", c.AtMost}, {"greaterThan", c.GreaterThan}, {"atLeast", c.AtLeast}}
+	found := 0
+	if c.Is != "" {
+		if c.Is != "set" && c.Is != "notSet" {
+			return out, fmt.Errorf("is must be set or notSet, got %q", c.Is)
+		}
+		out.Op, found = c.Is, 1
+	}
+	for _, op := range ops {
+		if len(op.raw) == 0 {
+			continue
+		}
+		found++
+		operand, err := refusalOperand(op.raw)
+		if err != nil {
+			return out, fmt.Errorf("%s: %v", op.name, err)
+		}
+		out.Op, out.Operand = op.name, operand
+	}
+	if found != 1 {
+		return out, fmt.Errorf("a condition applies exactly one operator, found %d", found)
+	}
+	return out, nil
+}
+
+// refusalOperand reads an operand: {"state"|"command": field}, or a string,
+// number or bool literal.
+func refusalOperand(raw json.RawMessage) (*scaffold.RefusalOperand, error) {
+	var ref struct{ State, Command string }
+	if json.Unmarshal(raw, &ref) == nil && (ref.State != "" || ref.Command != "") {
+		if ref.State != "" && ref.Command != "" {
+			return nil, fmt.Errorf("an operand names exactly one of state or command")
+		}
+		if ref.State != "" {
+			return &scaffold.RefusalOperand{Side: "state", Field: scaffold.SanitizeName(ref.State)}, nil
+		}
+		return &scaffold.RefusalOperand{Side: "command", Field: scaffold.SanitizeName(ref.Command)}, nil
+	}
+	var lit any
+	if err := json.Unmarshal(raw, &lit); err != nil {
+		return nil, err
+	}
+	switch lit.(type) {
+	case string, float64, bool:
+		return &scaffold.RefusalOperand{Literal: lit}, nil
+	}
+	return nil, fmt.Errorf("an operand is a string, number, bool, or {state|command: field}")
 }
 
 // mapRemovals carries removedByEventIds through as event types. Each must

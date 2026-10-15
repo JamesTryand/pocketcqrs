@@ -71,7 +71,6 @@ var laterFeatures = map[string]string{
 	"partitioning":    "partitioning (schema 3.7.0)",
 	"partitioned":     "partitioned, opting out of partitioning (schema 3.7.0)",
 	"partitionFrom":   "partitionFrom (schema 3.7.0)",
-	"refuseWhen":      "refuseWhen, rules that refuse a command (schema 3.10.0; numeric operators 3.11.0)",
 	"rowKeyField":     "a read model's rowKeyField (schema 3.14.0)",
 	"stateField":      "requiredOwnership.stateField, ownership decided from the aggregate's own state (schema 3.15.0)",
 	"message":         "requiredOwnership.message (schema 3.15.0)",

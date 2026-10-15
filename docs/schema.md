@@ -80,8 +80,7 @@ and the pointer starts with the file's path.
 
 Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
 `outcomes`, ingresses, delays, schedules and `elapsed`, automation `effect`,
-partitioning,
-`refuseWhen`, a read model's `rowKeyField`,
+partitioning, a read model's `rowKeyField`,
 `requiredOwnership.stateField`, `rowsPerListItem`, the `sumOfItems` and
 `byEvent` derivations, and `projection`. Each leaves this list as it is
 implemented.
@@ -111,6 +110,21 @@ generated read route (`queryroute.Spec`'s `RequiredRole`, `SelfSubject`,
 hooks; registering without the hooks a rule needs fails), and a read model with
 any access rule has PocketBase's own record API locked to superusers so the
 route is the only way to read it.
+
+### Refusals
+
+A command's `refuseWhen` rules (3.10.0, numeric operators 3.11.0) are
+generated into its decider, in order, after the existence checks: the first
+rule whose conditions all hold refuses with its message, which an `error`
+scenario names. A condition reads a field of the aggregate's own state or of
+the command, and compares it with a literal or another field. Unset (missing or
+null) is its own value: `is: set`/`notSet` test it, `equals` treats two unset
+values as equal, and a numeric comparison with an unset value never holds. Both
+targets share these semantics; the Go decider keeps the folded event values in
+`State.Known` for them, since a typed zero can't say "unset". A rule naming a
+field that isn't there, comparing personal data, comparing a non-number
+numerically or asking a non-list whether it `contains` something is refused at
+import.
 
 ### Removals
 

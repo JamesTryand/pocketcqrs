@@ -46,11 +46,7 @@ func wantRefused(t *testing.T, got []string, want ...string) {
 // removals while looking complete.
 func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 	cases := map[string][]string{
-		"examples/refusals.json": {
-			"/commands/claim-entry-for-invoice/refuseWhen",
-			"/commands/update-entry/refuseWhen",
-		},
-		"examples/conditional-outcomes.json": {"/commands/log-entry/refuseWhen", "/slices/0/outcomes"},
+		"examples/conditional-outcomes.json": {"/slices/0/outcomes"},
 		"examples/state-ownership.json":      {"/commands/update-expense/requiredOwnership/stateField"},
 		"examples/rows-per-list-item.json":   {"/readModels/invoice-parts/rowsPerListItem"},
 		"examples/hand-projection.json":      {"/readModels/late-orders/projection"},
@@ -72,12 +68,12 @@ func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 // Every refusal says what the feature is and which schema version added it,
 // so the person importing knows what was refused and why.
 func TestRefusalNamesTheFeature(t *testing.T) {
-	_, err := Load(fixture(t, "examples/refusals.json"))
+	_, err := Load(fixture(t, "examples/conditional-outcomes.json"))
 	if err == nil {
-		t.Fatal("refusals.json loaded")
+		t.Fatal("conditional-outcomes.json loaded")
 	}
 	msg := err.Error()
-	for _, want := range []string{"refuseWhen", "3.10.0", "/commands/update-entry/refuseWhen", "nothing was generated"} {
+	for _, want := range []string{"outcomes", "3.3.0", "/slices/0/outcomes", "nothing was generated"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the error does not mention %q:\n%s", want, msg)
 		}
@@ -189,11 +185,11 @@ func TestSplitDocumentIsCheckedToo(t *testing.T) {
 		"dataSubjects":{"erasure":{"self":true}},
 		"registries":{"commands":"commands.json"},
 		"slices":["slices/a.json"]}`)
-	write("commands.json", `{"c":{"name":"C","refuseWhen":[]}}`)
+	write("commands.json", `{"c":{"name":"C","partitioned":false}}`)
 	write("slices/a.json", `{"id":"a","name":"A","pattern":"stateChange","swimlaneId":"s","status":"planned",
 		"commandId":"c","eventIds":[],"outcomes":[[]],"scenarios":[]}`)
 	wantRefused(t, refusedAt(t, dir),
 		"manifest.json/dataSubjects",
-		"commands.json/c/refuseWhen",
+		"commands.json/c/partitioned",
 		"slices/a.json/outcomes")
 }

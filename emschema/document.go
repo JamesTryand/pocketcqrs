@@ -119,6 +119,33 @@ type Command struct {
 	// (set membership, not equality) RequiredOwnership does not need.
 	// Added in schema 2.5.0.
 	Scope *CommandScope `json:"scope,omitempty"`
+	// RefuseWhen (schema 3.10.0; numeric operators 3.11.0): rules that
+	// refuse the command, checked in order after the existence checks; the
+	// first that holds refuses with its message. They read only the
+	// aggregate's own state and the command.
+	RefuseWhen []CommandRefusal `json:"refuseWhen,omitempty"`
+}
+
+// CommandRefusal is one refuseWhen rule: when All hold, refuse with Message.
+type CommandRefusal struct {
+	Message string             `json:"message"`
+	All     []RefusalCondition `json:"all"`
+}
+
+// RefusalCondition reads one State or Command field and applies exactly one
+// operator. The operands are a literal or {"state"|"command": field}, kept
+// raw until mapped (refusalOperand).
+type RefusalCondition struct {
+	State       string          `json:"state,omitempty"`
+	Command     string          `json:"command,omitempty"`
+	Is          string          `json:"is,omitempty"`
+	Equals      json.RawMessage `json:"equals,omitempty"`
+	NotEquals   json.RawMessage `json:"notEquals,omitempty"`
+	Contains    json.RawMessage `json:"contains,omitempty"`
+	LessThan    json.RawMessage `json:"lessThan,omitempty"`
+	AtMost      json.RawMessage `json:"atMost,omitempty"`
+	GreaterThan json.RawMessage `json:"greaterThan,omitempty"`
+	AtLeast     json.RawMessage `json:"atLeast,omitempty"`
 }
 
 // RoleList is requiredRole's shape as this package reads it: the source
