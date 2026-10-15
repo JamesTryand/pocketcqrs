@@ -546,6 +546,7 @@ func (m *mapper) mapReadModels() {
 			RemovedBy:       m.mapRemovals(id, rm),
 			RowKeyField:     m.mapRowKeyField(id, rm),
 			RowsPerListItem: m.mapRowsPerListItem(id, rm),
+			Hand:            rm.Projection == ProjectionHand,
 		})
 	}
 }

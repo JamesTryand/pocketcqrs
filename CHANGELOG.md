@@ -111,6 +111,12 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **Hand-written projections (schema 3.17.0 `projection: "hand"`).** The import writes no projection
+  for such a read model, only `<collection>.js.example` / `<collection>.go.example` to start from;
+  its query route is still generated. Verify reports its view scenarios as HAND. Upstream's
+  `hand-projection.json` imports and verifies.
+- **Fixed: the Go import now writes `<aggregate>_hand.go.example`.** The outcomes release said it did;
+  the skeleton was built but never emitted.
 - **A row per group of a list (schema 3.16.0 `rowsPerListItem`, `sumOfItems`).** A read model can
   keep a row per group of a stream's list items (an invoice's part per project), keyed
   `<stream>|<group>`, with a subtotal summed over the row's items once every item carries it. A new

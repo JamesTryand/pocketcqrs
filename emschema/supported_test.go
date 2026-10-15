@@ -46,7 +46,6 @@ func wantRefused(t *testing.T, got []string, want ...string) {
 // removals while looking complete.
 func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 	cases := map[string][]string{
-		"examples/hand-projection.json": {"/readModels/late-orders/projection"},
 		"examples/order-fulfillment.json": {
 			"/dataSubjects",
 			"/ingresses",

@@ -263,6 +263,10 @@ type ReadModel struct {
 	// RowsPerListItem (schema 3.16.0): a row per group of a stream's list
 	// items, in place of one row per stream. See itemrows.go.
 	RowsPerListItem *RowsPerListItem `json:"rowsPerListItem,omitempty"`
+	// Hand (schema 3.17.0 projection: "hand"): the rows are built by a
+	// hand-written projection (a join across streams, say). Its query route
+	// is generated; its projection is not, only a .example to start from.
+	Hand bool `json:"hand,omitempty"`
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
@@ -759,6 +763,10 @@ func (d Domain) generateJS() ([]File, error) {
 		files = append(files, File{Name: d.HandFile() + ".example", Source: d.jsHandExample(), Kind: "example"})
 	}
 	for _, rm := range d.ReadModels {
+		if rm.Hand {
+			files = append(files, File{Name: rm.Collection + ".js.example", Source: handProjectionNote(rm, "//", rm.Collection+".js") + d.projection(rm), Kind: "example"})
+			continue
+		}
 		files = append(files, File{
 			Name:   rm.Collection + ".js",
 			Source: d.projection(rm),
@@ -1163,6 +1171,15 @@ func (d Domain) reactor(r Reactor) string {
 	b.WriteString("  }];\n")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// handProjectionNote heads a hand projection's .example (schema 3.17.0):
+// the generated merge, to start from, since no declaration says the rows.
+func handProjectionNote(rm ReadModel, comment, file string) string {
+	return fmt.Sprintf("%[1]s %[2]q is built by a hand-written projection (schema 3.17.0 projection: \"hand\"):\n"+
+		"%[1]s no declaration says its rows. Copy this to %[3]s and write project(); what\n"+
+		"%[1]s follows is only the generated field merge, to start from. Nothing loads this file.\n\n",
+		comment, rm.Collection, file)
 }
 
 // byEventValues is a read model's byEvent derivations (schema 3.16.0) by

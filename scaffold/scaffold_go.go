@@ -314,10 +314,20 @@ func (d Domain) GenerateGo() ([]GoFile, error) {
 	}
 	files := []GoFile{{Name: d.Aggregate + ".go", Source: deciderSrc}}
 
+	if len(d.Hooks()) > 0 {
+		files = append(files, GoFile{Name: d.Aggregate + "_hand.go.example", Source: d.goHandExample(pkg)})
+	}
+
 	for _, rm := range d.ReadModels {
 		src, err := formatGo(d.projectionGo(pkg, rm))
 		if err != nil {
 			return nil, err
+		}
+		if rm.Hand {
+			// schema 3.17.0: yours to write; New<Collection> missing is a
+			// build error wherever it's registered
+			files = append(files, GoFile{Name: rm.Collection + ".go.example", Source: handProjectionNote(rm, "//", rm.Collection+".go") + src})
+			continue
 		}
 		files = append(files, GoFile{Name: rm.Collection + ".go", Source: src})
 	}

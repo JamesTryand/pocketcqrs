@@ -279,6 +279,9 @@ type ReadModel struct {
 	// RowsPerListItem (schema 3.16.0): a row per group of a stream's list
 	// items. Not with RowKeyField.
 	RowsPerListItem *RowsPerListItem `json:"rowsPerListItem,omitempty"`
+	// Projection (schema 3.17.0): "generated" (the default) or "hand", a
+	// read model whose rows a hand-written projection builds.
+	Projection string `json:"projection,omitempty"`
 	// RemovedByEventIDs (schema 3.9.0): events that each remove the row
 	// they target (their stream). Each must also be in BuiltFromEventIDs.
 	RemovedByEventIDs []string `json:"removedByEventIds,omitempty"`
@@ -413,6 +416,10 @@ const (
 	DerivationByEvent    = "byEvent"
 	DerivationSumOfItems = "sumOfItems"
 )
+
+// ProjectionHand (schema 3.17.0): a read model built by a hand-written
+// projection.
+const ProjectionHand = "hand"
 
 // FieldDerivation computes a read-model field as a fold over named events.
 // Exactly one of the four shapes applies, selected by Kind; the fields

@@ -130,7 +130,9 @@ func TestItemRowsAreChecked(t *testing.T) {
 		"groupBy not a field":  func(rm *ReadModel) { rm.RowsPerListItem.GroupBy = "ghost" },
 		"sumOfItems on text":   func(rm *ReadModel) { rm.Fields[5].Type = "text" },
 		"sumOfItems unnamed":   func(rm *ReadModel) { rm.Fields[5].Derivation.Subfield = "" },
-		"a toggle":             func(rm *ReadModel) { rm.Fields[3].Derivation = &FieldDerivation{Kind: DerivationToggle, OnEventIDs: []string{"a"}, OffEventIDs: []string{"b"}} },
+		"a toggle": func(rm *ReadModel) {
+			rm.Fields[3].Derivation = &FieldDerivation{Kind: DerivationToggle, OnEventIDs: []string{"a"}, OffEventIDs: []string{"b"}}
+		},
 		"sumOfItems elsewhere": func(rm *ReadModel) { rm.RowsPerListItem = nil },
 	} {
 		d := partsDomain()
@@ -158,4 +160,36 @@ func TestJSItemRowsDeclareTheirState(t *testing.T) {
 		}
 	}
 	t.Fatal("no parts.js generated")
+}
+
+// A hand projection (schema 3.17.0) is not generated, on either target:
+// only a .example to start from. Its Go query route still is.
+func TestHandProjectionIsAnExample(t *testing.T) {
+	d := payRunDomain()
+	d.ReadModels[0].Hand = true
+	js, err := d.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]File{}
+	for _, f := range js {
+		names[f.Name] = f
+	}
+	if _, ok := names["payments.js"]; ok {
+		t.Error("payments.js was generated for a hand projection")
+	}
+	if f, ok := names["payments.js.example"]; !ok || f.Kind != "example" || !strings.Contains(f.Source, "hand-written projection") {
+		t.Errorf("no payments.js.example: %v", names)
+	}
+	gofiles, err := d.GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gonames := map[string]bool{}
+	for _, f := range gofiles {
+		gonames[f.Name] = true
+	}
+	if gonames["payments.go"] || !gonames["payments.go.example"] || !gonames["payments_query.go"] {
+		t.Errorf("Go files: %v", gonames)
+	}
 }

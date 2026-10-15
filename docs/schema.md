@@ -80,8 +80,7 @@ and the pointer starts with the file's path.
 
 Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
 ingresses, delays, schedules and `elapsed`, automation `effect`,
-partitioning, and `projection`. Each leaves this list as it is
-implemented.
+and partitioning. Each leaves this list as it is implemented.
 
 ### Who may read a read model
 
@@ -199,6 +198,16 @@ own rows back and a scenario verifies the same as the live run. The Go target
 plans the rows with the same code (`projections/itemrows`); both its
 collections are your migrations, as ever. Not with `rowKeyField`, and the
 rows fold no toggle, count, sum or groupBy derivations.
+
+### A hand-written projection
+
+A read model with `projection: "hand"` (3.17.0) is one no declaration
+expresses, such as a join across two streams. The import generates its query
+route but not its projection: it writes `<collection>.js.example` (or
+`<collection>.go.example`), the generated field merge with a note, for you to
+copy to `<collection>.js` (`.go`) and write. Nothing loads an `.example`.
+Verify reports its view scenarios as **HAND**: only a host check, which runs
+your own projection, can decide them.
 
 ### Removals
 

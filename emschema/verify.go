@@ -422,6 +422,13 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		return
 	}
 	collection := scaffold.SanitizeName(ReadModelCollectionName(rm.Name, q.ReadModelID))
+	if rm.Projection == ProjectionHand {
+		// schema 3.17.0: the rows are the host's own projection's to build,
+		// which only a host check can run
+		res.Hand = true
+		res.Detail = fmt.Sprintf("%q is built by a hand-written projection; only a host check can run it", collection)
+		return
+	}
 	file, ok := v.sources[collection+".js"]
 	if !ok {
 		res.Skipped = true

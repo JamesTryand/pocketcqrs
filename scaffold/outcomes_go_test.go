@@ -1,6 +1,9 @@
 package scaffold
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // payDomain: logging an entry over 12 hours also flags it (a declared
 // condition, set fixing the reason); an expense is flagged by a
@@ -94,4 +97,25 @@ func TestOutcomes(t *testing.T) {
 // and run. A hook missing would be a build error.
 func TestGoOutcomesRun(t *testing.T) {
 	runGeneratedGo(t, payDomain(), payBehaviour)
+}
+
+// The Go import writes the hand file's skeleton, <aggregate>_hand.go.example,
+// with every hook the decider calls; nothing compiles it.
+func TestGoHandExampleIsWritten(t *testing.T) {
+	d := payDomain()
+	files, err := d.GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f.Name == d.Aggregate+"_hand.go.example" {
+			for _, h := range d.Hooks() {
+				if !strings.Contains(f.Source, "func "+h) {
+					t.Errorf("the example lacks %s", h)
+				}
+			}
+			return
+		}
+	}
+	t.Fatal("no _hand.go.example")
 }

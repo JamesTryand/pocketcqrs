@@ -128,3 +128,33 @@ func TestUpstreamStateOwnershipExample(t *testing.T) {
 func TestUpstreamRowsPerListItemExample(t *testing.T) {
 	verifyExample(t, "examples/rows-per-list-item.json", Options{})
 }
+
+// hand-projection.json (3.17.0): a read model joining two streams, built
+// by a hand-written projection. Its view scenario is HAND, and the import
+// writes only a .example of the projection.
+func TestUpstreamHandProjectionExample(t *testing.T) {
+	verifyExample(t, "examples/hand-projection.json", Options{})
+	hand := handScenarios(t, "examples/hand-projection.json", Options{})
+	if !hand["an-order-after-dispatch-closed-is-late"] || len(hand) != 1 {
+		t.Fatalf("the hand projection's view scenario is HAND: %v", hand)
+	}
+	doc, err := Load(fixture(t, "examples/hand-projection.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := Map(doc, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range mapped.Domains {
+		files, err := d.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range files {
+			if f.Name == "late_orders.js" || f.Name == "lateOrders.js" {
+				t.Errorf("%s was generated for a hand projection", f.Name)
+			}
+		}
+	}
+}

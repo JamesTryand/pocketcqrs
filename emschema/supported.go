@@ -70,7 +70,6 @@ var laterFeatures = map[string]string{
 	"partitioning":  "partitioning (schema 3.7.0)",
 	"partitioned":   "partitioned, opting out of partitioning (schema 3.7.0)",
 	"partitionFrom": "partitionFrom (schema 3.7.0)",
-	"projection":    "projection: a read model built by a hand-written projection (schema 3.17.0)",
 }
 
 // laterKinds names the enum values added later, for the message only.
