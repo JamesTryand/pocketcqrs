@@ -277,13 +277,15 @@ func finding3Domain() Domain {
 			{
 				Collection: "staffRoster",
 				Key:        "staffId",
+				// removing a staff member takes their row away (schema 3.9.0)
+				RemovedBy: []string{"StaffRemoved"},
 				Fields: []Field{
 					{Name: "name", Type: "text"},
 					{Name: "ssoEnabled", Type: "bool", Derivation: &FieldDerivation{
 						Kind: DerivationToggle, OnEventIDs: []string{"StaffSsoEnabled"}, OffEventIDs: []string{"StaffSsoDisabled"},
 					}},
 				},
-				On: []string{"StaffCreated", "StaffSsoEnabled", "StaffSsoDisabled"},
+				On: []string{"StaffCreated", "StaffSsoEnabled", "StaffSsoDisabled", "StaffRemoved"},
 			},
 			{
 				Collection: "projects",
@@ -314,6 +316,36 @@ func finding3Domain() Domain {
 				}},
 			},
 		},
+	}
+}
+
+// A removal (schema 3.9.0) routes to remove ahead of the derived and
+// merge cases, in both generators; TestFinding3DomainCompiles builds it.
+func TestRemovalIsGenerated(t *testing.T) {
+	goFiles, err := finding3Domain().GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roster string
+	for _, f := range goFiles {
+		if strings.Contains(f.Source, "type StaffRosterProjection struct") {
+			roster = f.Source
+		}
+	}
+	for _, want := range []string{
+		"case \"StaffRemoved\":\n\t\treturn p.remove(ctx, ev.AggregateID)",
+		"func (p *StaffRosterProjection) remove(ctx context.Context, rowKey string) error {",
+	} {
+		if !strings.Contains(roster, want) {
+			t.Errorf("Go roster projection lacks %q:\n%s", want, roster)
+		}
+	}
+	js, err := finding3Domain().Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(js[1].Source, "if (['StaffRemoved'].includes(event.type)) { return [{ delete: event.aggregateId }]; }") {
+		t.Errorf("JS roster projection lacks the removal:\n%s", js[1].Source)
 	}
 }
 

@@ -632,8 +632,11 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 	if len(on) == 0 {
 		on = d.Events()
 	}
+	// a removal does only that (schema 3.9.0): it leaves every other case
+	on = without(on, rm.RemovedBy)
 
 	derived, order := collectDerivedActions(rm.Fields, rm.Key)
+	order = without(order, rm.RemovedBy)
 
 	typeName := ExportName(rm.Collection) + "Projection"
 	ctor := "New" + ExportName(rm.Collection)
@@ -645,6 +648,7 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 		writeProjectionImports(&b, true)
 		writeProjectionHeader(&b, d, rm, ctor, typeName)
 		writeProjectionPlainApply(&b, rm, on, typeName)
+		writeProjectionRemove(&b, rm, typeName)
 		writeProjectionScopes(&b, rm, typeName)
 		return b.String()
 	}
@@ -683,6 +687,7 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 
 	fmt.Fprintf(&b, "func (p *%s) Apply(ctx context.Context, ev events.Event) error {\n", typeName)
 	b.WriteString("\tswitch ev.Type {\n")
+	writeRemovalCase(&b, rm)
 	// String literals, not the aggregate's own event constants: On may
 	// legitimately name another aggregate's events entirely (read models
 	// are cross-cutting -- see Warnings' "intended if it folds another
@@ -823,8 +828,52 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 		b.WriteString("\treturn p.app.SaveWithContext(ctx, rec)\n}\n\n")
 	}
 
+	writeProjectionRemove(&b, rm, typeName)
 	writeProjectionScopes(&b, rm, typeName)
 	return b.String()
+}
+
+// without is list minus every name in drop, in list's order.
+func without(list, drop []string) []string {
+	if len(drop) == 0 {
+		return list
+	}
+	out := make([]string, 0, len(list))
+	for _, s := range list {
+		keep := true
+		for _, d := range drop {
+			keep = keep && s != d
+		}
+		if keep {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// writeRemovalCase routes the read model's removals (schema 3.9.0) to
+// remove, ahead of every other case.
+func writeRemovalCase(b *strings.Builder, rm ReadModel) {
+	if len(rm.RemovedBy) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\tcase %s:\n", quotedList(rm.RemovedBy))
+	b.WriteString("\t\treturn p.remove(ctx, ev.AggregateID) // removedByEventIds (schema 3.9.0)\n")
+}
+
+// writeProjectionRemove emits the helper a removal calls: delete the row
+// with this key, if there is one.
+func writeProjectionRemove(b *strings.Builder, rm ReadModel, typeName string) {
+	if len(rm.RemovedBy) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n// remove deletes the row a removal targets (schema 3.9.0). A row that\n")
+	b.WriteString("// isn't there is already removed: a redelivery does nothing.\n")
+	fmt.Fprintf(b, "func (p *%s) remove(ctx context.Context, rowKey string) error {\n", typeName)
+	fmt.Fprintf(b, "\trec, err := p.app.FindFirstRecordByData(%q, %q, rowKey)\n", rm.Collection, rm.Key)
+	b.WriteString("\tif errors.Is(err, sql.ErrNoRows) {\n\t\treturn nil\n\t}\n")
+	b.WriteString("\tif err != nil {\n\t\treturn err\n\t}\n")
+	b.WriteString("\treturn p.app.DeleteWithContext(writeguard.MarkInternal(ctx), rec)\n}\n")
 }
 
 // writeProjectionImports emits the import block every generated projection
@@ -880,6 +929,7 @@ func writeProjectionPlainApply(b *strings.Builder, rm ReadModel, on []string, ty
 
 	fmt.Fprintf(b, "func (p *%s) Apply(ctx context.Context, ev events.Event) error {\n", typeName)
 	b.WriteString("\tswitch ev.Type {\n")
+	writeRemovalCase(b, rm)
 	fmt.Fprintf(b, "\tcase %s:\n", quotedList(on))
 	b.WriteString("\tdefault:\n\t\treturn nil\n\t}\n")
 	b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n\n")

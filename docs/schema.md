@@ -81,7 +81,7 @@ and the pointer starts with the file's path.
 Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
 `outcomes`, ingresses, delays, schedules and `elapsed`, automation `effect`,
 partitioning,
-`removedByEventIds`, `refuseWhen`, a read model's `rowKeyField`,
+`refuseWhen`, a read model's `rowKeyField`,
 `requiredOwnership.stateField`, `rowsPerListItem`, the `sumOfItems` and
 `byEvent` derivations, and `projection`. Each leaves this list as it is
 implemented.
@@ -111,6 +111,15 @@ generated read route (`queryroute.Spec`'s `RequiredRole`, `SelfSubject`,
 hooks; registering without the hooks a rule needs fails), and a read model with
 any access rule has PocketBase's own record API locked to superusers so the
 route is the only way to read it.
+
+### Removals
+
+A read model's `removedByEventIds` (3.9.0) become a removal at the top of its
+generated projection (JS `{delete: key}`, Go `remove`): the event deletes the
+row its stream targets, and does nothing else. A later event for that stream
+creates the row again. Each must also be in `builtFromEventIds`, or the import
+is refused: a removal the projection never receives would leave the row, and
+any access it grants, behind.
 
 ### Untagged aggregates are refused, not guessed
 

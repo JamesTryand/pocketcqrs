@@ -482,6 +482,7 @@ func (m *mapper) mapReadModels() {
 			Filters:      m.mapFilters(id, rm),
 			RequiredRole: append([]string(nil), rm.RequiredRole...),
 			SelfAccess:   m.mapSelfAccess(id, rm),
+			RemovedBy:    m.mapRemovals(id, rm),
 		})
 	}
 }
@@ -519,6 +520,25 @@ func (m *mapper) mapScopes(id string, rm ReadModel) []scaffold.ReadModelScope {
 				FilterLocalField: scaffold.SanitizeName(sc.Via.FilterLocalField),
 			},
 		})
+	}
+	return out
+}
+
+// mapRemovals carries removedByEventIds through as event types. Each must
+// be one the read model is built from: a removal it never receives would
+// leave the row behind, the stale grant the schema added this to prevent.
+func (m *mapper) mapRemovals(id string, rm ReadModel) []string {
+	var out []string
+	for _, ev := range rm.RemovedByEventIDs {
+		built := false
+		for _, b := range rm.BuiltFromEventIDs {
+			built = built || b == ev
+		}
+		if !built {
+			m.rep.errorf("read model %q: removedByEventIds names %q, which is not in its builtFromEventIds", id, ev)
+			continue
+		}
+		out = append(out, m.eventType(ev))
 	}
 	return out
 }

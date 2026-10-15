@@ -50,9 +50,6 @@ func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 			"/commands/claim-entry-for-invoice/refuseWhen",
 			"/commands/update-entry/refuseWhen",
 		},
-		"examples/read-access.json": {
-			"/readModels/project-managers/removedByEventIds",
-		},
 		"examples/conditional-outcomes.json": {"/commands/log-entry/refuseWhen", "/slices/0/outcomes"},
 		"examples/state-ownership.json":      {"/commands/update-expense/requiredOwnership/stateField"},
 		"examples/rows-per-list-item.json":   {"/readModels/invoice-parts/rowsPerListItem"},

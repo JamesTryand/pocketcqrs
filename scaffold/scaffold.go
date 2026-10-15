@@ -222,6 +222,11 @@ type ReadModel struct {
 	// SelfAccess (schema 3.2.0/3.8.0): a caller without RequiredRole sees
 	// their own rows. See readRule.
 	SelfAccess *SelfAccess `json:"selfAccess,omitempty"`
+	// RemovedBy (schema 3.9.0) names the events that each remove the row
+	// they target, the way the read model's other events target it (their
+	// stream). A later event for that stream creates the row again. They
+	// must also be in On.
+	RemovedBy []string `json:"removedBy,omitempty"`
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
@@ -848,6 +853,7 @@ func (d Domain) projection(rm ReadModel) string {
 		b.WriteString("// contributes the fields it knows about.\n\n")
 
 		b.WriteString("function project(event) {\n")
+		writeJSRemoval(&b, rm)
 		fmt.Fprintf(&b, "  const fields = { %s: event.aggregateId };\n", rm.Key)
 		b.WriteString("  for (const name of Object.keys(event.data || {})) {\n")
 		fmt.Fprintf(&b, "    if (%s.includes(name)) { fields[name] = event.data[name]; }\n", columnNamesLiteral(fields, rm.Key))
@@ -880,6 +886,7 @@ func (d Domain) projection(rm ReadModel) string {
 	b.WriteString("// (which a fixture verify run could not answer honestly anyway).\n\n")
 
 	b.WriteString("function project(event) {\n")
+	writeJSRemoval(&b, rm)
 	b.WriteString("  switch (event.type) {\n")
 	if len(mergeEvents) > 0 {
 		for _, e := range mergeEvents {
@@ -1030,6 +1037,20 @@ func (d Domain) reactor(r Reactor) string {
 	b.WriteString("  }];\n")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// writeJSRemoval opens project() with the read model's removals (schema
+// 3.9.0): such an event deletes the row it targets, and nothing else.
+func writeJSRemoval(b *strings.Builder, rm ReadModel) {
+	if len(rm.RemovedBy) == 0 {
+		return
+	}
+	quoted := make([]string, len(rm.RemovedBy))
+	for i, e := range rm.RemovedBy {
+		quoted[i] = "'" + e + "'"
+	}
+	fmt.Fprintf(b, "  // removedByEventIds (schema 3.9.0): the row this event targets goes\n")
+	fmt.Fprintf(b, "  if ([%s].includes(event.type)) { return [{ delete: event.aggregateId }]; }\n", strings.Join(quoted, ", "))
 }
 
 func commandNames(cmds []Command) []string {
