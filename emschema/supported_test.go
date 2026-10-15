@@ -49,7 +49,7 @@ func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 		"examples/conditional-outcomes.json": {"/slices/0/outcomes"},
 		"examples/rows-per-list-item.json":   {"/readModels/invoice-parts/rowsPerListItem"},
 		"examples/hand-projection.json":      {"/readModels/late-orders/projection"},
-		"examples/repeated-outcomes.json":    {"/readModels/payments/rowKeyField", "/slices/0/outcomes"},
+		"examples/repeated-outcomes.json":    {"/slices/0/outcomes"},
 		"examples/order-fulfillment.json": {
 			"/dataSubjects",
 			"/ingresses",

@@ -80,8 +80,7 @@ and the pointer starts with the file's path.
 
 Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
 `outcomes`, ingresses, delays, schedules and `elapsed`, automation `effect`,
-partitioning, a read model's `rowKeyField`,
-`rowsPerListItem`, the `sumOfItems` and
+partitioning, `rowsPerListItem`, the `sumOfItems` and
 `byEvent` derivations, and `projection`. Each leaves this list as it is
 implemented.
 
@@ -137,6 +136,15 @@ the first command after a create is never refused while a projection catches
 up. A JS decider throws an `Error` named `Forbidden`; a Go decider returns
 `decider.Forbidden`. `requiredOwnership` is exactly one of `via` and
 `stateField`, and `bypassRoles` goes with `via` only.
+
+### Rows keyed by a field of the event
+
+A read model's `rowKeyField` (3.14.0) keys each row by that field of the
+event, in place of the event's stream, so one stream's events can update many
+rows (a pay run recording a payment per person). Every event the read model is
+built from or removed by must carry it, or the import is refused; at run time
+an event without it stops the projection rather than write a row keyed by
+nothing.
 
 ### Removals
 

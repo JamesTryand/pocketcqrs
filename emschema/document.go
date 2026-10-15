@@ -272,6 +272,10 @@ type ReadModel struct {
 	// data-subject id. `via` (a subject resolved through another read
 	// model) is not read here, so a document using it is refused.
 	SelfAccess *ReadModelSelfAccess `json:"selfAccess,omitempty"`
+	// RowKeyField (schema 3.14.0): the field of each event this read model
+	// is built from (and removed by) that names the row it updates, in
+	// place of the event's stream. Every such event must carry it.
+	RowKeyField string `json:"rowKeyField,omitempty"`
 	// RemovedByEventIDs (schema 3.9.0): events that each remove the row
 	// they target (their stream). Each must also be in BuiltFromEventIDs.
 	RemovedByEventIDs []string `json:"removedByEventIds,omitempty"`

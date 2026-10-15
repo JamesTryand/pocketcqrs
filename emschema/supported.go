@@ -71,7 +71,6 @@ var laterFeatures = map[string]string{
 	"partitioning":    "partitioning (schema 3.7.0)",
 	"partitioned":     "partitioned, opting out of partitioning (schema 3.7.0)",
 	"partitionFrom":   "partitionFrom (schema 3.7.0)",
-	"rowKeyField":     "a read model's rowKeyField (schema 3.14.0)",
 	"rowsPerListItem": "rowsPerListItem, a row per group of a stream's list items (schema 3.16.0)",
 	"subfield":        "a sumOfItems derivation (schema 3.16.0)",
 	"values":          "a byEvent derivation (schema 3.16.0)",

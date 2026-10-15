@@ -101,6 +101,9 @@ All notable changes to PocketCQRS. Format loosely follows
   none is `authenticated` (3.8.0: every signed-in caller), no longer the deployment default.
   `schema import --roleField`/`--subjectField` name the auth-record fields the rules read. Tested
   by running the generated rules through PocketBase's own record API as each kind of caller.
+- **Rows keyed by a field of the event (schema 3.14.0).** A read model's `rowKeyField` keys every
+  row it writes, merges, toggles and removes by that event field instead of the stream, in both
+  generated projections; the import refuses it when an event lacks the field.
 - **Ownership from the aggregate's own state (schema 3.15.0).** `requiredOwnership.stateField` is
   generated into both deciders: after the existence checks, the owner field is compared with the
   command's actor, and anyone else is refused as forbidden. New `decider.Forbidden`/`IsForbidden`;

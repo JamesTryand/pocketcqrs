@@ -640,7 +640,56 @@ func (d Domain) writeProtectorGo(b *strings.Builder, fields []namedField, eventH
 	b.WriteString("\t}\n\treturn cmd.Payload, nil\n}\n")
 }
 
+// projectionGo is the Go projection for rm, keyed by a rowKeyField
+// (schema 3.14.0) where there is one; see projection.
 func (d Domain) projectionGo(pkg string, rm ReadModel) string {
+	src := d.projectionGoBody(pkg, rm)
+	if rm.RowKeyField == "" {
+		return src
+	}
+	typeName := ExportName(rm.Collection) + "Projection"
+	src = strings.ReplaceAll(src, "ev.AggregateID", "p.rowKey(ev)")
+	src = strings.Replace(src, "\t\"errors\"\n", "\t\"errors\"\n\t\"strconv\"\n", 1)
+	if !strings.Contains(src, "\"encoding/json\"") {
+		src = strings.Replace(src, "\t\"errors\"\n", "\t\"encoding/json\"\n\t\"errors\"\n", 1)
+	}
+	handled := append(append([]string{}, rm.On...), rm.RemovedBy...)
+	guard := fmt.Sprintf("func (p *%s) Apply(ctx context.Context, ev events.Event) error {\n", typeName)
+	src = strings.Replace(src, guard, guard+fmt.Sprintf(
+		"\tswitch ev.Type {\n\tcase %s:\n\t\tif p.rowKey(ev) == \"\" {\n\t\t\treturn errors.New(\"event \" + ev.Type + \" carries no %s to key its row\")\n\t\t}\n\t}\n",
+		quotedList(dedupe(handled)), rm.RowKeyField), 1)
+	return src + fmt.Sprintf(`
+// rowKey is the row an event updates (rowKeyField, schema 3.14.0): its %[2]s,
+// not its stream. "" when the event doesn't carry it.
+func (p *%[1]s) rowKey(ev events.Event) string {
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		return ""
+	}
+	switch key := data[%[2]q].(type) {
+	case string:
+		return key
+	case float64:
+		return strconv.FormatFloat(key, 'f', -1, 64)
+	}
+	return ""
+}
+`, typeName, rm.RowKeyField)
+}
+
+func dedupe(list []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range list {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (d Domain) projectionGoBody(pkg string, rm ReadModel) string {
 	on := rm.On
 	if len(on) == 0 {
 		on = d.Events()

@@ -486,6 +486,7 @@ func (m *mapper) mapReadModels() {
 			RequiredRole: append([]string(nil), rm.RequiredRole...),
 			SelfAccess:   m.mapSelfAccess(id, rm),
 			RemovedBy:    m.mapRemovals(id, rm),
+			RowKeyField:  m.mapRowKeyField(id, rm),
 		})
 	}
 }
@@ -622,6 +623,21 @@ func refusalOperand(raw json.RawMessage) (*scaffold.RefusalOperand, error) {
 		return &scaffold.RefusalOperand{Literal: lit}, nil
 	}
 	return nil, fmt.Errorf("an operand is a string, number, bool, or {state|command: field}")
+}
+
+// mapRowKeyField carries rowKeyField (schema 3.14.0) through. Every event
+// the read model is built from or removed by must carry it: one that
+// doesn't could name no row.
+func (m *mapper) mapRowKeyField(id string, rm ReadModel) string {
+	if rm.RowKeyField == "" {
+		return ""
+	}
+	for _, evID := range append(append([]string{}, rm.BuiltFromEventIDs...), rm.RemovedByEventIDs...) {
+		if !hasField(m.doc.Events[evID].Fields, rm.RowKeyField) {
+			m.rep.errorf("read model %q: rowKeyField %q is not a field of event %q", id, rm.RowKeyField, evID)
+		}
+	}
+	return scaffold.SanitizeName(rm.RowKeyField)
 }
 
 // mapRemovals carries removedByEventIds through as event types. Each must

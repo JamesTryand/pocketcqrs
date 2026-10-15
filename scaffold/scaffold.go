@@ -23,6 +23,7 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -229,6 +230,11 @@ type ReadModel struct {
 	// SelfAccess (schema 3.2.0/3.8.0): a caller without RequiredRole sees
 	// their own rows. See readRule.
 	SelfAccess *SelfAccess `json:"selfAccess,omitempty"`
+	// RowKeyField (schema 3.14.0) names the field of each event the read
+	// model is built from (and removed by) that names the row it updates,
+	// in place of the event's stream: one stream's events can update many
+	// rows (a ledger's payment per person). Every such event must carry it.
+	RowKeyField string `json:"rowKeyField,omitempty"`
 	// RemovedBy (schema 3.9.0) names the events that each remove the row
 	// they target, the way the read model's other events target it (their
 	// stream). A later event for that stream creates the row again. They
@@ -819,7 +825,31 @@ func (d Domain) decider() string {
 	return b.String()
 }
 
+// projection is the JS projection for rm. With a rowKeyField (schema
+// 3.14.0) every place it keys a row by the event's stream keys it by that
+// field of the event instead: within a projection, event.aggregateId is
+// only ever a row key (count and sum derivations key by their own field).
 func (d Domain) projection(rm ReadModel) string {
+	src := d.projectionBody(rm)
+	if rm.RowKeyField == "" {
+		return src
+	}
+	field, _ := json.Marshal(rm.RowKeyField)
+	return strings.ReplaceAll(src, "event.aggregateId", "rowKeyOf(event)") + fmt.Sprintf(`
+// rowKeyField (schema 3.14.0): each event names the row it updates. An
+// event without it can name no row, so it stops the projection loudly
+// rather than write one keyed by nothing.
+function rowKeyOf(event) {
+  var key = (event.data || {})[%[1]s];
+  if (key === undefined || key === null || key === '') {
+    throw new Error('event ' + event.type + ' carries no ' + %[1]s + ' to key its row');
+  }
+  return String(key);
+}
+`, field)
+}
+
+func (d Domain) projectionBody(rm ReadModel) string {
 	on := rm.On
 	if len(on) == 0 {
 		on = d.Events()
