@@ -7,6 +7,12 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ### Security
 
+- **A command's authorization declarations combine (S2).** `authorize.Authorizer` returned on the
+  first declaration it met, so a role that satisfied `requiredRole` skipped `requiredOwnership` and
+  `scope`, and a `fieldGatedRole` whose condition didn't apply allowed the command before `scope`
+  was checked. Every declaration must now hold, as the schema says and dotnetcqrs does since
+  `6649745`. A bypass role skips only its own declaration.
+
 - **Erasure is closed by default (E1).** With no `gateway.Config.Authorize` hook every command is
   allowed, so any signed-in user (or anyone, with `AllowAnonymous`) could send
   `dataSubject/{id}/EraseSubject` for any subject and destroy their key, irreversibly. The gateway

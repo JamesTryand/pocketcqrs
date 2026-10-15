@@ -198,12 +198,14 @@ type Authorizer struct {
 // Authorize evaluates the declared policy for (aggregate, command), if any.
 // No declared policy (the common case for most commands) returns
 // (true, nil) — unchanged behavior for a document declaring none of these
-// four keywords on this command. Implements the same bypass-then-resolve
-// evaluation order dotnetcqrs's generated evaluator does, and in the same
-// checked order (RequiredRole, then FieldGatedRole, then Ownership, then
-// Scope) — a document only ever declares one of the four per command, but
-// the order is fixed regardless so two authors reading this can predict it
-// without checking which fields happen to be set.
+// four keywords on this command.
+//
+// The declarations combine: EVERY one a command declares must hold (S2;
+// the schema's docs say so, and dotnetcqrs's generated evaluator does the
+// same since 6649745). They are checked in a fixed order (RequiredRole,
+// FieldGatedRole, Ownership, Scope) and the first that fails refuses. A
+// bypass role skips only its own declaration's check, and a field gate
+// whose condition doesn't apply adds no requirement but ends nothing.
 func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payload []byte, auth *core.Record) (bool, error) {
 	policy, ok := a.Policies[Key{Aggregate: aggregate, Command: command}]
 	if !ok {
@@ -215,8 +217,8 @@ func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payl
 		ownRole = a.ResolveOwnRole(auth)
 	}
 
-	if len(policy.RequiredRole) > 0 {
-		return containsFold(policy.RequiredRole, ownRole), nil
+	if len(policy.RequiredRole) > 0 && !containsFold(policy.RequiredRole, ownRole) {
+		return false, nil
 	}
 
 	if fg := policy.FieldGatedRole; fg != nil {
@@ -226,11 +228,12 @@ func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payl
 				return false, fmt.Errorf("authorize: %s/%s: payload is not a JSON object: %w", aggregate, command, err)
 			}
 		}
-		actual, present := obj[fg.Field]
-		if !present || !valuesEqual(actual, fg.Value) {
-			return true, nil // condition doesn't apply -- no additional requirement
+		// a payload lacking the field, or carrying another value, means the
+		// gate adds no requirement
+		if actual, present := obj[fg.Field]; present && valuesEqual(actual, fg.Value) &&
+			!containsFold(fg.RequiredRole, ownRole) {
+			return false, nil
 		}
-		return containsFold(fg.RequiredRole, ownRole), nil
 	}
 
 	ownStaffID := ""
@@ -238,10 +241,7 @@ func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payl
 		ownStaffID = a.ResolveOwnStaffID(auth)
 	}
 
-	if own := policy.Ownership; own != nil {
-		if containsFold(own.BypassRoles, ownRole) {
-			return true, nil
-		}
+	if own := policy.Ownership; own != nil && !containsFold(own.BypassRoles, ownRole) {
 		rec, err := app.FindFirstRecordByFilter(own.Collection, own.KeyField+" = {:id}", dbx.Params{"id": id})
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil // no such target row -- not authorized, same as dotnetcqrs's "owner is null"
@@ -249,14 +249,12 @@ func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payl
 		if err != nil {
 			return false, fmt.Errorf("authorize: %s/%s: resolving ownership: %w", aggregate, command, err)
 		}
-		owner := rec.GetString(own.OwnerField)
-		return owner != "" && owner == ownStaffID, nil
+		if owner := rec.GetString(own.OwnerField); owner == "" || owner != ownStaffID {
+			return false, nil
+		}
 	}
 
-	if sc := policy.Scope; sc != nil {
-		if containsFold(sc.BypassRoles, ownRole) {
-			return true, nil
-		}
+	if sc := policy.Scope; sc != nil && !containsFold(sc.BypassRoles, ownRole) {
 		resolved, err := app.FindFirstRecordByFilter(sc.ResolveCollection, sc.ResolveKeyField+" = {:id}", dbx.Params{"id": id})
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
@@ -274,7 +272,6 @@ func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payl
 		if err != nil {
 			return false, fmt.Errorf("authorize: %s/%s: resolving scope membership: %w", aggregate, command, err)
 		}
-		return true, nil
 	}
 
 	return true, nil

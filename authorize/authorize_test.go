@@ -320,3 +320,64 @@ func TestAuthorize_NilResolversTreatedAsNoActor(t *testing.T) {
 		t.Fatalf("no resolvers configured should mean no role satisfies a requirement, got ok=%v err=%v", ok, err)
 	}
 }
+
+// S2: a command's declarations combine, every one must hold (schema
+// docs, 2026-10-14; dotnetcqrs 6649745). Evaluation used to return on the
+// first declaration it met, so a role that satisfied requiredRole skipped
+// the ownership check entirely, and a field gate that didn't apply allowed
+// the command before scope was looked at.
+func TestAuthorize_EveryDeclarationMustHold(t *testing.T) {
+	app := newTestApp(t)
+	entries := mustCreateCollection(t, app, "timeEntries", "entryId", "staffId", "projectId")
+	mustInsertRow(t, app, entries, map[string]string{"entryId": "e1", "staffId": "staff1", "projectId": "p1"})
+	pms := mustCreateCollection(t, app, "projectManagers", "projectId", "staffId")
+	mustInsertRow(t, app, pms, map[string]string{"projectId": "p1", "staffId": "pm1"})
+
+	ownership := &OwnershipPolicy{Collection: "timeEntries", KeyField: "entryId", OwnerField: "staffId"}
+	scope := &ScopePolicy{
+		ResolveCollection: "timeEntries", ResolveKeyField: "entryId", ResolveSelectField: "projectId",
+		MemberOfCollection: "projectManagers", MemberOfMatchField: "projectId",
+	}
+	gate := &FieldGatedRolePolicy{Field: "role", Value: "manager", RequiredRole: []string{"administrator"}}
+
+	cases := []struct {
+		name    string
+		policy  Policy
+		role    string
+		staffID string
+		payload string
+		want    bool
+	}{
+		// requiredRole + ownership: staff holds the role, but e1 is staff1's
+		{"role held, not the owner", Policy{RequiredRole: []string{"staff"}, Ownership: ownership}, "staff", "staff2", `{}`, false},
+		{"role held, the owner", Policy{RequiredRole: []string{"staff"}, Ownership: ownership}, "staff", "staff1", `{}`, true},
+		{"the owner, role not held", Policy{RequiredRole: []string{"manager"}, Ownership: ownership}, "staff", "staff1", `{}`, false},
+		// requiredRole + an applying field gate: manager holds requiredRole,
+		// but role=manager needs an administrator
+		{"role held, gate applies and fails", Policy{RequiredRole: []string{"manager", "administrator"}, FieldGatedRole: gate}, "manager", "", `{"role":"manager"}`, false},
+		{"role held, gate applies and holds", Policy{RequiredRole: []string{"manager", "administrator"}, FieldGatedRole: gate}, "administrator", "", `{"role":"manager"}`, true},
+		{"role held, gate doesn't apply", Policy{RequiredRole: []string{"manager", "administrator"}, FieldGatedRole: gate}, "manager", "", `{"role":"staff"}`, true},
+		// a field gate that doesn't apply must not end the evaluation: scope
+		// still decides (pm1 manages p1, staff2 doesn't)
+		{"gate doesn't apply, not in scope", Policy{FieldGatedRole: gate, Scope: scope}, "staff", "staff2", `{"role":"staff"}`, false},
+		{"gate doesn't apply, in scope", Policy{FieldGatedRole: gate, Scope: scope}, "staff", "pm1", `{"role":"staff"}`, true},
+		// ownership + scope: the owner who doesn't manage the project
+		{"owner, not in scope", Policy{Ownership: ownership, Scope: scope}, "staff", "staff1", `{}`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := &Authorizer{
+				Policies:          map[Key]Policy{{"time_entry", "UpdateTimeEntry"}: c.policy},
+				ResolveOwnRole:    func(*core.Record) string { return c.role },
+				ResolveOwnStaffID: func(*core.Record) string { return c.staffID },
+			}
+			ok, err := a.Authorize(app, "time_entry", "UpdateTimeEntry", "e1", []byte(c.payload), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok != c.want {
+				t.Fatalf("got %v, want %v", ok, c.want)
+			}
+		})
+	}
+}
