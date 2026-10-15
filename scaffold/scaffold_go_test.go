@@ -326,8 +326,12 @@ func TestFinding3EndsStreamResetsExists(t *testing.T) {
 		t.Fatal(err)
 	}
 	dec := files[0].Source
-	if !strings.Contains(dec, "case StaffRemoved:\n\t\t\t\ts.Exists = false") {
-		t.Errorf("expected StaffRemoved to reset Exists to false:\n%s", dec)
+	if !strings.Contains(dec, "case StaffRemoved:\n\t\t\t\ts.Exists = false\n\t\t\t\ts.Ended = true") {
+		t.Errorf("expected StaffRemoved to reset Exists to false and set Ended (D28):\n%s", dec)
+	}
+	if !strings.Contains(dec, "\tEnded  bool\n") ||
+		!strings.Contains(dec, "if s.Ended {\n\t\t\t\t\treturn nil, fmt.Errorf(\"staff has ended and cannot begin again\")") {
+		t.Errorf("expected an Ended flag that CreateStaff refuses (D28):\n%s", dec)
 	}
 	if !strings.Contains(dec, "case StaffCreated:") || strings.Contains(dec, "case StaffCreated:\n\t\t\t\ts.Exists = false") {
 		t.Errorf("a non-endsStream event must still set Exists true:\n%s", dec)

@@ -226,7 +226,9 @@ func (m *mapper) mapStateChange(s Slice) {
 	once := hasCreate && !hasUpdate
 	requiresExisting := !hasCreate
 	d := m.domain(agg)
-	d.Commands = append(d.Commands, m.command(agg, s.CommandID, cmd, s.EventIDs, once, requiresExisting))
+	c := m.command(agg, s.CommandID, cmd, s.EventIDs, once, requiresExisting)
+	c.CanBeginAgain = once && m.hasBeginAgainEvidence(s, agg)
+	d.Commands = append(d.Commands, c)
 }
 
 // mapAutomation turns an automation slice into a reactor plus the command it
@@ -265,8 +267,9 @@ func (m *mapper) mapAutomation(s Slice) {
 	crossAggregate := source != agg
 	target := m.domain(agg)
 	isCreate := crossAggregate && m.hasCreateEvidence(s, agg)
-	target.Commands = append(target.Commands,
-		m.command(agg, s.CommandID, cmd, s.ResultEventIDs, isCreate, !isCreate))
+	c := m.command(agg, s.CommandID, cmd, s.ResultEventIDs, isCreate, !isCreate)
+	c.CanBeginAgain = isCreate && m.hasBeginAgainEvidence(s, agg)
+	target.Commands = append(target.Commands, c)
 	triggers := make([]string, 0, len(s.TriggerEventIDs))
 	for _, id := range s.TriggerEventIDs {
 		triggers = append(triggers, m.eventType(id))
@@ -702,6 +705,28 @@ func (m *mapper) hasCreateEvidence(s Slice, agg string) bool {
 		}
 		if !m.scenarioNetExists(sc, agg) {
 			return true
+		}
+	}
+	return false
+}
+
+// hasBeginAgainEvidence reports whether a create may begin its stream again
+// after an endsStream event: one of its slice's stateChange scenarios does
+// exactly that, its `given` ending the own stream (netting to "does not
+// exist" with an own-stream endsStream event in it) and the command still
+// succeeding (a re-assign after an unassign). Error scenarios are not
+// evidence. With no such scenario the end is final (D28): the generated
+// create refuses an ended stream. Mirrors dotnetcqrs's
+// HasBeginAgainEvidence.
+func (m *mapper) hasBeginAgainEvidence(s Slice, agg string) bool {
+	for _, sc := range s.Scenarios {
+		if sc.Kind != KindStateChange || m.scenarioNetExists(sc, agg) {
+			continue
+		}
+		for _, g := range sc.Given {
+			if m.eventEndsStream[g.EventID] && m.eventOwners[g.EventID] == agg {
+				return true
+			}
 		}
 	}
 	return false

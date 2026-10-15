@@ -74,6 +74,11 @@ type Command struct {
 	// RequiresExisting marks a command that needs the aggregate to exist
 	// already — everything after the create, usually.
 	RequiresExisting bool `json:"requiresExisting,omitempty"`
+	// CanBeginAgain marks a Once command that may begin the stream again
+	// after an endsStream event (an assign after an unassign). Without it,
+	// an end is final (D28): the decider refuses to begin an ended stream,
+	// so a deleted entry's id can never be logged again.
+	CanBeginAgain bool `json:"canBeginAgain,omitempty"`
 }
 
 // Event is one event a command may record.
@@ -701,7 +706,12 @@ func (d Domain) decider() string {
 	b.WriteString("//\n")
 	b.WriteString("// Dry-run this against real history before saving.\n\n")
 
-	b.WriteString("function initialState() {\n  return { exists: false };\n}\n\n")
+	endsForGood := d.endsForGood()
+	if endsForGood {
+		b.WriteString("function initialState() {\n  return { exists: false, ended: false };\n}\n\n")
+	} else {
+		b.WriteString("function initialState() {\n  return { exists: false };\n}\n\n")
+	}
 
 	b.WriteString("function decide(command, state) {\n")
 	b.WriteString("  switch (command.name) {\n")
@@ -709,6 +719,9 @@ func (d Domain) decider() string {
 		fmt.Fprintf(&b, "    case '%s':\n", c.Name)
 		if c.Once {
 			fmt.Fprintf(&b, "      if (state.exists) { throw new Error('%s already exists'); }\n", d.Aggregate)
+		}
+		if c.Once && !c.CanBeginAgain && endsForGood {
+			fmt.Fprintf(&b, "      if (state.ended) { throw new Error('%s has ended and cannot begin again'); }\n", d.Aggregate)
 		}
 		if c.RequiresExisting {
 			fmt.Fprintf(&b, "      if (!state.exists) { throw new Error('%s does not exist'); }\n", d.Aggregate)
@@ -746,9 +759,14 @@ func (d Domain) decider() string {
 		// setting it -- otherwise the generic fold only ever sets state and
 		// never retracts it, permanently blocking a later create-shaped
 		// command on the same stream once it has ever fired once (Finding 3).
+		// Where a create may not begin again, the end also sets ended, which
+		// that create refuses (D28).
 		existsAfter := "true"
 		if d.eventEndsStream(name) {
 			existsAfter = "false"
+			if endsForGood {
+				existsAfter = "false, ended: true"
+			}
 		}
 		fmt.Fprintf(&b, "      return Object.assign({}, state, event.data, { exists: %s });\n", existsAfter)
 	}

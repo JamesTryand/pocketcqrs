@@ -39,6 +39,14 @@ All notable changes to PocketCQRS. Format loosely follows
   returned to callers, and what an error scenario has to match. Now it is `order already exists`. A
   runtime error keeps its class name (`TypeError: ...`): that is the decider failing, not a rule
   refusing.
+- **A stream that ended is ended for good (D28).** An `endsStream` event reset `exists`, so the
+  create's own "already exists" check passed again and a create restarted the stream: a deleted
+  entry could be logged again under its old id. Now the end also sets `ended`, and a `once`
+  command refuses an ended stream (`<aggregate> has ended and cannot begin again`), in both the JS
+  and Go generators. An end is not final only where a scenario shows a create beginning the
+  stream again after it (an assign after an unassign); the importer then sets the command's new
+  `canBeginAgain`. An aggregate with no final end generates exactly as before. Same rule as
+  dotnetcqrs. Regenerate a decider to pick it up; existing generated files are not rewritten.
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.

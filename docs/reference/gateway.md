@@ -377,7 +377,12 @@ choosing between them is business logic, and it lives in `decide()`.
 
 Marking a command `once` makes it the slice's create: the generated decider
 refuses it on a stream that already exists, and `requiresExisting` refuses a
-command on a stream that does not. Everything past that — the invariants that
+command on a stream that does not. An event marked `endsStream` (a removal)
+resets "exists", and **the end is final**: a `once` command refuses a stream
+that has ended (`<aggregate> has ended and cannot begin again`), so a deleted
+entry's id can never be used again. Mark the command `canBeginAgain` when an
+end is not final (an assign after an unassign); the importer sets it when one
+of the slice's scenarios does exactly that. Everything past that — the invariants that
 make this domain rather than any other — is the author's, which is why the
 output is meant to be read and edited rather than shipped.
 

@@ -235,6 +235,21 @@ func (d Domain) eventFields(name string) []Field {
 
 // eventEndsStream mirrors eventFields for the EndsStream flag: true when the
 // FIRST event named name is tagged as closing its aggregate's stream.
+// endsForGood reports whether an end is final for this aggregate: an
+// event ends the stream and some create may not begin it again (D28). Only
+// such an aggregate carries the Ended flag, so every other decider
+// generates exactly as before. Mirrors dotnetcqrs's DeciderGenerator.
+func (d Domain) endsForGood() bool {
+	ends, final := false, false
+	for _, c := range d.Commands {
+		for _, e := range c.Events {
+			ends = ends || e.EndsStream
+		}
+		final = final || (c.Once && !c.CanBeginAgain)
+	}
+	return ends && final
+}
+
 func (d Domain) eventEndsStream(name string) bool {
 	for _, c := range d.Commands {
 		for _, e := range c.Events {
@@ -390,6 +405,9 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 	b.WriteString("// and test this against real history before relying on it.\n")
 	b.WriteString("type State struct {\n")
 	b.WriteString("\tExists bool\n")
+	if d.endsForGood() {
+		b.WriteString("\tEnded  bool\n")
+	}
 	for _, f := range fields {
 		fmt.Fprintf(&b, "\t%s %s `json:%q`\n", ExportName(f.Name), f.GoType, f.Name)
 	}
@@ -436,6 +454,9 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 		fmt.Fprintf(&b, "\t\t\tcase %q:\n", c.Name)
 		if c.Once {
 			fmt.Fprintf(&b, "\t\t\t\tif s.Exists {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", d.Aggregate+" already exists")
+		}
+		if c.Once && !c.CanBeginAgain && d.endsForGood() {
+			fmt.Fprintf(&b, "\t\t\t\tif s.Ended {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", d.Aggregate+" has ended and cannot begin again")
 		}
 		if c.RequiresExisting {
 			fmt.Fprintf(&b, "\t\t\t\tif !s.Exists {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", d.Aggregate+" does not exist")
@@ -486,9 +507,14 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 		// setting it -- otherwise the generic fold only ever sets state and
 		// never retracts it, permanently blocking a later create-shaped
 		// command on the same stream once it has ever fired once (Finding 3).
+		// Where a create may not begin again, the end also sets Ended, which
+		// that create refuses (D28).
 		existsAfter := "true"
 		if d.eventEndsStream(name) {
 			existsAfter = "false"
+			if d.endsForGood() {
+				existsAfter = "false\n\t\t\t\ts.Ended = true"
+			}
 		}
 		fmt.Fprintf(&b, "\t\t\tcase %s:\n", name)
 		if len(ef) == 0 {

@@ -19,8 +19,13 @@ func TestFinding3JSEndsStreamResetsExists(t *testing.T) {
 		t.Fatal(err)
 	}
 	dec := files[0].Source
-	if !strings.Contains(dec, "case 'StaffRemoved':\n      return Object.assign({}, state, event.data, { exists: false });") {
-		t.Errorf("expected StaffRemoved to reset exists to false:\n%s", dec)
+	// CreateStaff may not begin a removed staff member's stream again, so
+	// the removal also sets ended (D28)
+	if !strings.Contains(dec, "case 'StaffRemoved':\n      return Object.assign({}, state, event.data, { exists: false, ended: true });") {
+		t.Errorf("expected StaffRemoved to reset exists to false and set ended:\n%s", dec)
+	}
+	if !strings.Contains(dec, "if (state.ended) { throw new Error('staff has ended and cannot begin again'); }") {
+		t.Errorf("expected CreateStaff to refuse an ended stream:\n%s", dec)
 	}
 	if !strings.Contains(dec, "case 'StaffCreated':\n      return Object.assign({}, state, event.data, { exists: true });") {
 		t.Errorf("a non-endsStream event must still set exists true:\n%s", dec)

@@ -157,3 +157,31 @@ func TestScenarioNetExists_foreignEndsStreamEventIsIgnored(t *testing.T) {
 		t.Fatal("exists should still net true: the foreign endsStream event is not evidence either way")
 	}
 }
+
+func TestHasBeginAgainEvidence(t *testing.T) {
+	// D28: a create may begin its stream again only when a scenario shows
+	// it doing so after its own stream ended.
+	m := evidenceMapper(
+		map[string]string{
+			"pm-assigned": "assignment", "pm-unassigned": "assignment",
+			"project-closed": "project",
+		},
+		map[string]bool{"pm-unassigned": true, "project-closed": true},
+	)
+	again := Slice{Scenarios: []Scenario{stateChangeScenario("pm-assigned", "pm-unassigned")}}
+	if !m.hasBeginAgainEvidence(again, "assignment") {
+		t.Fatal("assign after an unassign of the same stream is begin-again evidence")
+	}
+	fresh := Slice{Scenarios: []Scenario{stateChangeScenario()}}
+	if m.hasBeginAgainEvidence(fresh, "assignment") {
+		t.Fatal("a create on a fresh stream says nothing about beginning again")
+	}
+	foreign := Slice{Scenarios: []Scenario{stateChangeScenario("project-closed")}}
+	if m.hasBeginAgainEvidence(foreign, "assignment") {
+		t.Fatal("another aggregate's end is not this stream ending")
+	}
+	refused := Slice{Scenarios: []Scenario{{Kind: KindError, Given: []EventRef{{EventID: "pm-assigned"}, {EventID: "pm-unassigned"}}}}}
+	if m.hasBeginAgainEvidence(refused, "assignment") {
+		t.Fatal("an error scenario is not evidence")
+	}
+}
