@@ -101,6 +101,16 @@ All notable changes to PocketCQRS. Format loosely follows
   none is `authenticated` (3.8.0: every signed-in caller), no longer the deployment default.
   `schema import --roleField`/`--subjectField` name the auth-record fields the rules read. Tested
   by running the generated rules through PocketBase's own record API as each kind of caller.
+- **Outcomes, with hand-written hooks (schema 3.3.0/3.12.0/3.13.0).** A slice's outcomes become the
+  command's ordered alternatives in both generated deciders: declared `when` conditions, `set`
+  values, and, for `when: "hand"` and `repeated` events, hooks. On the JS target the decider names
+  its hooks with the new `//@hand <file>` and `//@hooks` directives; the loader compiles the hand file
+  into the decider's own program and VM, and refuses a decider whose hand file is missing or lacks
+  a hook. On the Go target the decider calls functions in `<aggregate>_hand.go`. The import writes
+  `.example` skeletons. Verify reports a scenario a hook decides as HAND when its events fit a
+  declared alternative. Events tagged with an aggregate that no slice produces are now folded by
+  its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
+  import and verify (HAND where a hook decides).
 - **Rows keyed by a field of the event (schema 3.14.0).** A read model's `rowKeyField` keys every
   row it writes, merges, toggles and removes by that event field instead of the stream, in both
   generated projections; the import refuses it when an event lacks the field.

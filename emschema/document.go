@@ -477,6 +477,9 @@ type Slice struct {
 	AutomationID    string   `json:"automationId,omitempty"`
 	TriggerEventIDs []string `json:"triggerEventIds,omitempty"`
 	ResultEventIDs  []string `json:"resultEventIds,omitempty"`
+	// stateChange + automation: the alternatives the command may produce
+	// (schema 3.3.0; when and set 3.12.0, repeated 3.13.0). See Outcome.
+	Outcomes []Outcome `json:"outcomes,omitempty"`
 }
 
 // Scenario is a given/when/then example. The `when` and `then` shapes depend

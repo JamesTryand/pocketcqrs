@@ -36,9 +36,11 @@ type RefusalOperand struct {
 
 var numericOps = map[string]bool{"lessThan": true, "atMost": true, "greaterThan": true, "atLeast": true}
 
+// hasRefusals reports whether any rule reads the aggregate's state or the
+// command: a refuseWhen rule or a declared outcome condition.
 func (d Domain) hasRefusals() bool {
 	for _, c := range d.Commands {
-		if len(c.Refusals) > 0 {
+		if len(c.Refusals) > 0 || len(c.outcomeConditions()) > 0 {
 			return true
 		}
 	}
@@ -53,11 +55,9 @@ func (d Domain) hasRefusals() bool {
 // the numeric operators compare numbers, and contains needs a list.
 func (d Domain) checkRefusals(add func(string, ...any)) {
 	state := map[string]Field{}
-	for _, c := range d.Commands {
-		for _, e := range c.Events {
-			for _, f := range e.Fields {
-				state[f.Name] = f
-			}
+	for _, e := range d.allEvents() {
+		for _, f := range e.Fields {
+			state[f.Name] = f
 		}
 	}
 	d.checkOwnership(add, state)
@@ -78,7 +78,7 @@ func (d Domain) checkRefusals(add func(string, ...any)) {
 			}
 			return f, ok
 		}
-		for _, r := range c.Refusals {
+		for _, r := range append(append([]Refusal{}, c.Refusals...), c.outcomeConditions()...) {
 			for _, cond := range r.All {
 				f, ok := lookup(cond.Side, cond.Field, r.Message)
 				if !ok || cond.Op == "set" || cond.Op == "notSet" {

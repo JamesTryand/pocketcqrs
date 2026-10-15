@@ -27,8 +27,11 @@ type DeciderSpec struct {
 	// which command caused which event and had to list them all.
 	Produces   map[string][]string
 	Transforms []TransformSpec
-	Prog       *goja.Program
-	runtime    *GojaRuntime
+	// Hooks are the hand-written functions (//@hooks) the decider calls,
+	// compiled in from its //@hand file; loading refuses one not defined.
+	Hooks   []string
+	Prog    *goja.Program
+	runtime *GojaRuntime
 }
 
 // TransformSpec declares an upcaster transform_<Type>_<From>_to_<To>(data).
@@ -319,6 +322,13 @@ func ValidateDeciderSpec(store *events.Store, spec *DeciderSpec) error {
 		if _, ok := goja.AssertFunction(vm.Get(fnName)); !ok {
 			timer.Stop()
 			return fmt.Errorf("validation: decider %s does not define %s", spec.Aggregate, fnName)
+		}
+	}
+	for _, h := range spec.Hooks {
+		if _, ok := goja.AssertFunction(vm.Get(h)); !ok {
+			timer.Stop()
+			return fmt.Errorf("validation: decider %s calls the hand-written hook %s, which its hand file does not define",
+				spec.Aggregate, h)
 		}
 	}
 	for _, t := range spec.Transforms {

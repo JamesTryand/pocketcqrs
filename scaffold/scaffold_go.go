@@ -73,8 +73,8 @@ func (d Domain) collectEventFields() ([]namedField, []string) {
 	firstEvent := map[string]string{}
 	var warnings []string
 
-	for _, c := range d.Commands {
-		for _, e := range c.Events {
+	for _, e := range d.allEvents() {
+		{
 			for _, f := range e.Fields {
 				existing, seen := types[f.Name]
 				if !seen {
@@ -223,18 +223,14 @@ func usesGoType(fields []namedField, want string) bool {
 // the model doesn't allow declaring the same event name twice with
 // different fields on purpose, so "first" and "only" coincide in practice.
 func (d Domain) eventFields(name string) []Field {
-	for _, c := range d.Commands {
-		for _, e := range c.Events {
-			if e.Name == name {
-				return e.Fields
-			}
+	for _, e := range d.allEvents() {
+		if e.Name == name {
+			return e.Fields
 		}
 	}
 	return nil
 }
 
-// eventEndsStream mirrors eventFields for the EndsStream flag: true when the
-// FIRST event named name is tagged as closing its aggregate's stream.
 // endsForGood reports whether an end is final for this aggregate: an
 // event ends the stream and some create may not begin it again (D28). Only
 // such an aggregate carries the Ended flag, so every other decider
@@ -250,12 +246,12 @@ func (d Domain) endsForGood() bool {
 	return ends && final
 }
 
+// eventEndsStream mirrors eventFields for the EndsStream flag: true when the
+// FIRST event named name is tagged as closing its aggregate's stream.
 func (d Domain) eventEndsStream(name string) bool {
-	for _, c := range d.Commands {
-		for _, e := range c.Events {
-			if e.Name == name {
-				return e.EndsStream
-			}
+	for _, e := range d.allEvents() {
+		if e.Name == name {
+			return e.EndsStream
 		}
 	}
 	return false
@@ -481,6 +477,10 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 		}
 		writeGoOwnership(&b, c)
 		writeGoRefusals(&b, c)
+		if len(c.Outcomes) > 0 {
+			writeGoOutcomes(&b, c, fieldGoType)
+			continue
+		}
 		if len(c.Events) > 1 {
 			names := eventNames(c.Events)
 			b.WriteString("\t\t\t\t// THIS COMMAND CAN RESULT IN MORE THAN ONE EVENT:\n")

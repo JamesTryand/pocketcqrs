@@ -246,19 +246,21 @@ func printScenarios(cmd *cobra.Command, results []emschema.ScenarioResult, lang 
 			"against %s.\n", against)
 		return
 	}
-	var passed, failed, skipped int
+	var passed, failed, skipped, hand int
 	for _, r := range results {
 		switch {
 		case r.Skipped:
 			skipped++
 		case r.Passed:
 			passed++
+		case r.Hand:
+			hand++
 		default:
 			failed++
 		}
 	}
-	cmd.Printf("\nScenarios checked against %s: %d passed, %d failed, %d skipped\n",
-		against, passed, failed, skipped)
+	cmd.Printf("\nScenarios checked against %s: %d passed, %d failed, %d skipped, %d hand\n",
+		against, passed, failed, skipped, hand)
 	for _, r := range results {
 		mark := "✗"
 		switch {
@@ -266,6 +268,8 @@ func printScenarios(cmd *cobra.Command, results []emschema.ScenarioResult, lang 
 			mark = "–"
 		case r.Passed:
 			mark = "✓"
+		case r.Hand:
+			mark = "✋"
 		}
 		cmd.Printf("  %s [%s] %s\n      %s\n", mark, r.Kind, r.Name, r.Detail)
 	}

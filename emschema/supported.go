@@ -61,7 +61,6 @@ func (e *UnsupportedError) Error() string {
 var laterFeatures = map[string]string{
 	"via":             "selfAccess.via, a subject id resolved through a read model (schema 3.2.0)",
 	"dataSubjects":    "dataSubjects.erasure, who may request erasure (schema 3.2.0)",
-	"outcomes":        "outcomes, a command's alternative results (schema 3.3.0; when and set 3.12.0, repeated 3.13.0)",
 	"ingresses":       "an ingress (schema 3.4.0)",
 	"ingressId":       "a slice started by an ingress (schema 3.4.0)",
 	"delay":           "an automation started by a delay (schema 3.5.0)",

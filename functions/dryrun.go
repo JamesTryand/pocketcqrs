@@ -24,7 +24,20 @@ func LoadDeciderSource(rt *GojaRuntime, name, src string) (*DeciderSpec, error) 
 	if t.decider == "" {
 		return nil, fmt.Errorf("functions: %s: missing //@trigger decider directive", name)
 	}
-	return buildDeciderSpec(rt, name, src, t)
+	return buildDeciderSpec(rt, name, src, t, "")
+}
+
+// LoadDeciderSourceWithHand is LoadDeciderSource for a decider with
+// hand-written hooks (//@hand), whose hand file's source is hand.
+func LoadDeciderSourceWithHand(rt *GojaRuntime, name, src, hand string) (*DeciderSpec, error) {
+	t, err := parseTriggers(src)
+	if err != nil {
+		return nil, fmt.Errorf("functions: %s: %w", name, err)
+	}
+	if t.decider == "" {
+		return nil, fmt.Errorf("functions: %s: missing //@trigger decider directive", name)
+	}
+	return buildDeciderSpec(rt, name, src, t, hand)
 }
 
 // LoadProjectionSource loads a JS projection from source held in memory.

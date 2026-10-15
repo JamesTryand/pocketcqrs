@@ -46,10 +46,8 @@ func wantRefused(t *testing.T, got []string, want ...string) {
 // removals while looking complete.
 func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 	cases := map[string][]string{
-		"examples/conditional-outcomes.json": {"/slices/0/outcomes"},
-		"examples/rows-per-list-item.json":   {"/readModels/invoice-parts/rowsPerListItem"},
-		"examples/hand-projection.json":      {"/readModels/late-orders/projection"},
-		"examples/repeated-outcomes.json":    {"/slices/0/outcomes"},
+		"examples/rows-per-list-item.json": {"/readModels/invoice-parts/rowsPerListItem"},
+		"examples/hand-projection.json":    {"/readModels/late-orders/projection"},
 		"examples/order-fulfillment.json": {
 			"/dataSubjects",
 			"/ingresses",
@@ -67,12 +65,12 @@ func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 // Every refusal says what the feature is and which schema version added it,
 // so the person importing knows what was refused and why.
 func TestRefusalNamesTheFeature(t *testing.T) {
-	_, err := Load(fixture(t, "examples/conditional-outcomes.json"))
+	_, err := Load(fixture(t, "examples/order-fulfillment.json"))
 	if err == nil {
-		t.Fatal("conditional-outcomes.json loaded")
+		t.Fatal("order-fulfillment.json loaded")
 	}
 	msg := err.Error()
-	for _, want := range []string{"outcomes", "3.3.0", "/slices/0/outcomes", "nothing was generated"} {
+	for _, want := range []string{"an ingress", "3.4.0", "/ingresses", "nothing was generated"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the error does not mention %q:\n%s", want, msg)
 		}
@@ -186,9 +184,9 @@ func TestSplitDocumentIsCheckedToo(t *testing.T) {
 		"slices":["slices/a.json"]}`)
 	write("commands.json", `{"c":{"name":"C","partitioned":false}}`)
 	write("slices/a.json", `{"id":"a","name":"A","pattern":"stateChange","swimlaneId":"s","status":"planned",
-		"commandId":"c","eventIds":[],"outcomes":[[]],"scenarios":[]}`)
+		"commandId":"c","eventIds":[],"partitionFrom":"shopId","scenarios":[]}`)
 	wantRefused(t, refusedAt(t, dir),
 		"manifest.json/dataSubjects",
 		"commands.json/c/partitioned",
-		"slices/a.json/outcomes")
+		"slices/a.json/partitionFrom")
 }

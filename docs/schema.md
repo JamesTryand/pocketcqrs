@@ -79,7 +79,7 @@ the domain's own and isn't checked. A split document is checked file by file,
 and the pointer starts with the file's path.
 
 Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
-`outcomes`, ingresses, delays, schedules and `elapsed`, automation `effect`,
+ingresses, delays, schedules and `elapsed`, automation `effect`,
 partitioning, `rowsPerListItem`, the `sumOfItems` and
 `byEvent` derivations, and `projection`. Each leaves this list as it is
 implemented.
@@ -124,6 +124,32 @@ targets share these semantics; the Go decider keeps the folded event values in
 field that isn't there, comparing personal data, comparing a non-number
 numerically or asking a non-list whether it `contains` something is refused at
 import.
+
+### Outcomes
+
+A slice's `outcomes` (3.3.0; `when` and `set` 3.12.0, `repeated` 3.13.0) become
+the command's alternatives, tried in order after its refusals: the first whose
+`when` holds is the result, and the last has none (the default). A `when` is
+refusal conditions (any group holds), so it reads the same state and command
+fields. `set` fixes field values on an alternative's events. Several
+alternatives with no `when` at all say what may happen but not which, and are
+refused.
+
+`when: "hand"` and `repeated` events are **hand-written hooks**: the JS decider
+names them (`//@hand`, `//@hooks`, see the directives reference) and loads them
+from `<aggregate>.hand.js`; the Go decider calls functions you write in
+`<aggregate>_hand.go` (missing ones are a build error). The import writes
+`.example` skeletons for both. A repeated event's hook returns one data object
+per item, in order (none is fine).
+
+Verify can't run a hook you haven't written: a scenario that reaches one is
+reported **HAND** (✋) when its expected events fit one of the declared
+alternatives, and fails when they fit none. An `error` scenario that reaches a
+hook fails.
+
+An event tagged with an aggregate that no slice produces (something else
+appends it) is folded by that aggregate's decider all the same, and the import
+says so.
 
 ### Ownership from the aggregate's own state
 

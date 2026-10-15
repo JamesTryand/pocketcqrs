@@ -141,6 +141,19 @@ registry. Collision with a built-in (Go) aggregate is refused. The file must
 define `initialState()`, `decide(command, state)`, `evolve(state, event)`
 and declare `//@handles`.
 
+## `//@hand <file>` and `//@hooks <name...>`
+
+A decider whose outcome is chosen by hand-written code (schema 3.12.0
+`when: "hand"`, 3.13.0 `repeated`) names its **hand file**, a companion beside
+it (`//@hand expense.hand.js`), and the **hooks** that file must define
+(`//@hooks SubmitExpenseOutcome0`). The two files are compiled into one program,
+so a hook runs in the decider's own VM with its bindings removed: it sees the
+folded state and the command, and nothing else (no `Date`, no I/O, no read
+models). The hand file has no `//@trigger` of its own and is never loaded on its
+own. The decider does not load if its hand file is missing, or if a hook it names
+is not defined. `schema import` never writes the hand file; it writes
+`<aggregate>.hand.js.example`, a skeleton nothing loads.
+
 ## `//@handles <EventType...>`
 
 Required for deciders: the event types the decider may produce or must fold.

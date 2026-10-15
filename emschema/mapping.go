@@ -158,8 +158,39 @@ func (m *mapper) mapSlices() {
 			m.mapAutomation(s)
 		}
 	}
+	m.mapFolds()
 	// PatternStateView: the read model itself is mapped separately; the slice
 	// adds only a screen, which has no runtime concept here.
+}
+
+// mapFolds gives each aggregate the events tagged with it that none of its
+// commands produce: something else appends them to its streams (a feed, a
+// migration, an import), so its decider must fold them, and a rule or a
+// hand-written hook may read what they say.
+func (m *mapper) mapFolds() {
+	ids := make([]string, 0, len(m.doc.Events))
+	for id := range m.doc.Events {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		ev := m.doc.Events[id]
+		if ev.Aggregate == "" {
+			continue
+		}
+		if _, produced := m.eventAggregate[id]; produced {
+			continue
+		}
+		agg := LowerFirst(scaffold.SanitizeName(ev.Aggregate))
+		d, ok := m.byAggregate[agg]
+		if !ok {
+			continue // an aggregate with no commands generates no decider
+		}
+		m.eventAggregate[id] = agg
+		d.Folds = append(d.Folds, scaffold.Event{Name: m.eventType(id), Fields: m.fields("event "+id, ev.Fields),
+			EndsStream: ev.EndsStream, NoFields: len(ev.Fields) == 0})
+		m.rep.warnf("event %q belongs to %s but no slice produces it; the generated decider folds it", id, agg)
+	}
 }
 
 // buildEventOwners resolves, for every event a stateChange or automation
@@ -201,6 +232,14 @@ func (m *mapper) buildEventOwners() map[string]string {
 			}
 		}
 	}
+	// an event no slice produces still belongs to the aggregate it is tagged
+	// with (its decider folds it, see mapFolds): a scenario giving it is
+	// evidence that stream exists
+	for id, ev := range m.doc.Events {
+		if _, ok := owners[id]; !ok && ev.Aggregate != "" {
+			owners[id] = LowerFirst(scaffold.SanitizeName(ev.Aggregate))
+		}
+	}
 	return owners
 }
 
@@ -239,6 +278,7 @@ func (m *mapper) mapStateChange(s Slice) {
 	d := m.domain(agg)
 	c := m.command(agg, s.CommandID, cmd, s.EventIDs, once, requiresExisting)
 	c.CanBeginAgain = once && m.hasBeginAgainEvidence(s, agg)
+	c.Outcomes = m.mapOutcomes(s, s.EventIDs, c.Events)
 	d.Commands = append(d.Commands, c)
 }
 
@@ -280,6 +320,7 @@ func (m *mapper) mapAutomation(s Slice) {
 	isCreate := crossAggregate && m.hasCreateEvidence(s, agg)
 	c := m.command(agg, s.CommandID, cmd, s.ResultEventIDs, isCreate, !isCreate)
 	c.CanBeginAgain = isCreate && m.hasBeginAgainEvidence(s, agg)
+	c.Outcomes = m.mapOutcomes(s, s.ResultEventIDs, c.Events)
 	target.Commands = append(target.Commands, c)
 	triggers := make([]string, 0, len(s.TriggerEventIDs))
 	for _, id := range s.TriggerEventIDs {

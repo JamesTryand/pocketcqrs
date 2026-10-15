@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/dop251/goja"
@@ -274,7 +275,16 @@ func LoadDir(rt *GojaRuntime, app core.App, dir string) (*LoadResult, error) {
 			rt.logger("JS projection registered", "name", spec.Name, "collections", spec.Collections())
 
 		case t.decider != "":
-			spec, err := buildDeciderSpec(rt, entry.Name(), src, t)
+			hand := ""
+			if t.hand != "" {
+				raw, err := os.ReadFile(filepath.Join(dir, t.hand))
+				if err != nil {
+					return nil, fmt.Errorf("functions: %s: decider %q needs its hand-written hooks in %s (%s): %w",
+						entry.Name(), t.decider, t.hand, strings.Join(t.hooks, ", "), err)
+				}
+				hand = string(raw)
+			}
+			spec, err := buildDeciderSpec(rt, entry.Name(), src, t, hand)
 			if err != nil {
 				return nil, err
 			}
@@ -361,12 +371,23 @@ func buildProjectionSpec(rt *GojaRuntime, app core.App, filename, src string, t 
 	}, nil
 }
 
-func buildDeciderSpec(rt *GojaRuntime, filename, src string, t triggers) (*DeciderSpec, error) {
+// handFileName is a bare .js file name: a hand file sits beside its decider.
+var handFileName = regexp.MustCompile(`^[A-Za-z0-9_.-]+\.js$`)
+
+func buildDeciderSpec(rt *GojaRuntime, filename, src string, t triggers, hand string) (*DeciderSpec, error) {
 	if len(t.handles) == 0 {
 		return nil, fmt.Errorf("functions: %s: decider %q is missing its //@handles directive", filename, t.decider)
 	}
 	if !validName.MatchString(t.decider) {
 		return nil, fmt.Errorf("functions: %s: invalid aggregate name %q", filename, t.decider)
+	}
+	if len(t.hooks) > 0 && t.hand == "" {
+		return nil, fmt.Errorf("functions: %s: //@hooks needs //@hand naming the file that defines them", filename)
+	}
+	if t.hand != "" {
+		// one program: the hooks run in the decider's own VM, with its
+		// bindings removed (no Date, no I/O), and nowhere else
+		src = src + "\n;\n" + hand
 	}
 	prog, err := goja.Compile(filename, src, false)
 	if err != nil {
@@ -378,6 +399,7 @@ func buildDeciderSpec(rt *GojaRuntime, filename, src string, t triggers) (*Decid
 		Commands:   t.commands,
 		Produces:   t.produces,
 		Transforms: t.transforms,
+		Hooks:      t.hooks,
 		Prog:       prog,
 		runtime:    rt,
 	}, nil
@@ -406,12 +428,15 @@ type triggers struct {
 	reactor      []string            // //@trigger reactor <EventTypes...>
 	dispatches   []string            // //@dispatches <aggregate>/<Command>... (optional)
 	transforms   []TransformSpec
+	hand         string   // //@hand <file>: the decider's hand-written hooks, compiled in
+	hooks        []string // //@hooks <name...>: what the hand file must define
 }
 
 func (t triggers) empty() bool {
 	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && len(t.schemas) == 0 &&
 		t.decider == "" && len(t.handles) == 0 && len(t.commands) == 0 && len(t.transforms) == 0 &&
-		len(t.reactor) == 0 && len(t.dispatches) == 0 && len(t.produces) == 0 && len(t.rules) == 0
+		len(t.reactor) == 0 && len(t.dispatches) == 0 && len(t.produces) == 0 && len(t.rules) == 0 &&
+		t.hand == "" && len(t.hooks) == 0
 }
 
 // parseTriggers scans the leading comment lines for //@ directives.
@@ -510,6 +535,21 @@ func parseTriggers(src string) (triggers, error) {
 			t.handles = append(t.handles, fields[1:]...)
 		case "commands":
 			t.commands = append(t.commands, fields[1:]...)
+		case "hand":
+			// the decider's hand-written hooks (schema 3.12.0 "hand", 3.13.0
+			// repeated) live in a companion file beside it, compiled into
+			// the same program, so they run in the decider's own VM
+			if len(fields) != 2 || !handFileName.MatchString(fields[1]) {
+				return t, fmt.Errorf("//@hand wants one file name beside this one, ending .js")
+			}
+			t.hand = fields[1]
+		case "hooks":
+			for _, name := range fields[1:] {
+				if !validName.MatchString(name) {
+					return t, fmt.Errorf("//@hooks: %q is not a function name", name)
+				}
+			}
+			t.hooks = append(t.hooks, fields[1:]...)
 		case "produces":
 			// //@produces <Command> <Event...> — the association //@commands
 			// and //@handles could not express between them. Each names the

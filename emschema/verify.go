@@ -35,6 +35,11 @@ type ScenarioResult struct {
 	Kind       string
 	Passed     bool
 	Skipped    bool
+	// Hand: the result is chosen by a hand-written hook (schema 3.12.0
+	// "hand", 3.13.0 repeated), which only a host's own hooks can decide.
+	// The expected events fit one of the command's declared alternatives,
+	// so it is not a failure; it isn't a pass either.
+	Hand bool
 	// Detail says what happened: why it failed, or why it was skipped.
 	Detail string
 }
@@ -86,6 +91,11 @@ type verifier struct {
 	// readModels maps a generated collection to its read model, for the
 	// rule sandbox's column types.
 	readModels map[string]scaffold.ReadModel
+	// handStandIns maps an aggregate with hand-written hooks to a hand file
+	// whose hooks throw scaffold.HandMarker; outcomes maps a command to its
+	// alternatives, to tell a HAND result from a failure.
+	handStandIns map[string]string
+	outcomes     map[string][]scaffold.Outcome
 	// roleField and subjectField are the auth-record fields the generated
 	// read rules read (the import's --roleField/--subjectField).
 	roleField, subjectField string
@@ -96,7 +106,17 @@ func (v *verifier) indexSources(mapped *Mapped) error {
 	v.collectionOf = map[string]string{}
 	v.eventAggregate = map[string]string{}
 	v.readModels = map[string]scaffold.ReadModel{}
+	v.handStandIns = map[string]string{}
+	v.outcomes = map[string][]scaffold.Outcome{}
 	for _, d := range mapped.Domains {
+		if len(d.Hooks()) > 0 {
+			v.handStandIns[d.Aggregate] = d.JSHandStandIn()
+		}
+		for _, c := range d.Commands {
+			if len(c.Outcomes) > 0 {
+				v.outcomes[c.Name] = c.Outcomes
+			}
+		}
 		v.roleField, v.subjectField = d.RoleField, d.SubjectField
 		files, err := d.GenerateForDryRun()
 		if err != nil {
@@ -148,6 +168,59 @@ func (v *verifier) streamID(given []EventRef) string {
 		}
 	}
 	return scenarioStream
+}
+
+// handResult reports a scenario whose result a hand-written hook chose
+// (dotnetcqrs reports the same HAND): an error scenario fails (no declared
+// rule refused, and a hook can't be what an error scenario is about); a
+// stateChange scenario is HAND when its expected events fit one of the
+// command's declared alternatives, and fails when they fit none.
+func (v *verifier) handResult(sc Scenario, cmdName, hook string, res *ScenarioResult) {
+	if sc.Kind == KindError {
+		res.Detail = fmt.Sprintf("expected a refusal, but no declared rule refused and the result is the hand-written %s's", hook)
+		return
+	}
+	then, err := sc.EventsThen()
+	if err != nil {
+		res.Detail = err.Error()
+		return
+	}
+	var want []string
+	for _, e := range then.Events {
+		want = append(want, v.eventType(e.EventID))
+	}
+	for _, o := range v.outcomes[cmdName] {
+		if fitsOutcome(want, o) {
+			res.Hand = true
+			res.Detail = fmt.Sprintf("HAND: chosen by the hand-written %s; the expected events fit a declared "+
+				"alternative, and a host's own hooks decide it", hook)
+			return
+		}
+	}
+	res.Detail = fmt.Sprintf("expected [%s], which fits none of the command's alternatives", strings.Join(want, ", "))
+}
+
+// fitsOutcome reports whether events are what alternative o can emit: its
+// events in order, each repeated one any number of times (none included).
+func fitsOutcome(events []string, o scaffold.Outcome) bool {
+	i := 0
+	for _, name := range o.Events {
+		repeated := false
+		for _, r := range o.Repeated {
+			repeated = repeated || r == name
+		}
+		if repeated {
+			for i < len(events) && events[i] == name {
+				i++
+			}
+			continue
+		}
+		if i >= len(events) || events[i] != name {
+			return false
+		}
+		i++
+	}
+	return i == len(events)
 }
 
 // The actor and time a command scenario runs as when it names neither.
@@ -225,7 +298,7 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	defer store.Close()
 
 	rt := functions.NewGojaRuntime(nil)
-	spec, err := functions.LoadDeciderSource(rt, aggregate+".js", file.Source)
+	spec, err := functions.LoadDeciderSourceWithHand(rt, aggregate+".js", file.Source, v.handStandIns[aggregate])
 	if err != nil {
 		res.Detail = "the generated decider did not load: " + err.Error()
 		return
@@ -238,6 +311,11 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 		decider.Command{Name: cmdName, Payload: payload}, commandMeta(ref))
 	if err != nil {
 		res.Detail = "the dry run could not be answered: " + err.Error()
+		return
+	}
+
+	if hook, ok := strings.CutPrefix(run.Message, scaffold.HandMarker); run.Rejected && ok {
+		v.handResult(sc, cmdName, hook, res)
 		return
 	}
 

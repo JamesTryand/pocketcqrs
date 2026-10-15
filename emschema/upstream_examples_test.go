@@ -27,9 +27,57 @@ func verifyExample(t *testing.T, rel string, opts Options) {
 		t.Fatal("the example has no scenarios")
 	}
 	for _, r := range results {
-		if !r.Passed {
+		// HAND: chosen by a hand-written hook, which only a host's own
+		// hooks can check; still never a failure
+		if !r.Passed && !r.Hand {
 			t.Errorf("%s/%s (%s): %s", r.SliceID, r.ScenarioID, r.Name, r.Detail)
 		}
+	}
+}
+
+// handScenarios lists the scenarios verify reported HAND.
+func handScenarios(t *testing.T, rel string, opts Options) map[string]bool {
+	t.Helper()
+	doc, err := Load(fixture(t, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := Map(doc, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := Verify(doc, mapped, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for _, r := range results {
+		if r.Hand {
+			out[r.ScenarioID] = true
+		}
+	}
+	return out
+}
+
+// conditional-outcomes.json (3.12.0): a declared condition (hours over 12
+// logs and flags, with set fixing the reason), a refusal checked before
+// the outcomes, and a hand-written condition (an expense over the limit),
+// which verify reports HAND: only a host's own hook can decide it.
+func TestUpstreamConditionalOutcomesExample(t *testing.T) {
+	verifyExample(t, "examples/conditional-outcomes.json", Options{})
+	hand := handScenarios(t, "examples/conditional-outcomes.json", Options{})
+	if !hand["expense-over-limit"] || len(hand) != 1 {
+		t.Fatalf("exactly the hand-written condition's scenario is HAND: %v", hand)
+	}
+}
+
+// repeated-outcomes.json (3.13.0): a release then one payment per person,
+// hand-written (HAND), and a read model keyed by payment (rowKeyField).
+func TestUpstreamRepeatedOutcomesExample(t *testing.T) {
+	verifyExample(t, "examples/repeated-outcomes.json", Options{})
+	hand := handScenarios(t, "examples/repeated-outcomes.json", Options{})
+	if !hand["two-people-paid"] || !hand["nobody-owed"] || len(hand) != 2 {
+		t.Fatalf("the repeated outcome's scenarios are HAND: %v", hand)
 	}
 }
 

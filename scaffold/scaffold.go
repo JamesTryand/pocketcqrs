@@ -51,6 +51,10 @@ type Domain struct {
 	ReadModels []ReadModel `json:"readModels,omitempty"`
 	// Reactors map this aggregate's events to commands on another one.
 	Reactors []Reactor `json:"reactors,omitempty"`
+	// Folds are events of this aggregate that none of its commands produce
+	// (something else appends them to its streams): the decider folds them
+	// into its state all the same, and a rule or hook can read them.
+	Folds []Event `json:"folds,omitempty"`
 
 	// RoleField and SubjectField name the auth-record fields a read rule
 	// reads the caller's role and data-subject id from ("" = "role" and
@@ -93,6 +97,11 @@ type Command struct {
 	// Refusals are the command's refuseWhen rules (schema 3.10.0/3.11.0),
 	// checked in order after the existence checks.
 	Refusals []Refusal `json:"refusals,omitempty"`
+	// Outcomes are the command's alternatives (schema 3.3.0/3.12.0/3.13.0),
+	// tried in order after the refusals. Without them a command produces
+	// its first event (and a command that may produce several says the rule
+	// is the author's).
+	Outcomes []Outcome `json:"outcomes,omitempty"`
 	// CanBeginAgain marks a Once command that may begin the stream again
 	// after an endsStream event (an assign after an unassign). Without it,
 	// an end is final (D28): the decider refuses to begin an ended stream,
@@ -571,6 +580,7 @@ func (d Domain) Validate() error {
 	}
 
 	d.checkRefusals(add)
+	d.checkOutcomes(add)
 
 	if len(problems) > 0 {
 		return fmt.Errorf("scaffold: %s", strings.Join(problems, "; "))
@@ -640,16 +650,24 @@ func (d Domain) Warnings() []string {
 func (d Domain) Events() []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, c := range d.Commands {
-		for _, e := range c.Events {
-			if seen[e.Name] {
-				continue
-			}
-			seen[e.Name] = true
-			out = append(out, e.Name)
+	for _, e := range d.allEvents() {
+		if seen[e.Name] {
+			continue
 		}
+		seen[e.Name] = true
+		out = append(out, e.Name)
 	}
 	return out
+}
+
+// allEvents is every event of the aggregate: those its commands produce,
+// then those it only folds (Folds).
+func (d Domain) allEvents() []Event {
+	var out []Event
+	for _, c := range d.Commands {
+		out = append(out, c.Events...)
+	}
+	return append(out, d.Folds...)
 }
 
 // Generate produces the slice's files. The caller saves them through the
@@ -708,6 +726,9 @@ func (d Domain) generateJS() ([]File, error) {
 		Source: d.decider(),
 		Kind:   "decider",
 	}}
+	if len(d.Hooks()) > 0 {
+		files = append(files, File{Name: d.HandFile() + ".example", Source: d.jsHandExample(), Kind: "example"})
+	}
 	for _, rm := range d.ReadModels {
 		files = append(files, File{
 			Name:   rm.Collection + ".js",
@@ -730,6 +751,13 @@ func (d Domain) decider() string {
 	events := d.Events()
 
 	fmt.Fprintf(&b, "//@trigger decider %s\n", d.Aggregate)
+	if hooks := d.Hooks(); len(hooks) > 0 {
+		// hand-written outcome hooks (schema 3.12.0 "hand", 3.13.0 repeated),
+		// loaded from the companion file into this decider's own VM; the
+		// decider doesn't load until every one is defined
+		fmt.Fprintf(&b, "//@hand %s\n", d.HandFile())
+		fmt.Fprintf(&b, "//@hooks %s\n", strings.Join(hooks, " "))
+	}
 	fmt.Fprintf(&b, "//@handles %s\n", strings.Join(events, " "))
 	fmt.Fprintf(&b, "//@commands %s\n", strings.Join(commandNames(d.Commands), " "))
 	// //@produces records WHICH command appends WHICH events. //@commands
@@ -776,6 +804,10 @@ func (d Domain) decider() string {
 		}
 		writeJSOwnership(&b, c)
 		writeJSRefusals(&b, c)
+		if len(c.Outcomes) > 0 {
+			writeJSOutcomes(&b, c)
+			continue
+		}
 		// More than one possible event means the description said WHAT can
 		// result, not WHICH applies. The generator must not invent the rule:
 		// it returns the first and says so, and Warnings() counts it so the
