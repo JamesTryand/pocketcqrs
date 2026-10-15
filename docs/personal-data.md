@@ -139,6 +139,13 @@ err = queryroute.Register(se, order.PendingShipmentsQuery, readCfg)
 writer and a cache evictor on every node, seeded from the destroyer's position. Decrypted values
 are cached per process, bounded and never persisted, so warm reads survive a key-service outage.
 
+Give `pii.Wire` an `Outbox` (an `outbox.Open` of your own file) and the key service is called off
+the engine's pass: the destroyer records each erasure there and `Wire` runs its worker, which
+destroys the key and, when the facade fails, tries again later (1 s, 2 s, 4 s … at most an hour),
+never giving up. The evictor then starts before the earliest erasure still waiting, so a key not yet
+destroyed can't have its plaintext cached unseen. `Wire` runs that worker on the context it is
+given, so hand it one that lives as long as the host.
+
 ## Erasing someone
 
 ```

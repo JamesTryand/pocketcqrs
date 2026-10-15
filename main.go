@@ -37,6 +37,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/nodeidentity"
 	"github.com/jamestryand/pocketcqrs/opsport"
 	"github.com/jamestryand/pocketcqrs/outbound"
+	"github.com/jamestryand/pocketcqrs/outbox"
 	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/reactors"
 	"github.com/jamestryand/pocketcqrs/roles"
@@ -909,6 +910,17 @@ func main() {
 		}
 
 		c.FnRuntime = rt
+		// effect functions' work (R4): recorded on the engine's pass, run off
+		// it by the outbox worker started below; the master only, as every
+		// side effect is (see runsSideEffects)
+		if runsSideEffects(c.role) {
+			box, err := outbox.Open(filepath.Join(dataDir, "outbox.db"))
+			if err != nil {
+				return err
+			}
+			c.Outbox = box
+			rt.SetOutbox(box)
+		}
 		loaded, err := functions.LoadDir(rt, e.App, functionsDir)
 		if err != nil {
 			return err
@@ -1186,6 +1198,12 @@ func main() {
 		}
 		if c.batchWriter != nil {
 			bg.Go(c.batchWriter.Run)
+		}
+		if c.Outbox != nil {
+			worker := &outbox.Worker{Store: c.Outbox,
+				Handlers: map[string]outbox.Handler{functions.EffectConsumer: c.State.RunQueuedEffect},
+				Logger:   func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) }}
+			bg.Go(worker.Run)
 		}
 		bg.Go(func(ctx context.Context) {
 			c.idempotency.RunPruner(ctx, time.Hour, idempotencyRetention,

@@ -382,9 +382,11 @@ func printGoWiringSuggestions(cmd *cobra.Command, domains []scaffold.Domain) {
 		if len(d.PIIFields()) > 0 {
 			cmd.Println("\n  // personal data: needs the key-management facade (KMS_FACADE_URL; the host")
 			cmd.Println("  // refuses to start without it). Once, before registering any protected")
-			cmd.Println("  // aggregate; Writer is false on a --cqrsRole=secondary:")
+			cmd.Println("  // aggregate; Writer is false on a --cqrsRole=secondary. box (an outbox.Open of")
+			cmd.Println("  // your own file) takes key destruction off the engine's pass; ctx must live")
+			cmd.Println("  // as long as the host, since Wire runs that outbox's worker on it:")
 			cmd.Println("  piiDeps, err := pii.Wire(ctx, pii.WireOptions{Registry: registry, Engine: engine,")
-			cmd.Println("  \tCheckpoints: store, Loader: store, Writer: true})")
+			cmd.Println("  \tCheckpoints: store, Loader: store, Writer: true, Outbox: box})")
 			break
 		}
 	}

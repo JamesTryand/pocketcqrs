@@ -89,6 +89,8 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 // Run handles due work until ctx is done: each pass takes what is due, then
 // waits until the next entry is due or a nudge says there is new work.
 func (w *Worker) Run(ctx context.Context) {
+	wake := w.Store.subscribe()
+	defer w.Store.unsubscribe(wake)
 	for {
 		if _, err := w.RunOnce(ctx); err != nil {
 			w.log("outbox pass failed", "error", err)
@@ -103,7 +105,7 @@ func (w *Worker) Run(ctx context.Context) {
 		}
 		select {
 		case <-ctx.Done():
-		case <-w.Store.wake:
+		case <-wake:
 		case <-due:
 		}
 		if timer != nil {

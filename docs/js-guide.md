@@ -141,6 +141,12 @@ envelope and the checkpoint advances (poison never blocks the log). See the
 [deadletter CLI](reference/cli.md#deadletter): fix the code, then
 `pocketcqrs deadletter retry all` re-delivers through the *current* code.
 
+An effect function runs **off the engine's pass**, so a slow `$http` call
+never holds up the projections behind it: the engine's delivery only records
+the work in `outbox.db` (beside the other stores, master only), and the
+outbox worker runs the function, the current code after a reload, as soon as
+it is recorded. Still one attempt; a throw still dead-letters.
+
 ### On HTTP
 
 ```js

@@ -27,6 +27,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/consumers"
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/outbox"
 )
 
 // Runtime hosts user-defined functions.
@@ -49,6 +50,9 @@ type GojaRuntime struct {
 	store    *events.Store
 	registry *decider.Registry
 	outbound OutboundDoer
+	// effects is where an effect function's work waits to run off the
+	// engine's pass (R4); nil runs it inline.
+	effects *outbox.Store
 
 	mu      sync.RWMutex
 	fns     []*eventFunction
@@ -104,6 +108,55 @@ func (r *GojaRuntime) SetReader(reader Reader) { r.reader = reader }
 // SetStore installs the event store used for dead-lettering failed
 // deliveries. Without it, failures are only logged.
 func (r *GojaRuntime) SetStore(store *events.Store) { r.store = store }
+
+// SetOutbox has effect functions run from box, off the engine's pass (R4):
+// a delivery only records the work, and an outbox Worker running RunQueued
+// (under EffectConsumer) runs the function. Without one they run inline.
+func (r *GojaRuntime) SetOutbox(box *outbox.Store) { r.effects = box }
+
+// Outbox is the runtime's effect outbox (for a reload to carry over).
+func (r *GojaRuntime) Outbox() *outbox.Store { return r.effects }
+
+// EffectConsumer is the outbox consumer name effect functions' work is
+// recorded under.
+const EffectConsumer = "fn"
+
+// queuedEffect is an effect function's outbox entry.
+type queuedEffect struct {
+	Function string       `json:"function"`
+	Event    events.Event `json:"event"`
+}
+
+// RunQueued runs one queued effect (an outbox.Handler): the function's
+// current code, one attempt, a throw dead-lettered, as an inline delivery
+// does. Work for a function since removed is dropped, and said so.
+func (r *GojaRuntime) RunQueued(ctx context.Context, e outbox.Entry) outbox.Outcome {
+	var q queuedEffect
+	if err := json.Unmarshal(e.Payload, &q); err != nil {
+		r.logger("queued effect unreadable, dropped", "id", e.ID, "error", err)
+		return outbox.Outcome{Done: true}
+	}
+	fn := r.eventFunction(q.Function)
+	if fn == nil {
+		r.logger("queued effect's function is gone, dropped", "function", q.Function, "event", q.Event.ID)
+		return outbox.Outcome{Done: true}
+	}
+	fn.run(ctx, q.Event)
+	return outbox.Outcome{Done: true}
+}
+
+// eventFunction is the registered function named name (the most recent).
+func (r *GojaRuntime) eventFunction(name string) *eventFunction {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out *eventFunction
+	for _, f := range r.fns {
+		if f.name == name {
+			out = f
+		}
+	}
+	return out
+}
 
 // SetRegistry installs the decider registry that JS reactors dispatch
 // through. Without it a reactor fails loudly rather than quietly doing
@@ -217,12 +270,27 @@ func (fn *eventFunction) Apply(ctx context.Context, ev events.Event) error {
 	if !contains(fn.eventTypes, ev.Type) {
 		return nil
 	}
+	if box := fn.runtime.effects; box != nil {
+		// off the engine's pass: recorded once per function and event (a
+		// redelivery is the same entry); failing to record blocks here, so
+		// the checkpoint never passes work nobody will do
+		payload, err := json.Marshal(queuedEffect{Function: fn.name, Event: ev})
+		if err != nil {
+			return err
+		}
+		return box.Enqueue(ctx, fn.Name()+"|"+ev.ID, EffectConsumer, payload, time.Now())
+	}
+	fn.run(ctx, ev)
+	return nil
+}
+
+// run runs the function on ev, dead-lettering a throw.
+func (fn *eventFunction) run(ctx context.Context, ev events.Event) {
 	if err := fn.runtime.runEvent(fn.name, fn.prog, ev); err != nil {
 		fn.runtime.logger("function delivery failed, dead-lettered",
 			"function", fn.name, "position", ev.Position, "error", err)
 		fn.runtime.deadLetter(ctx, fn.Name(), ev, err)
 	}
-	return nil
 }
 
 // deadLetter records a failed delivery if a store is installed.

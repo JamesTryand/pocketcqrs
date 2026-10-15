@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -58,8 +59,11 @@ type Entry struct {
 // Store is an outbox file.
 type Store struct {
 	db *sql.DB
-	// wake tells a waiting Worker there is new work (Enqueue, Worker.Nudge).
-	wake chan struct{}
+	// waiters are the running Workers' wake channels: an Enqueue (or a
+	// Nudge) tells every one, so two workers on one file (each with its own
+	// consumers) never leave one asleep with work due.
+	mu      sync.Mutex
+	waiters []chan struct{}
 }
 
 // Open opens (creating if necessary) the outbox at path.
@@ -74,7 +78,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("outbox: init schema: %w", err)
 	}
-	return &Store{db: db, wake: make(chan struct{}, 1)}, nil
+	return &Store{db: db}, nil
 }
 
 // Close closes the database.
@@ -96,9 +100,33 @@ func (s *Store) Enqueue(ctx context.Context, id, consumer string, payload json.R
 }
 
 func (s *Store) nudge() {
-	select {
-	case s.wake <- struct{}{}:
-	default:
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, w := range s.waiters {
+		select {
+		case w <- struct{}{}:
+		default: // already told
+		}
+	}
+}
+
+// subscribe is a running Worker's wake channel; unsubscribe takes it off.
+func (s *Store) subscribe() chan struct{} {
+	ch := make(chan struct{}, 1)
+	s.mu.Lock()
+	s.waiters = append(s.waiters, ch)
+	s.mu.Unlock()
+	return ch
+}
+
+func (s *Store) unsubscribe(ch chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, w := range s.waiters {
+		if w == ch {
+			s.waiters = append(s.waiters[:i], s.waiters[i+1:]...)
+			return
+		}
 	}
 }
 

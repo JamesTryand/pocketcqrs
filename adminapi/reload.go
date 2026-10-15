@@ -2,9 +2,11 @@ package adminapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -12,6 +14,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/authverify"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
+	"github.com/jamestryand/pocketcqrs/outbox"
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
@@ -81,6 +84,23 @@ func (s *State) CarryCapabilities(fresh *functions.GojaRuntime) {
 	if s.Outbound != nil {
 		fresh.SetOutbound(s.Outbound)
 	}
+	if s.Outbox != nil {
+		fresh.SetOutbox(s.Outbox)
+	}
+}
+
+// RunQueuedEffect runs a queued effect function (the outbox handler for
+// functions.EffectConsumer) on the current runtime: a reload swaps it, so
+// it is read under reloadMu, then run outside the lock, so a slow $http
+// never holds a reload up (work in flight finishes on the code it began).
+func (s *State) RunQueuedEffect(ctx context.Context, e outbox.Entry) outbox.Outcome {
+	s.reloadMu.Lock()
+	rt := s.FnRuntime
+	s.reloadMu.Unlock()
+	if rt == nil {
+		return outbox.Outcome{RetryAt: time.Now().Add(time.Minute), Err: errors.New("function runtime not initialized")}
+	}
+	return rt.RunQueued(ctx, e)
 }
 
 // ProspectiveCommands answers "which aggregates will accept which commands

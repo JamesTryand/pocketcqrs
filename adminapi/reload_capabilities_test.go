@@ -1,11 +1,16 @@
 package adminapi
 
 import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/outbound"
+	"github.com/jamestryand/pocketcqrs/outbox"
 )
 
 func testOutboundClient(t *testing.T) *outbound.Client {
@@ -51,5 +56,36 @@ func TestReloadDoesNotInstallOutboundWhenItWasNeverEnabled(t *testing.T) {
 
 	if fresh.Outbound() != nil {
 		t.Fatal("a nil *outbound.Client was installed as a non-nil interface; $http would exist and panic rather than be absent")
+	}
+}
+
+// The effect outbox is carried onto a reloaded runtime too, or effect
+// functions would quietly go back to running on the engine's pass after
+// the first reload; and the worker's handler runs the CURRENT runtime's
+// code, whatever a reload has swapped in.
+func TestReloadCarriesTheEffectOutbox(t *testing.T) {
+	box, err := outbox.Open(filepath.Join(t.TempDir(), "outbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	s := &State{Outbox: box}
+	fresh := functions.NewGojaRuntime(nil)
+	s.CarryCapabilities(fresh)
+	if fresh.Outbox() != box {
+		t.Fatal("the outbox wasn't carried onto the fresh runtime")
+	}
+
+	var ran []string
+	old := functions.NewGojaRuntime(func(msg string, args ...any) { ran = append(ran, "old:"+msg) })
+	current := functions.NewGojaRuntime(func(msg string, args ...any) { ran = append(ran, "current:"+msg) })
+	s.FnRuntime = old
+	s.FnRuntime = current // a reload
+	if out := s.RunQueuedEffect(context.Background(), outbox.Entry{ID: "x", Consumer: functions.EffectConsumer,
+		Payload: json.RawMessage(`{"function":"gone.js","event":{}}`)}); !out.Done {
+		t.Fatalf("outcome %+v", out)
+	}
+	if len(ran) != 1 || !strings.HasPrefix(ran[0], "current:") {
+		t.Fatalf("not the current runtime that ran the work: %v", ran)
 	}
 }

@@ -259,7 +259,7 @@ func TestKeyDestroyerAndEvictorFollowTheLog(t *testing.T) {
 	cache := NewCache(0)
 	cache.Put("s1", "c", []byte("1")) // would have been refused by the facade; proves it isn't rescanned
 	cache.Put("s2", "c", []byte("2"))
-	if _, err := RegisterCacheEvictor(ctx, engine, cache, store); err != nil {
+	if _, err := RegisterCacheEvictor(ctx, engine, cache, store, nil); err != nil {
 		t.Fatal(err)
 	}
 	engine.Unregister(KeyDestroyerName) // the destroyer lags behind the erasure below

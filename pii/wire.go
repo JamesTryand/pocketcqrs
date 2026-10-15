@@ -8,6 +8,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/consumers"
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/kms"
+	"github.com/jamestryand/pocketcqrs/outbox"
 )
 
 // WireOptions is what a host hands Wire.
@@ -27,6 +28,11 @@ type WireOptions struct {
 	// facade must refuse to start, not quietly use a stand-in.
 	KMS           kms.Client
 	CacheCapacity int
+	// Outbox, when set, takes the key service calls off the engine's pass
+	// (R4): the key destroyer records each erasure there and Wire runs its
+	// worker until ctx is done, so hand Wire a context that lives as long
+	// as the host. Writer only; nil calls the key service from the pass.
+	Outbox *outbox.Store
 }
 
 // Wire sets up everything a host storing personal data needs and returns
@@ -50,9 +56,14 @@ func Wire(ctx context.Context, o WireOptions) (Deps, error) {
 	cache := NewCache(o.CacheCapacity)
 	RegisterDataSubjects(o.Registry)
 	if o.Writer {
-		o.Engine.Register(KeyDestroyer{KMS: client})
+		destroyer := KeyDestroyer{KMS: client, Outbox: o.Outbox}
+		o.Engine.Register(destroyer)
+		if o.Outbox != nil {
+			worker := &outbox.Worker{Store: o.Outbox, Handlers: map[string]outbox.Handler{KeyDestroyerName: destroyer.Destroy}}
+			go worker.Run(ctx)
+		}
 	}
-	if _, err := RegisterCacheEvictor(ctx, o.Engine, cache, o.Checkpoints); err != nil {
+	if _, err := RegisterCacheEvictor(ctx, o.Engine, cache, o.Checkpoints, o.Outbox); err != nil {
 		return Deps{}, fmt.Errorf("pii: register cache evictor: %w", err)
 	}
 	return Deps{KMS: client, Cache: cache, Subjects: StoreSubjectStatus{Loader: o.Loader}}, nil

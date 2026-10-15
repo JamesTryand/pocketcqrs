@@ -170,3 +170,35 @@ func TestNextDueIsAmongTheWorkersOwn(t *testing.T) {
 		t.Fatalf("next due for c: %v %v %v", next, ok, err)
 	}
 }
+
+// Two workers on one outbox (each with its own consumers) are both woken by
+// an enqueue: a nudge taken by one must not leave the other asleep.
+func TestEveryWorkerIsWoken(t *testing.T) {
+	s := open(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan string, 2)
+	for _, consumer := range []string{"a", "b"} {
+		w := &Worker{Store: s, Handlers: map[string]Handler{consumer: func(_ context.Context, e Entry) Outcome {
+			done <- e.Consumer
+			return Outcome{Done: true}
+		}}}
+		go w.Run(ctx)
+	}
+	time.Sleep(200 * time.Millisecond) // both idle
+	for _, consumer := range []string{"a", "b"} {
+		if err := s.Enqueue(ctx, consumer, consumer, json.RawMessage(`{}`), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := map[string]bool{}
+	timeout := time.After(3 * time.Second)
+	for len(got) < 2 {
+		select {
+		case c := <-done:
+			got[c] = true
+		case <-timeout:
+			t.Fatalf("woken: %v", got)
+		}
+	}
+}

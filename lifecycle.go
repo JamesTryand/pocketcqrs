@@ -79,6 +79,9 @@ func (c *components) closeStores() {
 	if c.checkpoints != nil {
 		closeOne("checkpoints.db", c.checkpoints.Close)
 	}
+	if c.State != nil && c.Outbox != nil {
+		closeOne("outbox.db", c.Outbox.Close)
+	}
 	if c.State != nil && c.Store != nil {
 		closeOne("events.db", c.Store.Close)
 	}

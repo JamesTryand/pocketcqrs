@@ -111,6 +111,16 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **Effect functions run off the engine's pass (R4).** On the master the server records each effect
+  function's work in `outbox.db` and its outbox worker runs it (the current code after a reload:
+  `adminapi.State.RunQueuedEffect`); one attempt and a dead letter on a throw, as before.
+  `GojaRuntime.SetOutbox`/`RunQueued`; a runtime with no outbox runs effects inline.
+- **The KMS key destroyer can work from an outbox (R4).** `pii.WireOptions.Outbox`: the destroyer
+  records each erasure and `Wire` runs a worker that destroys the key, retrying a failing facade by
+  due time (1 s doubling to an hour), never giving up. `pii.RegisterCacheEvictor` takes the outbox
+  (breaking: a new parameter) and seeds the evictor before the earliest erasure still waiting, so the
+  evictor's guarantee (every erasure before it has its key destroyed) holds. Two workers on one
+  outbox file are each woken by an enqueue.
 - **An outbox for work that calls out of the process (R4).** New package `outbox`: work recorded in
   its own SQLite file, keyed by what asked for it (a redelivery records it once), and a `Worker` that
   takes each entry when due and hands it to its consumer's `Handler`, which says done or when to try

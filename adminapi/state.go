@@ -23,6 +23,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/outbound"
+	"github.com/jamestryand/pocketcqrs/outbox"
 	"github.com/jamestryand/pocketcqrs/projections"
 )
 
@@ -62,6 +63,11 @@ type State struct {
 	// ReloadFunctions) — never mutate the runtime in place, replace this
 	// field instead, and always under ReloadMu.
 	FnRuntime *functions.GojaRuntime
+
+	// Outbox is where effect functions' work waits to run off the engine's
+	// pass (R4), on the master; nil elsewhere. Every runtime a reload
+	// builds gets it (CarryCapabilities); RunQueuedEffect is its handler.
+	Outbox *outbox.Store
 
 	// Verifier backs remote token verification against the master on a
 	// --cqrsRole=secondary node (F-13). Nil on a single-node deployment or
