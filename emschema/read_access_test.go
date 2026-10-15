@@ -63,9 +63,27 @@ func TestReadAccessReachesTheGeneratedRule(t *testing.T) {
 		t.Errorf("a read model with no access rule is signed-in only:\n%s", managers)
 	}
 
-	// fail closed on the Go target, which doesn't apply these yet
-	if _, err := mapped.Domains[0].GenerateGo(); err == nil || !strings.Contains(err.Error(), "selfAccess") {
-		t.Errorf("the Go target must refuse selfAccess/grantsAccess, got %v", err)
+	// the Go target's read route carries the same rule
+	goFiles, err := mapped.Domains[0].GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var route string
+	for _, f := range goFiles {
+		if f.Name == "timeEntries_query.go" {
+			route = f.Source
+		}
+	}
+	for _, want := range []string{
+		`RequiredRole: []string{"manager"}`,
+		`SelfSubject: "staffId"`,
+		`SelfParam: "mine"`,
+		`{Collection: "projectManagers", MatchField: "staffId", SelectField: "projectId", LocalField: "projectId"}`,
+	} {
+		// gofmt aligns the fields, so compare with spacing collapsed
+		if !strings.Contains(strings.Join(strings.Fields(route), " "), want) {
+			t.Errorf("timeEntries_query.go lacks %q:\n%s", want, route)
+		}
 	}
 }
 

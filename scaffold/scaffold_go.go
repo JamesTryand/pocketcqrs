@@ -292,12 +292,17 @@ func (d Domain) GenerateGo() ([]GoFile, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
-	// fail closed: the Go target's read route doesn't apply these yet, and
-	// generating without them would serve rows the model withholds
+	// self-access reveals the caller's own rows, so every personal-data
+	// column must belong to the same subject the row is selected by
 	for _, rm := range d.ReadModels {
-		if rm.SelfAccess != nil || hasGrant(rm) {
-			return nil, fmt.Errorf("read model %q declares selfAccess or a grantsAccess scope, "+
-				"which the Go target does not generate yet; use the JS target", rm.Collection)
+		if rm.SelfAccess == nil {
+			continue
+		}
+		for _, f := range rm.Fields {
+			if f.PII && f.PIISubject != rm.SelfAccess.SubjectField {
+				return nil, fmt.Errorf("read model %q: selfAccess is by %q but personal-data field %q belongs to %q",
+					rm.Collection, rm.SelfAccess.SubjectField, f.Name, f.PIISubject)
+			}
 		}
 	}
 	if err := d.piiConflicts(); err != nil {
@@ -914,17 +919,12 @@ func queryGo(pkg string, rm ReadModel, on []string) string {
 			piiSubject[f.Name] = f.PIISubject
 		}
 	}
+	// self-access comes from the read model's own declaration (schema
+	// 3.2.0), never from its personal data: a model that doesn't declare it
+	// gives a caller without the role nothing
 	self := ""
-	for _, subj := range piiSubject {
-		if self == "" {
-			self = subj
-		} else if subj != self {
-			self = "" // several subjects: a row could hold someone else's data, so no self-access
-			break
-		}
-	}
-	if self != "" && !seen[self] {
-		self = ""
+	if rm.SelfAccess != nil {
+		self = rm.SelfAccess.SubjectField
 	}
 
 	name := QuerySpecName(rm)
@@ -968,8 +968,8 @@ func queryGo(pkg string, rm ReadModel, on []string) string {
 		b.WriteString("//\n// It holds personal data: values are revealed per page, erased ones read\n")
 		b.WriteString("// {\"$redacted\":true}, pii columns can't be filtered or sorted on, and\n")
 		b.WriteString("// registering locks PocketBase's own record API for the collection to\n// superusers.")
-		if len(rm.RequiredRole) == 0 {
-			b.WriteString(" No requiredRole is declared, so nobody but superusers (and,\n// with SubjectOf, each subject for their own rows) can read it.")
+		if len(rm.RequiredRole) == 0 && rm.SelfAccess == nil && !hasGrant(rm) {
+			b.WriteString(" No requiredRole or selfAccess is declared,\n// so nobody but superusers can read it.")
 		}
 		b.WriteString("\n")
 	}
@@ -994,6 +994,19 @@ func queryGo(pkg string, rm ReadModel, on []string) string {
 	}
 	if self != "" {
 		fmt.Fprintf(&b, "\tSelfSubject: %q,\n", self)
+		if rm.SelfAccess.Param != "" {
+			fmt.Fprintf(&b, "\tSelfParam: %q,\n", rm.SelfAccess.Param)
+		}
+	}
+	if hasGrant(rm) {
+		b.WriteString("\tGrants: []queryroute.Grant{\n")
+		for _, sc := range rm.Scopes {
+			if sc.GrantsAccess {
+				fmt.Fprintf(&b, "\t\t{Collection: %q, MatchField: %q, SelectField: %q, LocalField: %q},\n",
+					sc.Via.Collection, sc.Via.MatchParamTo, sc.Via.SelectField, sc.Via.FilterLocalField)
+			}
+		}
+		b.WriteString("\t},\n")
 	}
 	if len(matches) > 0 {
 		fmt.Fprintf(&b, "\tMatch: %s.Fields,\n", SearchSpecName(rm))

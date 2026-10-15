@@ -105,8 +105,12 @@ record's own id), matching the server's `--cqrsRoleField`/`--cqrsSubjectField`,
 which also stop a user setting either on themselves. An empty subject id
 matches nothing. `selfAccess.param` only ever narrows, so on this target it is
 the client's filter (`staffId = @request.auth.staffId`), named in a comment.
-`selfAccess.via` is refused. The Go target refuses `selfAccess` and
-`grantsAccess` until its read route applies them.
+`selfAccess.via` is refused. On the Go target the same rule is applied by the
+generated read route (`queryroute.Spec`'s `RequiredRole`, `SelfSubject`,
+`SelfParam` and `Grants`, with the host's `ResolveOwnRole` and `SubjectOf`
+hooks; registering without the hooks a rule needs fails), and a read model with
+any access rule has PocketBase's own record API locked to superusers so the
+route is the only way to read it.
 
 ### Untagged aggregates are refused, not guessed
 

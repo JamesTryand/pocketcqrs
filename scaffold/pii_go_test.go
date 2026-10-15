@@ -69,8 +69,7 @@ func TestPIIDomainGeneratesAProtectorAndEnvelopeColumns(t *testing.T) {
 		"var CustomersQuery = queryroute.Spec{",
 		`Columns: []string{"customerId", "email", "name"}`,
 		`PII: map[string]string{"email": "customerId"}`,
-		`SelfSubject: "customerId"`,
-		"nobody but superusers", // no requiredRole declared: closed by default, and said so
+		"nobody but superusers", // no requiredRole or selfAccess declared: closed by default, and said so
 		"var CustomersSearch = searchindex.Spec{",
 		`{Param: "email", Field: "email", Mode: "exact", Normalize: "email", PII: true}`,
 		`{Param: "name", Field: "name", Mode: "prefix", MinPrefix: 2}`,
@@ -79,6 +78,34 @@ func TestPIIDomainGeneratesAProtectorAndEnvelopeColumns(t *testing.T) {
 		if !strings.Contains(q, want) {
 			t.Errorf("query spec is missing %q:\n%s", want, src["customers_query.go"])
 		}
+	}
+}
+
+// Self-access is the read model's own declaration (schema 3.2.0), never
+// implied by its personal data: undeclared, a caller without the role reads
+// nothing; declared, it reaches the spec with its param.
+func TestQuerySpecSelfAccessComesFromTheDeclaration(t *testing.T) {
+	d := piiDomain()
+	rm := d.ReadModels[0]
+	if src := queryGo("customer", rm, []string{"CustomerRegistered"}); strings.Contains(src, "SelfSubject") {
+		t.Errorf("no selfAccess declared, so none in the spec:\n%s", src)
+	}
+	rm.SelfAccess = &SelfAccess{SubjectField: "customerId", Param: "mine"}
+	src := queryGo("customer", rm, []string{"CustomerRegistered"})
+	for _, want := range []string{`SelfSubject: "customerId"`, `SelfParam: "mine"`} {
+		if !strings.Contains(src, want) {
+			t.Errorf("declared selfAccess must reach the spec (%s):\n%s", want, src)
+		}
+	}
+}
+
+// Self-access by one subject over a row holding another subject's personal
+// data would reveal it to the wrong person: refused.
+func TestSelfAccessOverAnotherSubjectsDataIsRefused(t *testing.T) {
+	d := piiDomain()
+	d.ReadModels[0].SelfAccess = &SelfAccess{SubjectField: "name"}
+	if _, err := d.GenerateGo(); err == nil || !strings.Contains(err.Error(), "selfAccess") {
+		t.Fatalf("want a refusal, got %v", err)
 	}
 }
 

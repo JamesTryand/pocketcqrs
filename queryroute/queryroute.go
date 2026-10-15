@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,12 +62,34 @@ type Spec struct {
 	// each subject for their own rows): personal data is never readable by
 	// default.
 	RequiredRole []string
-	// SelfSubject is the one subject column every pii column shares, when
-	// there is one; self-access is only possible then.
+	// SelfSubject is the column naming each row's data subject, from the
+	// read model's selfAccess (schema 3.2.0): a caller without
+	// RequiredRole sees the rows whose SelfSubject is their own subject id
+	// (Config.SubjectOf). Every pii column must share it.
 	SelfSubject string
+	// SelfParam (selfAccess.param, 3.8.0) narrows any caller, role holders
+	// too, to their own rows when the request carries it; its value is
+	// ignored.
+	SelfParam string
+	// Grants are the read model's granting scopes (3.8.0): a caller without
+	// RequiredRole also sees the rows each admits for their subject id.
+	Grants []Grant
 	// Match is the read model's match filters (schema 3.1.0): each Param is
 	// a search, answered from search.db, even over a pii column.
 	Match []searchindex.Field
+}
+
+// Grant is one granting scope: a row is admitted when a row of Collection
+// has MatchField equal to the caller's subject id and SelectField equal to
+// this row's LocalField (a project manager's projects, say).
+type Grant struct {
+	Collection, MatchField, SelectField, LocalField string
+}
+
+// hasAccessRules reports whether reading the collection depends on who the
+// caller is.
+func (s Spec) hasAccessRules() bool {
+	return len(s.RequiredRole) > 0 || s.SelfSubject != "" || len(s.Grants) > 0
 }
 
 // Config is the host's part.
@@ -127,8 +150,29 @@ func (s Spec) validate(cfg Config) error {
 	if len(s.RequiredRole) > 0 && cfg.ResolveOwnRole == nil {
 		return fmt.Errorf("queryroute %s: declares requiredRole %v but no ResolveOwnRole hook", s.Collection, s.RequiredRole)
 	}
+	if (s.SelfSubject != "" || len(s.Grants) > 0) && cfg.SubjectOf == nil {
+		return fmt.Errorf("queryroute %s: declares self or granted access but no SubjectOf hook", s.Collection)
+	}
+	if s.SelfSubject != "" && !cols[s.SelfSubject] {
+		return fmt.Errorf("queryroute %s: self-access subject %q is not a column", s.Collection, s.SelfSubject)
+	}
+	if s.SelfParam != "" && s.SelfSubject == "" {
+		return fmt.Errorf("queryroute %s: SelfParam needs a SelfSubject", s.Collection)
+	}
+	for _, g := range s.Grants {
+		for _, name := range []string{g.Collection, g.MatchField, g.SelectField, g.LocalField} {
+			if !identifier.MatchString(name) {
+				return fmt.Errorf("queryroute %s: grant names %q, which is not an identifier", s.Collection, name)
+			}
+		}
+		if !cols[g.LocalField] {
+			return fmt.Errorf("queryroute %s: grant filters on %q, which is not a column", s.Collection, g.LocalField)
+		}
+	}
 	return nil
 }
+
+var identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Register adds GET /api/cqrs/rm/{collection} and, for a collection with
 // personal-data columns, locks PocketBase's own record API to superusers.
@@ -140,7 +184,10 @@ func Register(se *core.ServeEvent, spec Spec, cfg Config) error {
 	if cfg.Logger == nil {
 		cfg.Logger = func(string, ...any) {}
 	}
-	if len(spec.PII) > 0 {
+	// the route applies the access rules; PocketBase's own record API
+	// would serve the rows without them, so it is closed to all but
+	// superusers whenever there are any (or the rows hold personal data)
+	if len(spec.PII) > 0 || spec.hasAccessRules() {
 		if err := LockRecordAPI(se.App, spec.Collection, cfg.Logger); err != nil {
 			return err
 		}
@@ -179,26 +226,55 @@ func fail(re *core.RequestEvent, status int, msg string) error {
 }
 
 func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
-	// who may see what
-	selfOnly := ""
-	if !re.HasSuperuserAuth() && (len(spec.RequiredRole) > 0 || len(spec.PII) > 0) {
+	// who may see what (the whole rule of schema 3.8.0): a role holder sees
+	// every row; anyone else their own rows (SelfSubject) and those a
+	// granting scope admits for their subject id; with none of those, a
+	// read model holding personal data is superusers' only
+	subjectOf := func() string {
+		if cfg.SubjectOf == nil || re.Auth == nil || re.HasSuperuserAuth() {
+			return ""
+		}
+		return cfg.SubjectOf(re.Auth)
+	}
+	var access []string
+	params := dbx.Params{}
+	if !re.HasSuperuserAuth() && (spec.hasAccessRules() || len(spec.PII) > 0) {
 		role := ""
 		if cfg.ResolveOwnRole != nil {
 			role = cfg.ResolveOwnRole(re.Auth)
 		}
 		if !hasRole(spec.RequiredRole, role) {
-			subject := ""
-			if cfg.SubjectOf != nil && spec.SelfSubject != "" {
-				subject = cfg.SubjectOf(re.Auth)
-			}
-			if subject == "" {
+			subject := subjectOf()
+			if subject == "" || (spec.SelfSubject == "" && len(spec.Grants) == 0) {
 				return fail(re, http.StatusForbidden, "not authorized to read "+spec.Collection)
 			}
-			selfOnly = subject
+			params["self"] = subject
+			if spec.SelfSubject != "" {
+				access = append(access, spec.SelfSubject+" = {:self}")
+			}
+			for i, g := range spec.Grants {
+				// one aliased join per grant: both conditions on one row
+				via := fmt.Sprintf("@collection.%s:grant%d", g.Collection, i)
+				access = append(access, fmt.Sprintf("(%s.%s ?= {:self} && %s.%s ?= %s)",
+					via, g.MatchField, via, g.SelectField, g.LocalField))
+			}
 		}
 	}
 
 	query := re.Request.URL.Query()
+	// selfAccess.param narrows anyone, role holders too, to their own rows
+	narrowToSelf := false
+	if spec.SelfParam != "" {
+		if _, ok := query[spec.SelfParam]; ok {
+			delete(query, spec.SelfParam)
+			subject := subjectOf()
+			if subject == "" {
+				return re.JSON(http.StatusOK, map[string]any{"items": []map[string]any{}, "page": 1, "perPage": defaultPerPage})
+			}
+			params["self"] = subject
+			narrowToSelf = true
+		}
+	}
 	// match filters first: each is a search in search.db, narrowing the page
 	// to the row keys every one of them found
 	var keys []string
@@ -233,10 +309,14 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 		return re.JSON(http.StatusOK, map[string]any{"items": []map[string]any{}, "page": page, "perPage": perPage})
 	}
 
-	filter, params, sortExpr, page, perPage, err := parseQuery(query, spec)
+	filter, queryParams, sortExpr, page, perPage, err := parseQuery(query, spec)
 	if err != nil {
 		return fail(re, http.StatusBadRequest, err.Error())
 	}
+	for k, v := range params {
+		queryParams[k] = v
+	}
+	params = queryParams
 	if searched {
 		or := make([]string, len(keys))
 		for i, k := range keys {
@@ -246,9 +326,11 @@ func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
 		}
 		filter = append(filter, "("+strings.Join(or, " || ")+")")
 	}
-	if selfOnly != "" {
+	if len(access) > 0 {
+		filter = append(filter, "("+strings.Join(access, " || ")+")")
+	}
+	if narrowToSelf {
 		filter = append(filter, spec.SelfSubject+" = {:self}")
-		params["self"] = selfOnly
 	}
 
 	records, err := re.App.FindRecordsByFilter(spec.Collection, strings.Join(filter, " && "), sortExpr,

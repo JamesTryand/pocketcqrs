@@ -100,8 +100,13 @@ All notable changes to PocketCQRS. Format loosely follows
   PocketBase enforces the whole access rule on lists, views and realtime. A read model declaring
   none is `authenticated` (3.8.0: every signed-in caller), no longer the deployment default.
   `schema import --roleField`/`--subjectField` name the auth-record fields the rules read. Tested
-  by running the generated rules through PocketBase's own record API as each kind of caller. The Go
-  target refuses `selfAccess`/`grantsAccess` until its read route applies them.
+  by running the generated rules through PocketBase's own record API as each kind of caller.
+- **The Go target's read route applies the same rule.** `queryroute.Spec` gains `SelfParam` and
+  `Grants`, and `SelfSubject` now comes from the read model's `selfAccess`, not from its personal
+  data. **Breaking:** a personal-data read model that declares no `selfAccess` no longer lets a
+  subject read their own rows through `SubjectOf`; declare `selfAccess` in the model. Registering a
+  route with self or granted access and no `SubjectOf` hook fails. Any read model with an access
+  rule has its record API locked to superusers, not only personal-data ones.
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.

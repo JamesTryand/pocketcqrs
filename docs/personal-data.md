@@ -52,12 +52,14 @@ a missing key is a `500` wiring fault.
 Each read model gets a generated route spec (`<collection>_query.go`) served by package
 `queryroute`.
 
-- **Who sees what.** A caller with the read model's `requiredRole` sees every row; superusers
-  see everything. With the optional `SubjectOf` hook, a person without the role sees **only their
-  own rows**. That is the "show me my email" case, and it is valid: GDPR Art. 15 gives people the
-  right to their own data. Self-access works only when every pii column of the read model shares
-  one subject column. **A read model holding personal data with no `requiredRole` is closed by
-  default** (superusers, plus self-access), and the importer warns about it.
+- **Who sees what** is the read model's own declaration (schema 3.8.0), the same rule as on
+  the JS target. A caller with its `requiredRole` sees every row; superusers see everything. When
+  it declares `selfAccess`, a person without the role sees **their own rows**, by the
+  `SubjectOf` hook. That is the "show me my email" case, and it is valid: GDPR Art. 15 gives people
+  the right to their own data. Its subject must be the subject of every pii column (the importer
+  refuses otherwise). A granting scope (`grantsAccess`) admits the rows it selects for them too.
+  **A read model holding personal data that declares none of these is superusers' only**:
+  personal data is never readable by default, and self-access is no longer implied by the data.
 - **Erased values** read `{"$redacted":true}`, distinct from `null`.
 - **A pii column can't be filtered or sorted on** (`400`): it is ciphertext.
 - **Registering the route locks the collection.** Its List and View rules are set to
