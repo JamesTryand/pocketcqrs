@@ -47,7 +47,6 @@ func wantRefused(t *testing.T, got []string, want ...string) {
 func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 	cases := map[string][]string{
 		"examples/conditional-outcomes.json": {"/slices/0/outcomes"},
-		"examples/state-ownership.json":      {"/commands/update-expense/requiredOwnership/stateField"},
 		"examples/rows-per-list-item.json":   {"/readModels/invoice-parts/rowsPerListItem"},
 		"examples/hand-projection.json":      {"/readModels/late-orders/projection"},
 		"examples/repeated-outcomes.json":    {"/readModels/payments/rowKeyField", "/slices/0/outcomes"},

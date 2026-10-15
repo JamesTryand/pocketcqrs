@@ -348,6 +348,10 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 					"error": "dependency unavailable: the key service is unavailable; retry later",
 					"hint":  "nothing was applied; safe to retry shortly",
 				})
+			case decider.IsForbidden(err):
+				// the decider refused WHO sent it (schema 3.15.0: only the
+				// owner its own state names). Not cached (no side effect).
+				return re.JSON(http.StatusForbidden, map[string]string{"error": err.Error()})
 			case decider.IsRejection(err):
 				// the decider's own verdict: the only 400 on this path. Not
 				// cached for idempotency replay (no side effect happened).

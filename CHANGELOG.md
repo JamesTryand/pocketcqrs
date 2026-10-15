@@ -101,6 +101,14 @@ All notable changes to PocketCQRS. Format loosely follows
   none is `authenticated` (3.8.0: every signed-in caller), no longer the deployment default.
   `schema import --roleField`/`--subjectField` name the auth-record fields the rules read. Tested
   by running the generated rules through PocketBase's own record API as each kind of caller.
+- **Ownership from the aggregate's own state (schema 3.15.0).** `requiredOwnership.stateField` is
+  generated into both deciders: after the existence checks, the owner field is compared with the
+  command's actor, and anyone else is refused as forbidden. New `decider.Forbidden`/`IsForbidden`;
+  a JS decider throws an `Error` named `Forbidden`; the gateway answers `403`. Lint accepts
+  `stateField` without `via` (it wrongly rejected it) and refuses both, or `bypassRoles` with
+  `stateField`. `authorize` builds no read-model policy for it. **Breaking (Go API):**
+  `emschema.CommandOwnership.Via` is a pointer. Upstream's `state-ownership.json` imports and
+  passes.
 - **Refusals are generated (schema 3.10.0/3.11.0).** A command's `refuseWhen` rules become ordered
   checks in both generated deciders after the existence checks, with one shared semantics (unset is
   its own value; a numeric comparison with an unset value never holds). Fields are checked at

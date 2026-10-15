@@ -320,11 +320,18 @@ func lintCommandAuth(doc *Document, id string, c Command, r *Report) {
 		}
 	}
 	if own := c.RequiredOwnership; own != nil {
-		if own.Via.ReadModelID == "" || own.Via.KeyField == "" || own.Via.OwnerField == "" {
+		switch {
+		case (own.Via == nil) == (own.StateField == ""):
+			r.errorf("command %q: requiredOwnership names exactly one of via or stateField (schema 3.15.0)", id)
+		case own.StateField != "" && len(own.BypassRoles) > 0:
+			r.errorf("command %q: requiredOwnership.bypassRoles goes with via only: a decision knows its actor, not their role", id)
+		case own.Via != nil && (own.Via.ReadModelID == "" || own.Via.KeyField == "" || own.Via.OwnerField == ""):
 			r.errorf("command %q: requiredOwnership is missing one of via.readModelId/keyField/ownerField", id)
-		} else if _, ok := doc.ReadModels[own.Via.ReadModelID]; !ok {
-			r.errorf("command %q: requiredOwnership references read model %q, which does not exist",
-				id, own.Via.ReadModelID)
+		case own.Via != nil:
+			if _, ok := doc.ReadModels[own.Via.ReadModelID]; !ok {
+				r.errorf("command %q: requiredOwnership references read model %q, which does not exist",
+					id, own.Via.ReadModelID)
+			}
 		}
 	}
 	if sc := c.Scope; sc != nil {

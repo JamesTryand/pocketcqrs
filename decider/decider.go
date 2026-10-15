@@ -41,6 +41,23 @@ func IsRejection(err error) bool {
 	return errors.As(err, &r)
 }
 
+// ForbiddenError is a decider refusing a command because of WHO sent it
+// (schema 3.15.0 requiredOwnership.stateField: only the owner its own state
+// names), as opposed to what the command says. The gateway answers it with
+// 403, not 400. A JS decider throws an Error named "Forbidden".
+type ForbiddenError struct{ Message string }
+
+func (e *ForbiddenError) Error() string { return e.Message }
+
+// Forbidden returns the forbidden verdict with message.
+func Forbidden(message string) error { return &ForbiddenError{Message: message} }
+
+// IsForbidden reports whether err is (or wraps) a forbidden verdict.
+func IsForbidden(err error) bool {
+	var f *ForbiddenError
+	return errors.As(err, &f)
+}
+
 // ErrRevealRequired is what a decide returns (wrapped) when it read a stored
 // personal-data value that hasn't been decrypted yet (package pii's
 // Value.Get on a Pending value). It isn't a verdict: a shell with a

@@ -60,6 +60,7 @@ func (d Domain) checkRefusals(add func(string, ...any)) {
 			}
 		}
 	}
+	d.checkOwnership(add, state)
 	for _, c := range d.Commands {
 		payload := map[string]Field{}
 		for _, f := range c.Fields {
@@ -106,7 +107,40 @@ func (d Domain) checkRefusals(add func(string, ...any)) {
 	}
 }
 
+// Ownership is requiredOwnership.stateField (schema 3.15.0).
+type Ownership struct {
+	StateField string `json:"stateField"`
+	Message    string `json:"message"`
+}
+
+// checkOwnership: the owner field is a text field of the aggregate's state.
+func (d Domain) checkOwnership(add func(string, ...any), state map[string]Field) {
+	for _, c := range d.Commands {
+		if c.OwnedBy == nil {
+			continue
+		}
+		f, ok := state[c.OwnedBy.StateField]
+		switch {
+		case !ok:
+			add("command %q: requiredOwnership.stateField %q is not a field any event of this aggregate carries", c.Name, c.OwnedBy.StateField)
+		case f.Type != "text":
+			add("command %q: requiredOwnership.stateField %q is %s; an owner is text", c.Name, c.OwnedBy.StateField, f.Type)
+		}
+	}
+}
+
 // ---- JS ----
+
+func writeJSOwnership(b *strings.Builder, c Command) {
+	if c.OwnedBy == nil {
+		return
+	}
+	field, _ := json.Marshal(c.OwnedBy.StateField)
+	msg, _ := json.Marshal(c.OwnedBy.Message)
+	b.WriteString("      // requiredOwnership.stateField (schema 3.15.0): only the owner its own state\n")
+	b.WriteString("      // names; anyone else is refused as forbidden (an Error named Forbidden)\n")
+	fmt.Fprintf(b, "      if (state[%s] !== command.actor) { var forbidden = new Error(%s); forbidden.name = 'Forbidden'; throw forbidden; }\n", field, msg)
+}
 
 // jsRefusalHelpers are the rule semantics both targets share: a missing or
 // null value is unset; text, numbers and bools compare by value and type; a
@@ -316,6 +350,16 @@ func goRefusalCondition(c RefusalCondition) string {
 		return cmp("c >= 0")
 	}
 	return "false"
+}
+
+func writeGoOwnership(b *strings.Builder, c Command) {
+	if c.OwnedBy == nil {
+		return
+	}
+	b.WriteString("\t\t\t\t// requiredOwnership.stateField (schema 3.15.0): only the owner its own\n")
+	b.WriteString("\t\t\t\t// state names; anyone else is refused as forbidden\n")
+	fmt.Fprintf(b, "\t\t\t\tif s.%s != cmd.Actor {\n\t\t\t\t\treturn nil, decider.Forbidden(%q)\n\t\t\t\t}\n",
+		ExportName(c.OwnedBy.StateField), c.OwnedBy.Message)
 }
 
 func writeGoRefusals(b *strings.Builder, c Command) {

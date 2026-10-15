@@ -26,7 +26,7 @@ func testDoc() *emschema.Document {
 				}},
 			"update-time-entry": {Name: "Update Time Entry", Aggregate: "time_entry",
 				RequiredOwnership: &emschema.CommandOwnership{
-					Via: emschema.CommandOwnershipVia{ReadModelID: "time-entries", KeyField: "entryId", OwnerField: "staffId"},
+					Via: &emschema.CommandOwnershipVia{ReadModelID: "time-entries", KeyField: "entryId", OwnerField: "staffId"},
 				}},
 			"flag-time-entry": {Name: "Flag Time Entry", Aggregate: "time_entry",
 				Scope: &emschema.CommandScope{
@@ -96,7 +96,7 @@ func TestBuildPoliciesRefusesAMissingAggregateTag(t *testing.T) {
 func TestBuildPoliciesRefusesADanglingReadModelReference(t *testing.T) {
 	doc := &emschema.Document{Commands: map[string]emschema.Command{
 		"update-thing": {Name: "Update Thing", Aggregate: "thing", RequiredOwnership: &emschema.CommandOwnership{
-			Via: emschema.CommandOwnershipVia{ReadModelID: "does-not-exist", KeyField: "id", OwnerField: "ownerId"},
+			Via: &emschema.CommandOwnershipVia{ReadModelID: "does-not-exist", KeyField: "id", OwnerField: "ownerId"},
 		}},
 	}}
 	if _, err := BuildPolicies(doc); err == nil {

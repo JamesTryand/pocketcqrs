@@ -115,7 +115,7 @@ func TestRequiredOwnershipLint(t *testing.T) {
 	doc := baseValidDoc()
 	cmd := doc.Commands["create-thing"]
 	cmd.RequiredOwnership = &CommandOwnership{
-		Via: CommandOwnershipVia{ReadModelID: "things", KeyField: "thingId", OwnerField: "ownerId"},
+		Via: &CommandOwnershipVia{ReadModelID: "things", KeyField: "thingId", OwnerField: "ownerId"},
 	}
 	doc.Commands["create-thing"] = cmd
 	if err := Lint(doc).Err(); err != nil {
@@ -125,7 +125,7 @@ func TestRequiredOwnershipLint(t *testing.T) {
 	bad := baseValidDoc()
 	c := bad.Commands["create-thing"]
 	c.RequiredOwnership = &CommandOwnership{
-		Via: CommandOwnershipVia{ReadModelID: "does-not-exist", KeyField: "thingId", OwnerField: "ownerId"},
+		Via: &CommandOwnershipVia{ReadModelID: "does-not-exist", KeyField: "thingId", OwnerField: "ownerId"},
 	}
 	bad.Commands["create-thing"] = c
 	err := Lint(bad).Err()
@@ -169,5 +169,36 @@ func TestScopeLint(t *testing.T) {
 func TestCommandAuthNoDeclarationLintsClean(t *testing.T) {
 	if err := Lint(baseValidDoc()).Err(); err != nil {
 		t.Fatalf("a document declaring none of the four keywords must still lint clean: %v", err)
+	}
+}
+
+// requiredOwnership is exactly one of via or stateField (schema 3.15.0), and
+// bypassRoles goes with via only: a decision knows its actor, not their role.
+func TestOwnershipFormsAreLinted(t *testing.T) {
+	via := &CommandOwnershipVia{ReadModelID: "things", KeyField: "thingId", OwnerField: "ownerId"}
+	for name, c := range map[string]struct {
+		own *CommandOwnership
+		ok  bool
+	}{
+		"via":                 {&CommandOwnership{Via: via}, true},
+		"stateField":          {&CommandOwnership{StateField: "ownerId"}, true},
+		"both":                {&CommandOwnership{Via: via, StateField: "ownerId"}, false},
+		"neither":             {&CommandOwnership{}, false},
+		"stateField + bypass": {&CommandOwnership{StateField: "ownerId", BypassRoles: []string{"manager"}}, false},
+	} {
+		doc := &Document{
+			EventModelingSchemaVersion: SchemaVersion,
+			Commands:                   map[string]Command{"c": {Name: "C", Aggregate: "thing", RequiredOwnership: c.own}},
+			ReadModels:                 map[string]ReadModel{"things": {Name: "Things"}},
+		}
+		var ownErrs []string
+		for _, e := range Lint(doc).Errors {
+			if strings.Contains(e, "requiredOwnership") {
+				ownErrs = append(ownErrs, e)
+			}
+		}
+		if (len(ownErrs) == 0) != c.ok {
+			t.Errorf("%s: ok=%v, errors %v", name, c.ok, ownErrs)
+		}
 	}
 }

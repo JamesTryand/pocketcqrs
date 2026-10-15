@@ -85,6 +85,10 @@ type Command struct {
 	// RequiresExisting marks a command that needs the aggregate to exist
 	// already — everything after the create, usually.
 	RequiresExisting bool `json:"requiresExisting,omitempty"`
+	// OwnedBy (schema 3.15.0 requiredOwnership.stateField): only the actor
+	// this state field names may send the command; anyone else is refused
+	// as forbidden, with Message. Checked after the existence checks.
+	OwnedBy *Ownership `json:"ownedBy,omitempty"`
 	// Refusals are the command's refuseWhen rules (schema 3.10.0/3.11.0),
 	// checked in order after the existence checks.
 	Refusals []Refusal `json:"refusals,omitempty"`
@@ -764,6 +768,7 @@ func (d Domain) decider() string {
 		if c.RequiresExisting {
 			fmt.Fprintf(&b, "      if (!state.exists) { throw new Error('%s does not exist'); }\n", d.Aggregate)
 		}
+		writeJSOwnership(&b, c)
 		writeJSRefusals(&b, c)
 		// More than one possible event means the description said WHAT can
 		// result, not WHICH applies. The generator must not invent the rule:

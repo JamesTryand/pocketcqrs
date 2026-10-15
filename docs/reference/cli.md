@@ -556,10 +556,10 @@ authorization declarations that read a read model:
 - `scope` (`resolveVia`, `memberOfVia`): refused while either row is missing.
 
 They fail closed, so a rebuild refuses commands it would otherwise allow until
-the replay passes those rows. Schema 3.15's `requiredOwnership.stateField`
-(ownership decided from the aggregate's own stream) removes the first case
-once it is supported; `scope` remains a read of another aggregate's read
-model.
+the replay passes those rows. Declare ownership with schema 3.15's
+`requiredOwnership.stateField` instead (decided from the aggregate's own
+stream, never a read model) and the first case goes away; `scope` remains a
+read of another aggregate's read model.
 
 ## deadletter
 

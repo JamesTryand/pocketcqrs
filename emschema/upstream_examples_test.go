@@ -66,3 +66,10 @@ func TestRemovalMustBeBuiltFrom(t *testing.T) {
 func TestUpstreamRefusalsExample(t *testing.T) {
 	verifyExample(t, "examples/refusals.json", Options{})
 }
+
+// state-ownership.json: requiredOwnership.stateField (3.15.0), the
+// aggregate deciding who owns it from its own state, refusing anyone else
+// with the declared message; scenarios name their actor.
+func TestUpstreamStateOwnershipExample(t *testing.T) {
+	verifyExample(t, "examples/state-ownership.json", Options{})
+}

@@ -408,6 +408,9 @@ func rejection(err error) error {
 	if obj, ok := v.(*goja.Object); ok {
 		if m := obj.Get("message"); m != nil && !goja.IsUndefined(m) && !goja.IsNull(m) {
 			msg := m.String()
+			if n := obj.Get("name"); n != nil && !goja.IsUndefined(n) && n.String() == "Forbidden" {
+				return decider.Forbidden(msg)
+			}
 			if n := obj.Get("name"); n != nil && !goja.IsUndefined(n) && n.String() != "Error" {
 				msg = n.String() + ": " + msg
 			}

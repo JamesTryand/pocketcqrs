@@ -319,6 +319,7 @@ func (m *mapper) command(agg, id string, c Command, eventIDs []string, once, req
 		Once:             once,
 		RequiresExisting: requiresExisting,
 		Refusals:         m.mapRefusals(id, c.RefuseWhen),
+		OwnedBy:          m.mapStateOwnership(agg, id, c.RequiredOwnership),
 	}
 	for _, evID := range eventIDs {
 		ev := m.doc.Events[evID]
@@ -524,6 +525,20 @@ func (m *mapper) mapScopes(id string, rm ReadModel) []scaffold.ReadModelScope {
 		})
 	}
 	return out
+}
+
+// mapStateOwnership carries requiredOwnership.stateField (schema 3.15.0)
+// through, with dotnetcqrs's default message when none is declared.
+func (m *mapper) mapStateOwnership(agg, id string, own *CommandOwnership) *scaffold.Ownership {
+	if own == nil || own.StateField == "" {
+		return nil
+	}
+	field := scaffold.SanitizeName(own.StateField)
+	msg := own.Message
+	if msg == "" {
+		msg = fmt.Sprintf("only this %s's own %s may %s", agg, field, m.commandName(id))
+	}
+	return &scaffold.Ownership{StateField: field, Message: msg}
 }
 
 // mapRefusals carries a command's refuseWhen rules through, field names

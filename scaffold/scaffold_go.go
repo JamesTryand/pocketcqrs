@@ -479,6 +479,7 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 		if c.RequiresExisting {
 			fmt.Fprintf(&b, "\t\t\t\tif !s.Exists {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", d.Aggregate+" does not exist")
 		}
+		writeGoOwnership(&b, c)
 		writeGoRefusals(&b, c)
 		if len(c.Events) > 1 {
 			names := eventNames(c.Events)

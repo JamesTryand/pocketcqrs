@@ -137,7 +137,9 @@ func BuildPolicies(doc *emschema.Document) (map[Key]Policy, error) {
 				RequiredRole: append([]string(nil), fg.RequiredRole...),
 			}
 		}
-		if own := cmd.RequiredOwnership; own != nil {
+		// stateField ownership (schema 3.15.0) is decided by the aggregate
+		// itself, from its own stream: no policy here reads a projection
+		if own := cmd.RequiredOwnership; own != nil && own.Via != nil {
 			collection, err := resolveCollection(doc, id, "requiredOwnership.via", own.Via.ReadModelID)
 			if err != nil {
 				return nil, err

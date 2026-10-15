@@ -101,11 +101,19 @@ func TestRefusals(t *testing.T) {
 // message, and that an unset value (no hours sent) never trips a numeric
 // rule.
 func TestGoRefusalsRun(t *testing.T) {
+	runGeneratedGo(t, refusalDomain(), refusalBehaviour)
+}
+
+// runGeneratedGo generates d for the Go target into its own module, with
+// behaviour beside it as a test file, and runs `go test` there: the
+// generated code compiled and exercised, not just read.
+func runGeneratedGo(t *testing.T, d Domain, behaviour string) {
+	t.Helper()
 	repoRoot, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := refusalDomain().GenerateGo()
+	files, err := d.GenerateGo()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +128,7 @@ func TestGoRefusalsRun(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "refusal_behaviour_test.go"), []byte(refusalBehaviour), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "behaviour_test.go"), []byte(behaviour), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	env := append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
@@ -132,7 +140,7 @@ func TestGoRefusalsRun(t *testing.T) {
 	run := exec.Command("go", "test", "./...")
 	run.Dir, run.Env = dir, env
 	if out, err := run.CombinedOutput(); err != nil {
-		t.Fatalf("the generated refusals misbehave:\n%s", out)
+		t.Fatalf("the generated code misbehaves:\n%s", out)
 	}
 }
 

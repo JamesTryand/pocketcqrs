@@ -193,8 +193,15 @@ type CommandFieldGatedRole struct {
 // CommandOwnership is command.requiredOwnership's shape — see
 // Command.RequiredOwnership.
 type CommandOwnership struct {
-	BypassRoles []string            `json:"bypassRoles,omitempty"`
-	Via         CommandOwnershipVia `json:"via"`
+	BypassRoles []string             `json:"bypassRoles,omitempty"`
+	Via         *CommandOwnershipVia `json:"via,omitempty"`
+	// StateField (schema 3.15.0), instead of Via: the field of the
+	// aggregate's own state naming its owner. The aggregate's decision
+	// compares it with the command's actor and refuses anyone else as
+	// forbidden, with Message if given. No read model is consulted, so it
+	// never lags.
+	StateField string `json:"stateField,omitempty"`
+	Message    string `json:"message,omitempty"`
 }
 
 // CommandOwnershipVia names the read model that resolves the command's

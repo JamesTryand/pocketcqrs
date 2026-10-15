@@ -81,7 +81,7 @@ and the pointer starts with the file's path.
 Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
 `outcomes`, ingresses, delays, schedules and `elapsed`, automation `effect`,
 partitioning, a read model's `rowKeyField`,
-`requiredOwnership.stateField`, `rowsPerListItem`, the `sumOfItems` and
+`rowsPerListItem`, the `sumOfItems` and
 `byEvent` derivations, and `projection`. Each leaves this list as it is
 implemented.
 
@@ -125,6 +125,18 @@ targets share these semantics; the Go decider keeps the folded event values in
 field that isn't there, comparing personal data, comparing a non-number
 numerically or asking a non-list whether it `contains` something is refused at
 import.
+
+### Ownership from the aggregate's own state
+
+`requiredOwnership.stateField` (3.15.0) is decided by the aggregate: after the
+existence checks, the generated decider compares that field of its own state
+with the command's actor and refuses anyone else as **forbidden** (the gateway
+answers `403`, not `400`), with the declared `message` or
+`only this <aggregate>'s own <field> may <Command>`. No read model is read, so
+the first command after a create is never refused while a projection catches
+up. A JS decider throws an `Error` named `Forbidden`; a Go decider returns
+`decider.Forbidden`. `requiredOwnership` is exactly one of `via` and
+`stateField`, and `bypassRoles` goes with `via` only.
 
 ### Removals
 
