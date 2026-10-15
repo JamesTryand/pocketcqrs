@@ -111,6 +111,17 @@ func resolveRuleValue(value string) string {
 	}
 }
 
+// readRule is the collection's List/View rule. Precedence: its own
+// //@rule, else the deployment-wide --cqrsSchemaDefaultRule, else public
+// (the pre-Item-9 default).
+func (s *SchemaSpec) readRule(defaultRule string) string {
+	rule := defaultRule
+	if s.RuleOverride != nil {
+		rule = *s.RuleOverride
+	}
+	return resolveRuleValue(rule)
+}
+
 // uniqueIndexSQL builds the key index DDL. Names are regex-validated above.
 func (s *SchemaSpec) uniqueIndexSQL() string {
 	return fmt.Sprintf("CREATE UNIQUE INDEX idx_%s_%s ON %s (%s)", s.Collection, s.Key, s.Collection, s.Key)
@@ -161,7 +172,18 @@ func reconcileBase(app core.App, spec *ProjectionSpec, s *SchemaSpec, defaultRul
 		return createCollection(app, s, defaultRule)
 	}
 
+	// The read rule follows the declaration on every reconcile, not only at
+	// creation: an access rule added to the model must reach a collection
+	// that already exists, or it stays as open as it was first made.
 	changed := false
+	want := s.readRule(defaultRule)
+	if col.ListRule == nil || *col.ListRule != want || col.ViewRule == nil || *col.ViewRule != want {
+		spec.runtime.logger("schema read rule changed to follow the declaration",
+			"collection", s.Collection, "rule", want)
+		col.ListRule = types.Pointer(want)
+		col.ViewRule = types.Pointer(want)
+		changed = true
+	}
 	for _, f := range s.Fields {
 		if f.Type == "relation" {
 			continue // pass 2
@@ -238,16 +260,8 @@ func reconcileRelations(app core.App, spec *ProjectionSpec, s *SchemaSpec) error
 func createCollection(app core.App, s *SchemaSpec, defaultRule string) error {
 	col := core.NewBaseCollection(s.Collection)
 	// read side: writes are rejected by the writeguard regardless of this
-	// rule. Precedence: the collection's own //@rule, else the
-	// deployment-wide --cqrsSchemaDefaultRule, else public (unchanged
-	// pre-Item-9 default). Never reached again once the collection exists
-	// -- reconcileBase only calls this for a brand-new collection, so an
-	// existing collection's rule is never touched by a later reload.
-	rule := defaultRule
-	if s.RuleOverride != nil {
-		rule = *s.RuleOverride
-	}
-	expr := resolveRuleValue(rule)
+	// rule (see readRule; reconcileBase keeps it in step afterwards)
+	expr := s.readRule(defaultRule)
 	col.ListRule = types.Pointer(expr)
 	col.ViewRule = types.Pointer(expr)
 	for _, f := range s.Fields {

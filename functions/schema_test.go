@@ -147,49 +147,6 @@ func TestCreateCollectionDeploymentDefaultAppliesWithNoDirective(t *testing.T) {
 	}
 }
 
-func TestReconcileSchemasRuleAdditiveSafeOnReload(t *testing.T) {
-	app, err := tests.NewTestApp()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer app.Cleanup()
-
-	rt := NewGojaRuntime(nil)
-	spec := func() []*ProjectionSpec {
-		return []*ProjectionSpec{{
-			Name:    "p",
-			Schemas: []*SchemaSpec{{Collection: "notes", Key: "k", Fields: []FieldSpec{{Name: "k", Type: "text"}}}},
-			runtime: rt,
-		}}
-	}
-
-	// first reconcile: no default set, so the collection is created public
-	if err := ReconcileSchemas(app, spec(), ""); err != nil {
-		t.Fatal(err)
-	}
-	col, err := app.FindCollectionByNameOrId("notes")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if col.ListRule == nil || *col.ListRule != "" {
-		t.Fatalf("first reconcile: ListRule = %v, want empty", col.ListRule)
-	}
-
-	// second reconcile (simulating a hot reload) flips the deployment
-	// default -- an ALREADY-EXISTING collection must not be touched, the
-	// same guarantee field changes already get
-	if err := ReconcileSchemas(app, spec(), "authenticated"); err != nil {
-		t.Fatal(err)
-	}
-	col, err = app.FindCollectionByNameOrId("notes")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if col.ListRule == nil || *col.ListRule != "" {
-		t.Fatalf("second reconcile changed an existing collection's rule: %v", col.ListRule)
-	}
-}
-
 func TestReconcileSchemasRelations(t *testing.T) {
 	app, err := tests.NewTestApp()
 	if err != nil {
@@ -381,5 +338,57 @@ func TestSeedRandomDeterministic(t *testing.T) {
 		if v < 0 || v >= 1 {
 			t.Fatalf("out of range: %v", v)
 		}
+	}
+}
+
+// A collection's read rule follows its declaration on every reconcile (boot
+// and every reload), not only when the collection is created. Before, a
+// changed //@rule (an access rule added to the model, say) never reached an
+// existing collection, which stayed as open as it was first made.
+func TestExistingCollectionRuleFollowsTheDeclaration(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	rt := NewGojaRuntime(func(string, ...any) {})
+	spec := &SchemaSpec{Collection: "entries", Key: "k", Fields: []FieldSpec{{Name: "k", Type: "text"}}}
+	specs := []*ProjectionSpec{{Name: "p", Schemas: []*SchemaSpec{spec}, runtime: rt}}
+	rules := func() (string, string) {
+		col, err := app.FindCollectionByNameOrId("entries")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if col.ListRule == nil || col.ViewRule == nil {
+			return "<superuser>", "<superuser>"
+		}
+		return *col.ListRule, *col.ViewRule
+	}
+
+	if err := ReconcileSchemas(app, specs, "public"); err != nil {
+		t.Fatal(err)
+	}
+	if l, v := rules(); l != "" || v != "" {
+		t.Fatalf("created public: %q %q", l, v)
+	}
+
+	// the model gains an access rule
+	role := `@request.auth.role = "manager"`
+	spec.RuleOverride = &role
+	if err := ReconcileSchemas(app, specs, "public"); err != nil {
+		t.Fatal(err)
+	}
+	if l, v := rules(); l != role || v != role {
+		t.Fatalf("the declared rule must reach the existing collection: %q %q", l, v)
+	}
+
+	// and when the directive goes, the deployment default applies again
+	spec.RuleOverride = nil
+	if err := ReconcileSchemas(app, specs, "authenticated"); err != nil {
+		t.Fatal(err)
+	}
+	if l, v := rules(); l != `@request.auth.id != ""` || v != `@request.auth.id != ""` {
+		t.Fatalf("back to the deployment default: %q %q", l, v)
 	}
 }

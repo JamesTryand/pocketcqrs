@@ -82,9 +82,9 @@ and kept). Relation targets may be other declared collections (any order) or
 pre-existing ones (migration-created, auth collections). A relation whose
 target collection does not exist fails the reconcile.
 
-A newly created collection's `ListRule`/`ViewRule` defaults to public
-(`""`), or `--cqrsSchemaDefaultRule` when the deployment sets one — see
-`//@rule` below to override that per collection. Writes are rejected by the
+A collection's `ListRule`/`ViewRule` defaults to public (`""`), or
+`--cqrsSchemaDefaultRule` when the deployment sets one — see `//@rule` below
+to override that per collection. It is kept in step on every reconcile. Writes are rejected by the
 writeguard either way.
 
 ## `//@key <field>`
@@ -125,10 +125,14 @@ one of:
 ```
 
 A `//@rule` naming a collection this file has no `//@schema` for is a load
-error, same posture as an unpaired `//@key`. **Only applies when the
-collection is first created** — reconcile never rewrites an existing
-collection's rule on a later boot or reload, the same additive-only
-guarantee field changes already get.
+error, same posture as an unpaired `//@key`. **The rule follows the
+declaration**: every boot and every reload sets an existing collection's
+`ListRule`/`ViewRule` to what the file (or the deployment default) now says,
+and logs the change. An access rule added to the model therefore reaches a
+collection that already exists. Fields stay additive-only; rules do not,
+because a rule that only applied at creation left a collection as open as it
+was first made. Set a rule here, not in PocketBase's admin UI: the next
+reconcile puts the declared one back.
 
 ## `//@trigger decider <aggregate>`
 

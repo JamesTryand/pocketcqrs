@@ -225,20 +225,20 @@ func main() {
 		"register this repo's example domains (task, order) and their collections; off by default — pocketcqrs ships empty",
 	)
 
-	// Item 9: //@schema-created collections default to public ListRule/
-	// ViewRule (writes stay write-guarded regardless). This flag changes
-	// the deployment-wide default; a //@rule directive in a function file
-	// overrides it per collection. Neither ever touches an already-existing
-	// collection's rule — reconcile stays additive-only, same guarantee
-	// field changes already get.
+	// Item 9: //@schema collections default to public ListRule/ViewRule
+	// (writes stay write-guarded regardless). This flag changes the
+	// deployment-wide default; a //@rule directive in a function file
+	// overrides it per collection. Every reconcile (boot and reload) keeps
+	// an existing collection's rule in step with what is declared, so an
+	// access rule added to the model reaches it.
 	var schemaDefaultRule string
 	app.RootCmd.PersistentFlags().StringVar(
 		&schemaDefaultRule,
 		"cqrsSchemaDefaultRule",
 		"",
-		`default ListRule/ViewRule for newly created //@schema collections: "public" (default), `+
+		`default ListRule/ViewRule for //@schema collections: "public" (default), `+
 			`"authenticated", or a raw PocketBase rule expression. A //@rule <collection> <value> `+
-			"directive overrides this per collection. Never changes an existing collection's rule.",
+			"directive overrides this per collection. Existing collections follow it on every boot and reload.",
 	)
 
 	// Item 12: the address entralogin.go's callback handler POSTs to for

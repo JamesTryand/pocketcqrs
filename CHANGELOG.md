@@ -82,6 +82,11 @@ All notable changes to PocketCQRS. Format loosely follows
   `scope`) refuses until it catches up: see [docs/reference/cli.md](docs/reference/cli.md#projection).
   The dashboard's Consumers page has a **Rebuild** button on each projection's row, which makes the
   same request.
+- **A `//@schema` collection's read rule follows its declaration on every boot and reload.** It was
+  set only when the collection was created (Item 9's additive-only stance), so an access rule added
+  to the model never reached an existing collection, which stayed as open as it was first made. Now
+  reconcile sets `ListRule`/`ViewRule` to the `//@rule` (or `--cqrsSchemaDefaultRule`) every time,
+  and logs a change. A rule set by hand in PocketBase's admin UI is put back to the declared one.
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.
