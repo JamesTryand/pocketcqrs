@@ -5,6 +5,15 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ## Unreleased
 
+### Security
+
+- **Erasure is closed by default (E1).** With no `gateway.Config.Authorize` hook every command is
+  allowed, so any signed-in user (or anyone, with `AllowAnonymous`) could send
+  `dataSubject/{id}/EraseSubject` for any subject and destroy their key, irreversibly. The gateway
+  now refuses every `dataSubject` command with `403`, recording nothing, until a hook is wired; then
+  the hook decides, as for any command. Same rule as dotnetcqrs's gateway since 0.19.0. **Breaking**
+  for a host that erases without a hook: wire one. See [docs/personal-data.md](docs/personal-data.md).
+
 ### Changed
 
 - **`schema import` fails closed.** It used to drop every key it didn't read, so a document using a

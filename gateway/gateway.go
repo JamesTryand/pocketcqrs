@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/pocketbase/pocketbase/apis"
@@ -20,6 +21,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/idempotency"
 	"github.com/jamestryand/pocketcqrs/kms"
+	"github.com/jamestryand/pocketcqrs/pii"
 )
 
 // Config controls the gateway behavior.
@@ -227,6 +229,17 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		// envelopes along, never come through here.
 		if hasPIIEnvelope(payload) {
 			return apis.NewBadRequestError(`command payload contains a "$pii" object; send personal data as plaintext, the platform encrypts it`, nil)
+		}
+
+		// Erasure destroys a key and can't be undone, and with no Authorize
+		// hook every command is allowed, so the built-in dataSubject
+		// aggregate fails closed: none of its commands is accepted until the
+		// host wires a policy deciding who may erase whom (E1, as
+		// dotnetcqrs's gateway since 0.19.0). Nothing is recorded.
+		if cfg.Authorize == nil && strings.EqualFold(aggregate, pii.SubjectAggregate) {
+			return re.JSON(http.StatusForbidden, map[string]string{
+				"error": "erasure commands are refused until the host wires an Authorize policy for them; nothing was recorded",
+			})
 		}
 
 		if cfg.Authorize != nil {

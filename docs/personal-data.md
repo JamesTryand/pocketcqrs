@@ -125,5 +125,9 @@ caches drop the subject, and the search indexes delete their rows. From then on,
 `{"$redacted":true}` and new personal data for that id is refused with `410`. **Erasure has a
 bounded lag** (it is a projection of the event), not instant effect.
 
-Who may erase whom is not yet declarable in the document. A read-side and erasure ownership ask is
-filed with the schema project; until then, guard the command with the gateway's `Authorize` hook.
+**Erasure is closed until you decide who may do it.** With no `Authorize` hook on the gateway,
+every command is allowed, so the gateway refuses every `dataSubject` command with `403` and records
+nothing. Wire `gateway.Config.Authorize` with a policy saying who may erase whom (an administrator
+role, say). Once a hook is wired, `dataSubject` commands go through it like any other command. A
+document can't declare this yet: schema 3.2.0's `dataSubjects` is refused on import (it authorises a
+*request* for erasure, which pocketcqrs doesn't model yet).
