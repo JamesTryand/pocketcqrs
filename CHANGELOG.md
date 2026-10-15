@@ -111,6 +111,10 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **Fixed: a toggle's events merge their own fields too.** An event a toggle derives from was a
+  derivation trigger only, so flagging an entry set `cleared` but never the reason it carried. Its
+  fields now land on its row as well, in both projections, as dotnetcqrs seeds them. Count, sum and
+  groupBy drivers, which are another stream's, still don't merge.
 - **Fixed: an automation whose scenarios show its target stream both fresh and already there is an
   upsert,** as dotnetcqrs maps it, not the stream's create. Two automations recording on one ledger
   were both its create, and the import stopped ("a stream has one beginning"); the timesheets model

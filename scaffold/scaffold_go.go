@@ -739,6 +739,20 @@ func goByEvent(src string, rm ReadModel, values map[string]map[string]any) strin
 	return src + b.String()
 }
 
+// toggleEvents is the events a toggle derives from: on the row's own
+// stream, so they also merge their fields onto it.
+func toggleEvents(derived map[string][]derivedAction) map[string]bool {
+	out := map[string]bool{}
+	for ev, acts := range derived {
+		for _, a := range acts {
+			if a.kind == DerivationToggle && !a.isGroupBy {
+				out[ev] = true
+			}
+		}
+	}
+	return out
+}
+
 func dedupe(list []string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -785,6 +799,7 @@ func (d Domain) projectionGoBody(pkg string, rm ReadModel) string {
 	// merged generically, which is the one simplification this generator
 	// makes (see the codegen-handwrite-gaps write-up for the rationale).
 	mergeEvents := subtractStrings(on, derived)
+	seeds := toggleEvents(derived) // they merge too: see projectionBody
 	plainColumns := plainColumnNames(rm.Fields, rm.Key)
 	usesToggle, usesCount, usesSum := false, false, false
 	usesGroupByCount, usesGroupBySum := false, false
@@ -804,7 +819,7 @@ func (d Domain) projectionGoBody(pkg string, rm ReadModel) string {
 			}
 		}
 	}
-	usesJSON := len(mergeEvents) > 0 || usesCount || usesSum || usesGroupByCount || usesGroupBySum
+	usesJSON := len(mergeEvents) > 0 || len(seeds) > 0 || usesCount || usesSum || usesGroupByCount || usesGroupBySum
 
 	writeProjectionImports(&b, usesJSON)
 	writeProjectionHeader(&b, d, rm, ctor, typeName)
@@ -823,10 +838,15 @@ func (d Domain) projectionGoBody(pkg string, rm ReadModel) string {
 	}
 	for _, evName := range order {
 		fmt.Fprintf(&b, "\tcase %q:\n", evName)
-		acts := derived[evName]
-		for i, a := range acts {
-			call := a.call()
-			if i == len(acts)-1 {
+		calls := make([]string, 0, len(derived[evName])+1)
+		if seeds[evName] {
+			calls = append(calls, "p.applyMerge(ctx, ev)")
+		}
+		for _, a := range derived[evName] {
+			calls = append(calls, a.call())
+		}
+		for i, call := range calls {
+			if i == len(calls)-1 {
 				fmt.Fprintf(&b, "\t\treturn %s\n", call)
 			} else {
 				fmt.Fprintf(&b, "\t\tif err := %s; err != nil {\n\t\t\treturn err\n\t\t}\n", call)
@@ -849,7 +869,7 @@ func (d Domain) projectionGoBody(pkg string, rm ReadModel) string {
 	}
 	b.WriteString("\treturn rec, nil\n}\n\n")
 
-	if len(mergeEvents) > 0 {
+	if len(mergeEvents) > 0 || len(seeds) > 0 {
 		fmt.Fprintf(&b, "func (p *%s) applyMerge(ctx context.Context, ev events.Event) error {\n", typeName)
 		b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n")
 		b.WriteString("\tvar data map[string]any\n")

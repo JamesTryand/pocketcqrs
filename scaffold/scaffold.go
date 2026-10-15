@@ -1005,6 +1005,10 @@ func (d Domain) projectionBody(rm ReadModel) string {
 	// as a derivation trigger only, never also merged generically, the same
 	// simplification scaffold_go.go's projectionGo makes.
 	mergeEvents := subtractStrings(on, derived)
+	// a toggle's events are on the row's own stream, so they merge their
+	// fields too (dotnetcqrs seeds them); count/sum/groupBy drivers are
+	// another stream's, keyed by their own field, and don't
+	seeds := toggleEvents(derived)
 	plainFields := make([]Field, 0, len(fields))
 	for _, f := range fields {
 		if f.Derivation == nil {
@@ -1029,14 +1033,20 @@ func (d Domain) projectionBody(rm ReadModel) string {
 		b.WriteString("      return applyMerge(event);\n")
 	}
 	for _, evName := range order {
-		acts := derived[evName]
+		ops := make([]string, 0, len(derived[evName])+1)
+		if seeds[evName] {
+			ops = append(ops, "applyMerge(event)")
+		}
+		for _, a := range derived[evName] {
+			ops = append(ops, jsDerivedOp(a))
+		}
 		fmt.Fprintf(&b, "    case '%s':\n", evName)
-		if len(acts) == 1 {
-			fmt.Fprintf(&b, "      return %s;\n", jsDerivedOp(acts[0]))
+		if len(ops) == 1 {
+			fmt.Fprintf(&b, "      return %s;\n", ops[0])
 		} else {
 			b.WriteString("      return [\n")
-			for _, a := range acts {
-				fmt.Fprintf(&b, "        %s,\n", jsDerivedOp(a))
+			for _, op := range ops {
+				fmt.Fprintf(&b, "        %s,\n", op)
 			}
 			b.WriteString("      ];\n")
 		}
@@ -1044,7 +1054,7 @@ func (d Domain) projectionBody(rm ReadModel) string {
 	b.WriteString("    default:\n      return;\n")
 	b.WriteString("  }\n}\n\n")
 
-	if len(mergeEvents) > 0 {
+	if len(mergeEvents) > 0 || len(seeds) > 0 {
 		b.WriteString("function applyMerge(event) {\n")
 		fmt.Fprintf(&b, "  const fields = { %s: event.aggregateId };\n", rm.Key)
 		b.WriteString("  for (const name of Object.keys(event.data || {})) {\n")
