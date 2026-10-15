@@ -95,16 +95,6 @@ func ExportEvents(ctx context.Context, store *events.Store, aggregates []string,
 	return count, nil
 }
 
-// checkpointStore is a local, minimal mirror of consumers.CheckpointStore
-// (Checkpoint/SaveCheckpoint) — *events.Store satisfies it structurally.
-// Defined here, not imported from consumers, so packs gains no new
-// dependency edge just for this: packs already depends on functions, and
-// must not also depend on consumers.
-type checkpointStore interface {
-	Checkpoint(ctx context.Context, name string) (int64, error)
-	SaveCheckpoint(ctx context.Context, name string, position int64) error
-}
-
 // ImportEventsResult summarizes an ImportEvents call (a real one or a
 // dry run).
 type ImportEventsResult struct {
@@ -116,34 +106,28 @@ type ImportEventsResult struct {
 	Imported int
 	// Streams lists the (aggregate, aggregateId) pairs touched, sorted.
 	Streams []string
-	// AdvancedCheckpoints maps consumer name -> the position its checkpoint
-	// was (or would be) fast-forwarded to, for every effect-tier consumer
-	// (reactors and event-triggered effect functions) skipped past the
-	// imported batch. Pure projections are deliberately absent: they
-	// replay the imported history instead of skipping it.
-	AdvancedCheckpoints map[string]int64
 }
 
-// ImportEvents reads evtsFile (as written by ExportEvents), bulk-inserts via
-// store.ImportEvents (refusing on any stream-key or aggregate-name
-// collision), then advances every currently-registered EFFECT-tier
-// consumer's checkpoint — reactors (name prefix "reactor:" or
-// "fn-reactor:") AND event-triggered effect functions (prefix "fn:") — past
-// the batch's max position, so nothing with a real-world side effect
-// re-fires against events that already happened elsewhere. Pure projections
-// (Go and JS) are deliberately excluded: they replay safely (the existing
-// `projection rebuild` mechanism already proves this) and are exactly what
-// should catch up on the imported history so the merged/sliced data
-// actually shows up in read models.
+// ImportEvents reads evtsFile (as written by ExportEvents) and bulk-inserts
+// via store.ImportEvents, refusing on any stream-key or aggregate-name
+// collision. The store marks every imported event (events.ImportMarker):
+// they already happened at the source deployment, side effects included, so
+// effect-tier consumers (reactors, event-triggered functions, the external
+// caller) fold them without acting on them, and projections apply them so
+// the imported history shows up in read models (see consumers.Effect).
 //
-// If dryRun is true, the collision check and the would-be checkpoint
-// advances are computed and returned, but store.ImportEvents is never
-// called and no checkpoint is saved — nothing is written.
+// No checkpoint is touched. This used to fast-forward every effect
+// consumer's checkpoint past the batch, which also skipped whatever a
+// lagging consumer had not reached before the import, and was saved after
+// the import committed, so a running server could act on the imported
+// events in between. The marker holds whatever a consumer's lag, on replay,
+// and with a server running.
 //
-// consumerNames is the caller's engine.Names() snapshot (a *consumers.Engine
-// in the running app). An empty evtsFile (no events) is a no-op, matching
-// Store.ImportEvents' own empty-batch no-op.
-func ImportEvents(ctx context.Context, store *events.Store, checkpoints checkpointStore, consumerNames []string, evtsFile string, dryRun bool) (*ImportEventsResult, error) {
+// If dryRun is true, the collision check runs and the counts are returned,
+// but store.ImportEvents is never called: nothing is written. An empty
+// evtsFile (no events) is a no-op, matching Store.ImportEvents' own
+// empty-batch no-op.
+func ImportEvents(ctx context.Context, store *events.Store, evtsFile string, dryRun bool) (*ImportEventsResult, error) {
 	f, err := os.Open(evtsFile)
 	if err != nil {
 		return nil, fmt.Errorf("packs: %s: %w", eventsFile, err)
@@ -186,7 +170,6 @@ func ImportEvents(ctx context.Context, store *events.Store, checkpoints checkpoi
 	sort.Strings(streams)
 	result.Streams = streams
 
-	var maxPos int64
 	if dryRun {
 		// Runs the identical collision check ImportEvents itself uses
 		// (Store.CheckImportCollisions), then computes the position the
@@ -210,36 +193,13 @@ func ImportEvents(ctx context.Context, store *events.Store, checkpoints checkpoi
 		if err := store.CheckImportCollisions(ctx, batch); err != nil {
 			return nil, err
 		}
-		current, err := store.MaxPosition(ctx)
-		if err != nil {
-			return nil, err
-		}
-		maxPos = current + int64(len(batch))
 		result.Imported = len(batch)
-	} else {
-		imported, err := store.ImportEvents(ctx, batch)
-		if err != nil {
-			return nil, err
-		}
-		result.Imported = len(imported)
-		for _, ev := range imported {
-			if ev.Position > maxPos {
-				maxPos = ev.Position
-			}
-		}
+		return result, nil
 	}
-
-	advanced := map[string]int64{}
-	for _, name := range consumerNames {
-		if strings.HasPrefix(name, "reactor:") || strings.HasPrefix(name, "fn-reactor:") || strings.HasPrefix(name, "fn:") {
-			advanced[name] = maxPos
-			if !dryRun {
-				if err := checkpoints.SaveCheckpoint(ctx, name, maxPos); err != nil {
-					return nil, fmt.Errorf("packs: advancing checkpoint %q: %w", name, err)
-				}
-			}
-		}
+	imported, err := store.ImportEvents(ctx, batch)
+	if err != nil {
+		return nil, err
 	}
-	result.AdvancedCheckpoints = advanced
+	result.Imported = len(imported)
 	return result, nil
 }

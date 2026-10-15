@@ -48,6 +48,11 @@ type ReactorSpec struct {
 // decision that goes the other way — see reactors.Dispatch.
 func (s *ReactorSpec) Name() string { return "fn-reactor:" + s.Reactor }
 
+// IsEffect implements consumers.Effect: a reactor dispatches commands, so
+// an imported event is not acted on. reactTo is pure and keeps no state, so
+// there is nothing to fold.
+func (s *ReactorSpec) IsEffect() bool { return true }
+
 // Apply implements consumers.Consumer: runs reactTo() for a matching event and
 // dispatches whatever it returned.
 //

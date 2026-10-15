@@ -49,6 +49,48 @@ func IsReadModel(c Consumer) bool {
 	return owns
 }
 
+// Effect is an optional interface a Consumer implements to say it acts on
+// the world: dispatches commands (a reactor), calls out (an event-triggered
+// function, the external caller), sends mail. An event brought in by an
+// import (events.IsImported) already happened at another deployment, side
+// effects included, so the engine does not Apply it to an effect consumer.
+// It is not hidden either: a consumer that folds its own state from the
+// events (a process manager, which must never read a projection instead)
+// implements Folder and is handed the event there, so its running state is
+// right for the next native event. Its checkpoint passes the event as usual.
+//
+// This is the one place the skip lives, for every effect consumer, whatever
+// its lag, on replay, and with a server running: no checkpoint is moved by
+// the import itself.
+type Effect interface {
+	IsEffect() bool
+}
+
+// Folder is implemented by an Effect consumer that folds state from the
+// events it is given: Fold takes an imported event into that state without
+// acting on it.
+type Folder interface {
+	Fold(ctx context.Context, ev events.Event) error
+}
+
+// IsEffect reports whether c acts on the world (see Effect).
+func IsEffect(c Consumer) bool {
+	e, ok := c.(Effect)
+	return ok && e.IsEffect()
+}
+
+// deliver hands ev to c: Apply, except that an effect consumer folds an
+// imported event instead of acting on it (see Effect).
+func deliver(ctx context.Context, c Consumer, ev events.Event) error {
+	if IsEffect(c) && events.IsImported(ev) {
+		if f, ok := c.(Folder); ok {
+			return f.Fold(ctx, ev)
+		}
+		return nil
+	}
+	return c.Apply(ctx, ev)
+}
+
 // OwnCheckpoints is an optional interface a Consumer implements to keep its
 // position somewhere other than the engine's checkpoint store. For a consumer
 // whose progress belongs to the process rather than the database: the
@@ -481,7 +523,7 @@ func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer, head *int64) 
 			// the event about to be applied is the oldest one not yet applied
 			pendingSince = e.createdAt(ev)
 			e.record(name, progress{checkpoint: pos, head: head, pendingSince: pendingSince, blocked: blocked})
-			if err := c.Apply(ctx, ev); err != nil {
+			if err := deliver(ctx, c, ev); err != nil {
 				e.logger("consumer apply error",
 					"consumer", name, "position", ev.Position, "error", err)
 				return fail(err)

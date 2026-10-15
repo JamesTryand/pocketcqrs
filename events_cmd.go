@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -63,17 +62,17 @@ func newEventsCommand(c *components, functionsDir *string) *cobra.Command {
 				return err
 			}
 			// Precondition (events-db-slice-merge-scope.md §4): the pack's
-			// own code must already be imported and active, or a same-pack
-			// reactor/effect function wouldn't exist in c.Engine.Names()
-			// yet and would start from checkpoint 0 — exactly the bug this
-			// whole mechanism exists to prevent, just for a same-pack
-			// consumer instead of a pre-existing one.
+			// own code is imported first. Side effects no longer depend on
+			// it (imported events are marked, so a reactor or effect
+			// function registered later folds them without acting); it
+			// keeps the pack's projections there to build its read models
+			// from the imported history as soon as it lands.
 			if err := requirePackCodeImported(manifest, *functionsDir); err != nil {
 				return err
 			}
 
 			evtsFile := filepath.Join(packDir, "events.ndjson")
-			result, err := packs.ImportEvents(context.Background(), c.Store, c.Store, c.Engine.Names(), evtsFile, dryRun)
+			result, err := packs.ImportEvents(context.Background(), c.Store, evtsFile, dryRun)
 			if err != nil {
 				return err
 			}
@@ -86,21 +85,13 @@ func newEventsCommand(c *components, functionsDir *string) *cobra.Command {
 			for _, s := range result.Streams {
 				cmd.Printf("  %s\n", s)
 			}
-			if len(result.AdvancedCheckpoints) > 0 {
-				cmd.Printf("Effect-tier checkpoints advanced past the imported batch%s:\n", banner)
-				names := make([]string, 0, len(result.AdvancedCheckpoints))
-				for n := range result.AdvancedCheckpoints {
-					names = append(names, n)
-				}
-				sort.Strings(names)
-				for _, n := range names {
-					cmd.Printf("  %s -> %d\n", n, result.AdvancedCheckpoints[n])
-				}
+			if result.Imported > 0 {
+				cmd.Println("Imported events are marked: projections apply them, reactors and effect functions do not act on them.")
 			}
 			return nil
 		},
 	}
-	imp.Flags().Bool("dry-run", false, "preview the import (collision check + would-be checkpoint advances) without writing")
+	imp.Flags().Bool("dry-run", false, "preview the import (collision check and counts) without writing")
 	cmd.AddCommand(imp)
 
 	return cmd

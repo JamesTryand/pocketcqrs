@@ -63,6 +63,19 @@ func (c *consumer) Apply(ctx context.Context, ev events.Event) error {
 	return Dispatch(ctx, c.registry, c.reactor.Name(), ev, c.reactor.React(ev), c.logger, c.warn)
 }
 
+// IsEffect implements consumers.Effect: a reactor dispatches commands, so
+// an imported event (which already happened elsewhere) is folded, not acted
+// on.
+func (c *consumer) IsEffect() bool { return true }
+
+// Fold implements consumers.Folder: the reactor sees the imported event, so
+// whatever it folds from its events stays right, and its reactions are
+// dropped.
+func (c *consumer) Fold(_ context.Context, ev events.Event) error {
+	_ = c.reactor.React(ev)
+	return nil
+}
+
 // Dispatcher is the slice of *decider.Registry that Dispatch needs. It is an
 // interface so the retry-vs-continue split below can be tested directly:
 // ErrConcurrency is genuinely hard to provoke against a real registry (it

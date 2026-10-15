@@ -322,6 +322,9 @@ func (s *Store) Append(ctx context.Context, aggregate, aggregateID string, expec
 	if err := checkEncoded(evts); err != nil {
 		return nil, err
 	}
+	if err := checkNotImported(evts); err != nil {
+		return nil, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -431,9 +434,13 @@ func (s *Store) ImportEvents(ctx context.Context, evts []Event) ([]Event, error)
 	imported := make([]Event, 0, len(evts))
 	for _, ev := range evts {
 		out := ev
-		if len(out.Metadata) == 0 {
-			out.Metadata = json.RawMessage(`{}`)
+		// it happened at another deployment: effect consumers fold it but
+		// don't act on it again (ImportMarker)
+		meta, err := markImported(out.Metadata)
+		if err != nil {
+			return nil, err
 		}
+		out.Metadata = meta
 		if out.Version <= 0 {
 			out.Version = 1
 		}

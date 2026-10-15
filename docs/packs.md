@@ -99,15 +99,23 @@ pocketcqrs events import ./notes-pack
 
 `events import` refuses outright — before reading `events.ndjson` at all —
 if the pack's own function files aren't already present in
-`--functionsDir`. This ordering matters for a reason specific to this
-mechanism, not just tidiness: importing event data fast-forwards every
-currently-registered **effect-tier** consumer's checkpoint (reactors and
-event-triggered effect functions — never pure projections) past the
-imported batch, so nothing with a real side effect re-fires against history
-that already happened at the source deployment. A reactor belonging to the
-pack being imported has to already be registered for that fast-forward to
-cover it; import the data first and that reactor would start from
-checkpoint 0 and dispatch against the entire imported history instead.
+`--functionsDir`, so the pack's projections are there to build its read
+models from the imported history as soon as it lands.
+
+**Imported events are marked, not acted on.** Every event `events import`
+writes carries `"imported": true` in its metadata: it already happened at the
+source deployment, side effects included. **Effect-tier** consumers (Go and
+JS reactors, event-triggered effect functions, the external caller) are not
+run for a marked event, so nothing with a real side effect fires again. They
+still *see* it: a reactor that folds its own state (a process manager) is
+handed the event to fold, so its running totals are right for the next native
+event; only the commands and calls it would issue are suppressed. Their
+checkpoints pass it as usual. No checkpoint is moved by the import itself, so
+this holds whatever a consumer's lag (a native event it hadn't reached yet is
+still acted on), on replay, and while a server is running. A native append
+can't carry the marker: the store refuses it. A Go consumer of your own that
+acts on the world says so by implementing `consumers.Effect` (and
+`consumers.Folder` if it folds state).
 
 Two collision checks, both **before any write**, matching `pack import`'s
 own refuse-on-file-collision stance rather than silently renaming anything:
@@ -121,10 +129,9 @@ share ordinary vocabulary (both track a `task` aggregate), so it refuses
 even when the ids are disjoint. There's no override today — decide the
 naming collision deliberately before merging, rather than importing past it.
 
-Pure projections (Go and JS) are **not** fast-forwarded — they replay the
-imported history normally (the same mechanism `projection rebuild` already
-proves safe) so the merged or sliced data actually materializes in your
-read models.
+Pure projections (Go and JS) apply the imported history like any other
+events, so the merged or sliced data actually materializes in your read
+models.
 
 Never route event data through git — `manifest.json`/`pb_functions/`/
 `collections.json` are text and diffable; `events.ndjson` can be large and,

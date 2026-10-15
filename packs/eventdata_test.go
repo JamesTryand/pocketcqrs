@@ -141,12 +141,19 @@ func writeEventsFile(t *testing.T, path string, evs []exportedEvent) {
 	}
 }
 
-func TestImportEventsAdvancesEffectTierNotProjections(t *testing.T) {
+// The import touches no checkpoint, and marks every event it brings in.
+// It used to fast-forward every effect consumer's checkpoint past the batch,
+// which also skipped whatever a lagging reactor hadn't reached yet (here, a
+// native event still pending at position 1); the marker leaves the skip to
+// the engine (consumers.Effect), which skips only the imported events.
+func TestImportEventsMarksEventsAndMovesNoCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	store := openEventStore(t)
-
-	// seed every kind of consumer's checkpoint at 0 before the import
-	for _, name := range []string{"reactor:fulfillment", "fn-reactor:notify", "fn:audit", "tasks", "js-projection:orders_by_customer"} {
+	if _, err := store.Append(ctx, "note", "n1", 0, []events.NewEvent{{Type: "NoteCreated", Data: json.RawMessage(`{}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"reactor:fulfillment", "fn-reactor:notify", "fn:audit", "tasks"}
+	for _, name := range names {
 		if err := store.SaveCheckpoint(ctx, name, 0); err != nil {
 			t.Fatal(err)
 		}
@@ -159,64 +166,30 @@ func TestImportEventsAdvancesEffectTierNotProjections(t *testing.T) {
 		{ID: "e2", Aggregate: "task", AggregateID: "t1", Sequence: 2, Type: "TaskCompleted",
 			Data: json.RawMessage(`{}`), Version: 1, Created: "2020-01-01 00:00:01.000Z"},
 	})
-
-	consumerNames := []string{"reactor:fulfillment", "fn-reactor:notify", "fn:audit", "tasks", "js-projection:orders_by_customer"}
-	result, err := ImportEvents(ctx, store, store, consumerNames, evtsPath, false)
+	result, err := ImportEvents(ctx, store, evtsPath, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Imported != 2 {
-		t.Fatalf("expected 2 imported events, got %d", result.Imported)
+	if result.Imported != 2 || len(result.Streams) != 1 || result.Streams[0] != "task/t1" {
+		t.Fatalf("unexpected result: %+v", result)
 	}
-	if len(result.Streams) != 1 || result.Streams[0] != "task/t1" {
-		t.Fatalf("expected Streams=[task/t1], got %+v", result.Streams)
+	for _, name := range names {
+		if cp, _ := store.Checkpoint(ctx, name); cp != 0 {
+			t.Errorf("%s: the import moved its checkpoint to %d", name, cp)
+		}
 	}
-
-	maxPos, err := store.MaxPosition(ctx)
+	evs, err := store.Poll(ctx, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if maxPos == 0 {
-		t.Fatal("expected a nonzero max position after import")
-	}
-
-	for _, name := range []string{"reactor:fulfillment", "fn-reactor:notify", "fn:audit"} {
-		got, ok := result.AdvancedCheckpoints[name]
-		if !ok {
-			t.Fatalf("expected %s to be listed as advanced", name)
-		}
-		if got != maxPos {
-			t.Fatalf("expected %s advanced to %d, got %d", name, maxPos, got)
-		}
-		stored, err := store.Checkpoint(ctx, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if stored != maxPos {
-			t.Fatalf("expected %s's DURABLE checkpoint to be %d, got %d", name, maxPos, stored)
-		}
-	}
-
-	for _, name := range []string{"tasks", "js-projection:orders_by_customer"} {
-		if _, ok := result.AdvancedCheckpoints[name]; ok {
-			t.Fatalf("expected projection consumer %s to be left OUT of AdvancedCheckpoints", name)
-		}
-		stored, err := store.Checkpoint(ctx, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if stored != 0 {
-			t.Fatalf("expected projection consumer %s's checkpoint untouched at 0, got %d", name, stored)
-		}
+	if len(evs) != 3 || events.IsImported(evs[0]) || !events.IsImported(evs[1]) || !events.IsImported(evs[2]) {
+		t.Fatalf("want the native event unmarked and both imported ones marked: %+v", evs)
 	}
 }
 
 func TestImportEventsDryRunWritesNothing(t *testing.T) {
 	ctx := context.Background()
 	store := openEventStore(t)
-	if err := store.SaveCheckpoint(ctx, "fn:audit", 0); err != nil {
-		t.Fatal(err)
-	}
 
 	evtsPath := filepath.Join(t.TempDir(), eventsFile)
 	writeEventsFile(t, evtsPath, []exportedEvent{
@@ -224,15 +197,15 @@ func TestImportEventsDryRunWritesNothing(t *testing.T) {
 			Data: json.RawMessage(`{}`), Version: 1, Created: "2020-01-01 00:00:00.000Z"},
 	})
 
-	dry, err := ImportEvents(ctx, store, store, []string{"fn:audit"}, evtsPath, true)
+	dry, err := ImportEvents(ctx, store, evtsPath, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !dry.DryRun || dry.Imported != 1 || dry.AdvancedCheckpoints["fn:audit"] == 0 {
+	if !dry.DryRun || dry.Imported != 1 {
 		t.Fatalf("unexpected dry-run result: %+v", dry)
 	}
 
-	// nothing written: no stream, checkpoint untouched
+	// nothing written
 	streams, err := store.ListStreamInfos(ctx, "")
 	if err != nil {
 		t.Fatal(err)
@@ -240,21 +213,14 @@ func TestImportEventsDryRunWritesNothing(t *testing.T) {
 	if len(streams) != 0 {
 		t.Fatalf("expected no streams after a dry run, got %+v", streams)
 	}
-	cp, err := store.Checkpoint(ctx, "fn:audit")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cp != 0 {
-		t.Fatalf("expected fn:audit's checkpoint untouched at 0 after a dry run, got %d", cp)
-	}
 
-	// a REAL import right after reports the identical counts the dry run
+	// a REAL import right after reports the identical count the dry run
 	// predicted
-	real, err := ImportEvents(ctx, store, store, []string{"fn:audit"}, evtsPath, false)
+	real, err := ImportEvents(ctx, store, evtsPath, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if real.Imported != dry.Imported || real.AdvancedCheckpoints["fn:audit"] != dry.AdvancedCheckpoints["fn:audit"] {
+	if real.Imported != dry.Imported {
 		t.Fatalf("expected the real import to match the dry run's prediction: dry=%+v real=%+v", dry, real)
 	}
 }
@@ -274,7 +240,7 @@ func TestImportEventsDryRunReportsCollisions(t *testing.T) {
 			Data: json.RawMessage(`{}`), Version: 1, Created: "2020-01-01 00:00:00.000Z"},
 	})
 
-	if _, err := ImportEvents(ctx, store, store, nil, evtsPath, true); err == nil {
+	if _, err := ImportEvents(ctx, store, evtsPath, true); err == nil {
 		t.Fatal("expected the dry run to report the aggregate-name collision, not silently succeed")
 	}
 }
@@ -287,11 +253,11 @@ func TestImportEventsEmptyFileIsNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := ImportEvents(ctx, store, store, []string{"fn:audit"}, evtsPath, false)
+	result, err := ImportEvents(ctx, store, evtsPath, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Imported != 0 || len(result.AdvancedCheckpoints) != 0 {
+	if result.Imported != 0 {
 		t.Fatalf("expected a no-op for an empty events file, got %+v", result)
 	}
 }
@@ -317,7 +283,7 @@ func TestExportImportEventDataRoundTrip(t *testing.T) {
 	}
 
 	dst := openEventStore(t)
-	if _, err := ImportEvents(ctx, dst, dst, nil, outFile, false); err != nil {
+	if _, err := ImportEvents(ctx, dst, outFile, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -334,8 +300,30 @@ func TestExportImportEventDataRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(original) != string(roundTripped) {
-		t.Fatalf("expected byte-identical round-trip (both sides export raw, and position is dropped on both):\noriginal:\n%s\nround-tripped:\n%s",
-			original, roundTripped)
+	// identical except that the import marked each event: the same lines
+	// with "imported":true added to the metadata (position is dropped on
+	// both sides, and both export the raw rows)
+	origLines := strings.Split(strings.TrimSpace(string(original)), "\n")
+	rtLines := strings.Split(strings.TrimSpace(string(roundTripped)), "\n")
+	if len(origLines) != len(rtLines) {
+		t.Fatalf("line counts differ:\noriginal:\n%s\nround-tripped:\n%s", original, roundTripped)
+	}
+	for i := range origLines {
+		var a, b exportedEvent
+		if err := json.Unmarshal([]byte(origLines[i]), &a); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(rtLines[i]), &b); err != nil {
+			t.Fatal(err)
+		}
+		if !events.IsImported(events.Event{Metadata: b.Metadata}) || events.IsImported(events.Event{Metadata: a.Metadata}) {
+			t.Fatalf("line %d: only the imported copy is marked: %s vs %s", i, a.Metadata, b.Metadata)
+		}
+		a.Metadata, b.Metadata = nil, nil
+		ja, _ := json.Marshal(a)
+		jb, _ := json.Marshal(b)
+		if string(ja) != string(jb) {
+			t.Fatalf("line %d differs beyond the marker:\n%s\n%s", i, ja, jb)
+		}
 	}
 }

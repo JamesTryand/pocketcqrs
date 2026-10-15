@@ -17,14 +17,13 @@ import (
 // deployment that already has the same pack's code active, and confirm
 // that starting the target does NOT re-fire its reactor or effect function
 // against the imported history, while its projection DOES materialize the
-// imported data. Unit tests already prove the underlying mechanism
-// (packs.ImportEvents' checkpoint fast-forward, TestImportEventsAdvances
-// EffectTierNotProjections) against hand-constructed consumer names; this
-// test is the thing those cannot be: real function files, loaded by a real
-// bootstrapped app, producing real "reactor:"/"fn-reactor:"/"fn:" checkpoint
-// keys through the actual loader/registry/engine wiring, moved between two
-// real, separate data directories via the real CLI commands an operator
-// would run. The worst defects in this project live in exactly that wiring.
+// imported data. Unit tests already prove the underlying mechanism (the
+// import marker: events.ImportMarker, consumers.Effect,
+// TestImportedEventsAreFoldedButNotActedOn); this test is the thing those
+// cannot be: real function files, loaded by a real bootstrapped app, through
+// the actual loader/registry/engine wiring, moved between two real, separate
+// data directories via the real CLI commands an operator would run. The
+// worst defects in this project live in exactly that wiring.
 func TestEventsSliceMergeSkipsEffectTierReplaysProjections(t *testing.T) {
 	const noteJS = `//@trigger decider note
 //@handles NoteCreated
@@ -151,19 +150,16 @@ console.log("note created: " + event.aggregateId);
 	if !strings.Contains(dryOut, "dry run, nothing written") {
 		t.Fatalf("expected the dry-run banner, got:\n%s", dryOut)
 	}
-	if !strings.Contains(dryOut, "fn-reactor:notereactor") || !strings.Contains(dryOut, "fn:noteaudit") {
-		t.Fatalf("expected the dry run to name both real effect-tier consumers, got:\n%s", dryOut)
-	}
-	if strings.Contains(dryOut, "\n  notes ") || strings.Contains(dryOut, " notes\n") {
-		t.Fatalf("expected the JS projection (checkpoint name \"notes\", no prefix) to be absent from the advanced list, got:\n%s", dryOut)
+	if !strings.Contains(dryOut, "Imported 2 event(s)") {
+		t.Fatalf("expected the dry run to count 2 events, got:\n%s", dryOut)
 	}
 
 	realOut := runCLI(t, src.Bin, targetData, targetFns, "events", "import", packDir)
 	if strings.Contains(realOut, "dry run") {
 		t.Fatalf("expected a real import to carry no dry-run banner, got:\n%s", realOut)
 	}
-	if !strings.Contains(realOut, "fn-reactor:notereactor") || !strings.Contains(realOut, "fn:noteaudit") {
-		t.Fatalf("expected the real import to advance both real effect-tier consumers, got:\n%s", realOut)
+	if !strings.Contains(realOut, "Imported events are marked") {
+		t.Fatalf("expected the real import to say the events are marked, got:\n%s", realOut)
 	}
 	if !strings.Contains(realOut, "Imported 2 event(s)") {
 		t.Fatalf("expected 2 imported events, got:\n%s", realOut)
@@ -197,7 +193,7 @@ console.log("note created: " + event.aggregateId);
 		t.Fatalf("streams query failed: %d: %s", status, truncate(raw, 300))
 	}
 	if len(counterStreams.Streams) != 0 {
-		t.Fatalf("the reactor re-fired against imported history — checkpoint fast-forward did not hold: %+v", counterStreams.Streams)
+		t.Fatalf("the reactor re-fired against imported history — the import marker did not hold: %+v", counterStreams.Streams)
 	}
 }
 

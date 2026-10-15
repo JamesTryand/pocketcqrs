@@ -191,6 +191,10 @@ func New(cfg Config) (*Consumer, error) {
 // Name implements consumers.Consumer: the durable checkpoint key.
 func (c *Consumer) Name() string { return "extcall:" + c.cfg.Name }
 
+// IsEffect implements consumers.Effect: the external caller calls out, so
+// it makes no call for an imported event, which already happened elsewhere.
+func (c *Consumer) IsEffect() bool { return true }
+
 // Apply implements consumers.Consumer. Always returns nil — see the package
 // doc comment for why a permanent failure dead-letters rather than stalling
 // the checkpoint.

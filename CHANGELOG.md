@@ -59,6 +59,17 @@ All notable changes to PocketCQRS. Format loosely follows
   on one stream hit "already exists" and its target was never created. It is now keyed by the
   triggering event (`<prefix>-<event id>`), as dotnetcqrs's are; a redelivery still targets the same
   id. The scaffold `Reactor` gains `perEvent`. Regenerate reactors to pick it up.
+- **`events import` marks imported events instead of moving checkpoints.** It used to
+  fast-forward every effect consumer's checkpoint past the batch. A checkpoint is one number, so
+  that also skipped whatever a lagging reactor had not reached yet, and it was saved after the
+  import committed, so a running server could act on the imported events in between. Now the store
+  marks each imported event (`"imported": true` in its metadata, refused on a native append), and
+  the engine does not run an effect-tier consumer (`consumers.Effect`: reactors, event-triggered
+  functions, the external caller) for a marked event. One that folds its own state
+  (`consumers.Folder`; Go reactors) is handed it to fold. Projections apply it as usual.
+  `packs.ImportEvents` loses its checkpoint and consumer-name parameters and
+  `ImportEventsResult.AdvancedCheckpoints`. **Breaking** for a Go embedder calling it, or with an
+  effect consumer of its own: implement `consumers.Effect`.
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.

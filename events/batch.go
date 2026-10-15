@@ -75,6 +75,9 @@ func (s *Store) CommitBatch(ctx context.Context, batch []DecidedCommand) ([]Batc
 		if err := checkEncoded(dc.NewEvents); err != nil {
 			return nil, err
 		}
+		if err := checkNotImported(dc.NewEvents); err != nil {
+			return nil, err
+		}
 	}
 
 	s.mu.Lock()

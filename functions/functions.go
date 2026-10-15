@@ -205,6 +205,10 @@ func (r *GojaRuntime) EventFunctions() []EventFunctionInfo {
 // Name implements consumers.Consumer.
 func (fn *eventFunction) Name() string { return "fn:" + fn.name }
 
+// IsEffect implements consumers.Effect: an event-triggered function acts
+// on the world ($http, writes), so it does not run for an imported event.
+func (fn *eventFunction) IsEffect() bool { return true }
+
 // Apply implements consumers.Consumer: delivers the event to the function
 // if it subscribed to the type. A failing function is logged and
 // dead-lettered (inspection + retry via the deadletter CLI); the failure
