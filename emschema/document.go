@@ -445,6 +445,12 @@ type EventRef struct {
 type CommandRef struct {
 	CommandID string          `json:"commandId"`
 	Data      json.RawMessage `json:"data,omitempty"`
+	// Actor and At (schema 3.10.0) are who sends the command and when, as
+	// the host would resolve them: the verifier runs the decider with them
+	// as command.actor and command.now, because a decider records both and
+	// a rule may read them.
+	Actor string `json:"actor,omitempty"`
+	At    string `json:"at,omitempty"`
 }
 
 // ReadModelQuery is a stateView scenario's `when`.

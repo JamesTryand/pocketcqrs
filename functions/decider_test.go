@@ -316,3 +316,35 @@ func TestJSDecideErrorClassification(t *testing.T) {
 		})
 	}
 }
+
+// A refusal is the text the decider threw, which is what the caller is told
+// and what an error scenario compares (T2), not goja's rendering of it with
+// the stack appended. A runtime error keeps its class name: it is the
+// decider failing, not a rule refusing.
+func TestRejectionIsTheThrownMessage(t *testing.T) {
+	const src = `
+function initialState() { return {}; }
+function decide(command, state) {
+	switch (command.name) {
+		case "Plain": throw new Error("note is frozen");
+		case "Bare": throw "no notes on Sundays";
+		case "Broken": return state.missing.field;
+	}
+}
+function evolve(state, event) { return state; }
+`
+	_, registry := deciderSetup(t)
+	rt := NewGojaRuntime(nil)
+	spec := mkDeciderSpec(t, rt, "note", src, nil, nil)
+	registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
+	for cmd, want := range map[string]string{
+		"Plain":  "note is frozen",
+		"Bare":   "no notes on Sundays",
+		"Broken": "TypeError: Cannot read property 'field' of undefined",
+	} {
+		_, err := registry.HandleWithMeta(context.Background(), "note", "n1", decider.Command{Name: cmd}, nil)
+		if err == nil || err.Error() != want {
+			t.Errorf("%s: want %q, got %v", cmd, want, err)
+		}
+	}
+}

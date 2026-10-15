@@ -141,6 +141,25 @@ func (v *verifier) streamID(given []EventRef) string {
 	return scenarioStream
 }
 
+// The actor and time a command scenario runs as when it names neither.
+const (
+	defaultScenarioActor = "schema-import"
+	defaultScenarioNow   = "scenario"
+)
+
+// commandMeta is who and when a command scenario runs as: its own
+// when.actor and when.at (schema 3.10.0), or the defaults.
+func commandMeta(ref CommandRef) map[string]any {
+	meta := map[string]any{"now": defaultScenarioNow, "actor": defaultScenarioActor}
+	if ref.Actor != "" {
+		meta["actor"] = ref.Actor
+	}
+	if ref.At != "" {
+		meta["now"] = ref.At
+	}
+	return meta
+}
+
 func (v *verifier) run(s Slice, sc Scenario) ScenarioResult {
 	res := ScenarioResult{SliceID: s.ID, ScenarioID: sc.ID, Name: sc.Name, Kind: sc.Kind}
 	switch sc.Kind {
@@ -207,8 +226,7 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 		payload = ref.Data
 	}
 	run, err := functions.DryRunDecide(store, spec, stream,
-		decider.Command{Name: cmdName, Payload: payload},
-		map[string]any{"now": "scenario", "actor": "schema-import"})
+		decider.Command{Name: cmdName, Payload: payload}, commandMeta(ref))
 	if err != nil {
 		res.Detail = "the dry run could not be answered: " + err.Error()
 		return
@@ -223,6 +241,13 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 		if !run.Rejected {
 			res.Detail = fmt.Sprintf("expected a refusal (%q) but the command was accepted and would append %d event(s)",
 				then.Error.Message, len(run.Produced))
+			return
+		}
+		// An error scenario passes only on ITS refusal (T2): any refusal used
+		// to pass, so a rule the model declares and the code lacks was
+		// reported as working whenever some other rule refused first.
+		if run.Message != then.Error.Message {
+			res.Detail = fmt.Sprintf("refused for another reason: expected %q, got %q", then.Error.Message, run.Message)
 			return
 		}
 		res.Passed = true

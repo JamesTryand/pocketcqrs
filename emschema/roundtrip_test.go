@@ -357,7 +357,7 @@ func TestVerifyRunsScenarios(t *testing.T) {
 		ID: "create-twice", Name: "placing an order twice is refused", Kind: KindError,
 		Given: []EventRef{{EventID: "order-placed", Data: []byte(`{"orderId":"o1"}`)}},
 		When:  []byte(`{"commandId":"place-order"}`),
-		Then:  []byte(`{"error":{"message":"already exists"}}`),
+		Then:  []byte(`{"error":{"message":"order already exists"}}`),
 	}
 	v := &verifier{doc: doc, dir: t.TempDir(), sources: map[string]scaffold.File{}}
 	if err := v.indexSources(mapped); err != nil {

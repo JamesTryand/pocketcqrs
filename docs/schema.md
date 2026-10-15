@@ -80,7 +80,7 @@ and the pointer starts with the file's path.
 
 Refused today, from schema 3.2.0 on: `selfAccess`, `dataSubjects`,
 `outcomes`, ingresses, delays, schedules and `elapsed`, automation `effect`,
-partitioning, `grantsAccess`, a scenario's `caller`, `actor` and `at`,
+partitioning, `grantsAccess`, a scenario's `caller`,
 `removedByEventIds`, `refuseWhen`, a read model's `rowKeyField`,
 `requiredOwnership.stateField`, `rowsPerListItem`, the `sumOfItems` and
 `byEvent` derivations, and `projection`. Each leaves this list as it is
@@ -124,9 +124,13 @@ Nothing is appended and no decider is registered: each scenario runs in its
 own scratch store against source held in memory. `stateChange` and `error`
 scenarios are `mode=decide` runs — the `error` kind works only because a
 refusal is a *verdict* rather than an error, so "the decider correctly
-refused" is distinguishable from "the candidate is broken". `stateView`
-scenarios fold the fixture through the generated projection and query the
-resulting rows.
+refused" is distinguishable from "the candidate is broken". An `error`
+scenario passes only on **its own** refusal: the decider's message must be
+the scenario's `then.error.message`, so a rule the model declares and the code
+lacks fails even when some other rule refuses first. A command scenario's
+`when.actor` and `when.at` (schema 3.10.0) are passed to the decider as
+`command.actor` and `command.now`. `stateView` scenarios fold the fixture
+through the generated projection and query the resulting rows.
 
 **A failing scenario is not a broken import.** The generated slice records
 what happened and refuses the obvious contradictions; every other rule is the

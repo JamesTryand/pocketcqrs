@@ -148,7 +148,7 @@ func (r *GojaRuntime) runDecide(spec *DeciderSpec, cmd decider.Command, state an
 		if errors.As(err, &interrupted) {
 			return nil, decider.Fault(err)
 		}
-		return nil, err
+		return nil, rejection(err)
 	}
 	if goja.IsUndefined(v) || goja.IsNull(v) {
 		return nil, nil
@@ -379,4 +379,40 @@ func toInt64(v any) int64 {
 		_, _ = fmt.Sscan(s, &i)
 		return i
 	}
+}
+
+// jsRejection is a decider's refusal: the text it threw, without the stack
+// goja appends ("Error: order already exists at decide (order.js:21:33)").
+// The text is the domain's answer, so it is what a caller is told and what
+// an error scenario compares (schema 3.10.0: a scenario of kind error
+// names the message). The goja exception, stack included, stays reachable
+// through Unwrap.
+type jsRejection struct {
+	message string
+	err     error
+}
+
+func (r *jsRejection) Error() string { return r.message }
+func (r *jsRejection) Unwrap() error { return r.err }
+
+// rejection turns a throw from decide into the decider's refusal: a plain
+// Error's message, or the thrown value itself (`throw 'no'`). Any other
+// error class keeps its name ("TypeError: ..."): that is the decider
+// failing, not a rule refusing, and the name says so.
+func rejection(err error) error {
+	var exc *goja.Exception
+	if !errors.As(err, &exc) || exc.Value() == nil {
+		return err
+	}
+	v := exc.Value()
+	if obj, ok := v.(*goja.Object); ok {
+		if m := obj.Get("message"); m != nil && !goja.IsUndefined(m) && !goja.IsNull(m) {
+			msg := m.String()
+			if n := obj.Get("name"); n != nil && !goja.IsUndefined(n) && n.String() != "Error" {
+				msg = n.String() + ": " + msg
+			}
+			return &jsRejection{message: msg, err: err}
+		}
+	}
+	return &jsRejection{message: v.String(), err: err}
 }

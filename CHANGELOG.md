@@ -30,6 +30,15 @@ All notable changes to PocketCQRS. Format loosely follows
   [docs/schema.md](docs/schema.md), "What it can't apply is refused". **Breaking for documents**
   that use any schema feature from 3.2.0 on: they were imported without it before, and are refused
   now.
+- **An `error` scenario passes only on its own refusal (T2).** Any refusal used to pass, so a
+  refusal the model declares and the code lacks was reported as working. The decider's message must
+  equal `then.error.message`. A command scenario's `when.actor` and `when.at` (schema 3.10.0) are now
+  read and passed to the decider as `command.actor` and `command.now`, instead of fixed values.
+- **A JS decider's refusal is the text it threw.** It used to be goja's rendering, with the stack
+  appended (`Error: order already exists at decide (order.js:21:33(22))`). That is what the gateway
+  returned to callers, and what an error scenario has to match. Now it is `order already exists`. A
+  runtime error keeps its class name (`TypeError: ...`): that is the decider failing, not a rule
+  refusing.
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.
