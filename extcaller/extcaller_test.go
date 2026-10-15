@@ -68,11 +68,12 @@ func TestApply_UnmatchedEventType_NoOp(t *testing.T) {
 		Outbound:    newTestOutbound(t, "example.com"),
 		Gateway:     NewGatewayClient("http://unused.invalid", "tok", time.Second),
 		DeadLetters: newTestDeadLetters(t),
+		Outbox:      newTestOutbox(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if err := c.Apply(context.Background(), testEvent("some.Other")); err != nil {
+	if err := applyAndRun(t, c, testEvent("some.Other")); err != nil {
 		t.Fatalf("Apply returned error for unmatched event type: %v", err)
 	}
 }
@@ -128,12 +129,13 @@ func TestApply_SuccessDispatchesFollowUp(t *testing.T) {
 		Outbound:    newTestOutbound(t, hostOnly(t, thirdHost)),
 		Gateway:     NewGatewayClient(gw.URL, "tok", time.Second),
 		DeadLetters: newTestDeadLetters(t),
+		Outbox:      newTestOutbox(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	if err := c.Apply(context.Background(), testEvent("order.Confirmed")); err != nil {
+	if err := applyAndRun(t, c, testEvent("order.Confirmed")); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(dispatched) != 1 {
@@ -172,6 +174,7 @@ func TestApply_InheritsCorrelationIdFromCausingEvent(t *testing.T) {
 		Outbound:    newTestOutbound(t, hostOnly(t, thirdHost)),
 		Gateway:     NewGatewayClient(gw.URL, "tok", time.Second),
 		DeadLetters: newTestDeadLetters(t),
+		Outbox:      newTestOutbox(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -179,7 +182,7 @@ func TestApply_InheritsCorrelationIdFromCausingEvent(t *testing.T) {
 
 	ev := testEvent("order.Confirmed")
 	ev.Metadata = json.RawMessage(`{"correlationId":"root-corr-1"}`)
-	if err := c.Apply(context.Background(), ev); err != nil {
+	if err := applyAndRun(t, c, ev); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if gotCausation != "ev-1" {
@@ -220,6 +223,7 @@ func TestApply_OutboundFailureExhaustsRetriesAndDeadLetters(t *testing.T) {
 		Outbound:    newTestOutbound(t, hostOnly(t, thirdHost)),
 		Gateway:     NewGatewayClient("http://unused.invalid", "tok", time.Second),
 		DeadLetters: deadLetters,
+		Outbox:      newTestOutbox(t),
 		Retry:       RetryPolicy{MaxAttempts: 1, Backoff: time.Millisecond},
 	})
 	if err != nil {
@@ -230,7 +234,7 @@ func TestApply_OutboundFailureExhaustsRetriesAndDeadLetters(t *testing.T) {
 	// outbound.Client.Do's contract) — HandleResponse is what rejects it
 	// here, exercising the "handling response" dead-letter path, which
 	// never retries (retry only bounds the outbound call itself).
-	if err := c.Apply(context.Background(), testEvent("order.Confirmed")); err != nil {
+	if err := applyAndRun(t, c, testEvent("order.Confirmed")); err != nil {
 		t.Fatalf("Apply returned error (should always be nil): %v", err)
 	}
 	if calls != 1 {
@@ -268,13 +272,14 @@ func TestApply_HostNotAllowed_DeadLetters(t *testing.T) {
 		Outbound:    newTestOutbound(t, "allowed.example"),
 		Gateway:     NewGatewayClient("http://unused.invalid", "tok", time.Second),
 		DeadLetters: deadLetters,
+		Outbox:      newTestOutbox(t),
 		Retry:       RetryPolicy{MaxAttempts: 1, Backoff: time.Millisecond},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	if err := c.Apply(context.Background(), testEvent("order.Confirmed")); err != nil {
+	if err := applyAndRun(t, c, testEvent("order.Confirmed")); err != nil {
 		t.Fatalf("Apply returned error (should always be nil): %v", err)
 	}
 

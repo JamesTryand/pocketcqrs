@@ -45,6 +45,14 @@ exactly one caller so it has only one result. Every replica holds the same log, 
 make every call once per node. It skips events brought in by `events import` (they already happened
 elsewhere; see `consumers.Effect`).
 
+**The calls run off the engine's pass, from an outbox.** For a matching event the consumer only
+records the work in its outbox (`-outbox`, its own SQLite file, beside `-localStore` by default), so
+its checkpoint moves on at once. Its outbox worker does the work when it is due: the call, then the
+follow-up dispatches, with the follow-ups kept in the entry so a retry never calls out twice. A failed
+call, or a follow-up the gateway answers with a conflict (re-decided on the next try), maintenance or
+a timeout, is due again `-retryBackoff` later: a due time, never a pause. `-retryAttempts` tries,
+then a dead letter; a domain rejection dead-letters at once.
+
 `EXTCALLER_GATEWAY_TOKEN` must be set (an environment variable, never a flag). `extcaller.Config.Gateway`
 is a small interface (just the `Dispatch` method), not the concrete HTTP client under
 `internal/gatewayclient` — that package is unreachable from outside this module by Go's own

@@ -9,13 +9,16 @@
 // is a pure, synchronous, no-I/O function, and this component's whole job is
 // an I/O call reactors.Reactor has no way to make.
 //
-// Delivery from the event log is at-least-once, so Apply always returns nil
-// (matching the effect-function tier's eventFunction.Apply, not the reactor
-// tier's Dispatch): a permanently failing rule or exhausted retry budget
-// dead-letters and the checkpoint still advances, so one stuck integration
-// can never block the rest of the log. A dead-lettered event's checkpoint has
-// already passed it, so retrying it is a manual operator action, not
-// something the engine does on its own — see the README's "Dead letters"
+// Apply only records the work, in an outbox (package outbox, R4): the
+// checkpoint advances at once, and one slow or failing integration never
+// holds up the log. The outbox Worker (Consumer.Worker) does the work when
+// it is due: build the request, call out, turn the response into follow-up
+// commands (kept in the entry, so a later retry doesn't call out again),
+// and dispatch them. A failed call, or a follow-up the gateway answers with
+// a conflict (re-decided on the next try, as batching re-decides), timeout
+// or maintenance, is due again after the backoff: a due time, never a pause.
+// A permanent failure, or the attempts spent, dead-letters. A dead letter is
+// a manual operator action from then on — see the README's "Dead letters"
 // section for exactly what's available (list/dismiss reuse the pocketcqrs
 // CLI against this component's local store; retry does not, since that CLI
 // command re-delivers through the JS function runtime, a different tier).
@@ -24,12 +27,15 @@ package extcaller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/outbound"
+	"github.com/jamestryand/pocketcqrs/outbox"
 
 	"github.com/jamestryand/pocketcqrs/internal/gatewayclient"
 )
@@ -58,6 +64,15 @@ type Command struct {
 	CausationID   string
 	CorrelationID string
 }
+
+// RetryableError marks a dispatch failure worth trying again: a conflict
+// (the gateway re-decides against the stream as it then is), maintenance, a
+// timeout or the deployment unreachable. Any other dispatch error (a domain
+// rejection) dead-letters. A Gateway of your own wraps its own the same way.
+type RetryableError struct{ Err error }
+
+func (e *RetryableError) Error() string { return e.Err.Error() }
+func (e *RetryableError) Unwrap() error { return e.Err }
 
 // Gateway dispatches one follow-up command to a pocketcqrs deployment.
 // Satisfied by the value NewGatewayClient returns (which wraps the real
@@ -103,15 +118,15 @@ type Rule struct {
 	HandleResponse func(ev events.Event, resp *outbound.Response) ([]FollowUp, error)
 }
 
-// RetryPolicy bounds how many times Apply calls out for one event before
-// giving up and dead-lettering. Deliberately just a fixed attempt count and a
-// fixed backoff, not a per-target/configurable policy — see Rule's doc
-// comment for why a fuller shape isn't built yet.
+// RetryPolicy bounds how many times the worker tries one event's call (and,
+// separately, its follow-ups' dispatch) before dead-lettering. Deliberately
+// just a fixed attempt count and a fixed backoff, not a per-target policy —
+// see Rule's doc comment for why a fuller shape isn't built yet.
 type RetryPolicy struct {
-	// MaxAttempts is the total number of outbound.Client.Do calls to make
-	// before giving up. Must be at least 1; 1 means no retry.
+	// MaxAttempts is the number of tries before giving up. Must be at least
+	// 1; 1 means no retry.
 	MaxAttempts int
-	// Backoff is the fixed pause between attempts.
+	// Backoff is how long after a failed try the next one is due.
 	Backoff time.Duration
 }
 
@@ -137,6 +152,11 @@ type Config struct {
 	// locally-writable *events.Store this component owns outright — never
 	// the upstream deployment's own events.db (see internal/localstore).
 	DeadLetters *events.Store
+	// Outbox holds the work Apply records until the worker has done it: its
+	// own SQLite file, this component's own.
+	Outbox *outbox.Store
+	// Now is the clock (time.Now when nil).
+	Now func() time.Time
 	// Retry bounds the outbound call attempts. Zero value means exactly one
 	// attempt (no retry).
 	Retry RetryPolicy
@@ -163,6 +183,12 @@ func New(cfg Config) (*Consumer, error) {
 	}
 	if cfg.DeadLetters == nil {
 		return nil, fmt.Errorf("extcaller: Config.DeadLetters must not be nil")
+	}
+	if cfg.Outbox == nil {
+		return nil, fmt.Errorf("extcaller: Config.Outbox must not be nil")
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
 	if cfg.Retry.MaxAttempts <= 0 {
 		cfg.Retry.MaxAttempts = 1
@@ -195,34 +221,86 @@ func (c *Consumer) Name() string { return "extcall:" + c.cfg.Name }
 // it makes no call for an imported event, which already happened elsewhere.
 func (c *Consumer) IsEffect() bool { return true }
 
-// Apply implements consumers.Consumer. Always returns nil — see the package
-// doc comment for why a permanent failure dead-letters rather than stalling
-// the checkpoint.
+// Apply implements consumers.Consumer: it records the event's work in the
+// outbox, once per event (a redelivery is the same entry), for the worker.
+// It fails only when the work can't be recorded, so the checkpoint never
+// passes work nobody will do.
 func (c *Consumer) Apply(ctx context.Context, ev events.Event) error {
+	if _, ok := c.rules[ev.Type]; !ok {
+		return nil
+	}
+	payload, err := json.Marshal(work{Event: ev})
+	if err != nil {
+		return err
+	}
+	return c.cfg.Outbox.Enqueue(ctx, c.Name()+"|"+ev.ID, c.Name(), payload, c.cfg.Now())
+}
+
+// work is an outbox entry's state: the event, and once the call has been
+// made, its follow-ups and how far their dispatch has got.
+type work struct {
+	Event     events.Event `json:"event"`
+	Called    bool         `json:"called,omitempty"`
+	FollowUps []FollowUp   `json:"followUps,omitempty"`
+	// Next is the first follow-up not yet dispatched.
+	Next int `json:"next,omitempty"`
+	// Tries counts this phase's tries (the call, then the dispatch).
+	Tries int `json:"tries,omitempty"`
+}
+
+// Worker is the outbox worker that does this consumer's work; run it
+// (Worker.Run) beside the engine.
+func (c *Consumer) Worker() *outbox.Worker {
+	return &outbox.Worker{Store: c.cfg.Outbox, Handlers: map[string]outbox.Handler{c.Name(): c.Handle},
+		Now: c.cfg.Now, Logger: c.cfg.Logger}
+}
+
+// Handle does one entry's work (an outbox.Handler).
+func (c *Consumer) Handle(ctx context.Context, e outbox.Entry) outbox.Outcome {
+	var w work
+	if err := json.Unmarshal(e.Payload, &w); err != nil {
+		c.cfg.Logger("outbox entry unreadable, dropped", "consumer", c.Name(), "id", e.ID, "error", err)
+		return outbox.Outcome{Done: true}
+	}
+	ev := w.Event
 	rule, ok := c.rules[ev.Type]
 	if !ok {
-		return nil
+		c.deadLetter(ctx, ev, fmt.Errorf("no rule for %s any more", ev.Type))
+		return outbox.Outcome{Done: true}
+	}
+	retry := func(cause error, phase string) outbox.Outcome {
+		w.Tries++
+		if w.Tries >= c.cfg.Retry.MaxAttempts {
+			c.deadLetter(ctx, ev, fmt.Errorf("%s after %d attempt(s): %w", phase, w.Tries, cause))
+			return outbox.Outcome{Done: true}
+		}
+		payload, _ := json.Marshal(w)
+		return outbox.Outcome{RetryAt: c.cfg.Now().Add(c.cfg.Retry.Backoff), Payload: payload, Err: cause}
 	}
 
-	req, err := rule.BuildRequest(ev)
-	if err != nil {
-		c.deadLetter(ctx, ev, fmt.Errorf("building outbound request: %w", err))
-		return nil
+	if !w.Called {
+		req, err := rule.BuildRequest(ev)
+		if err != nil {
+			c.deadLetter(ctx, ev, fmt.Errorf("building outbound request: %w", err))
+			return outbox.Outcome{Done: true}
+		}
+		resp, err := c.cfg.Outbound.Do(ctx, req)
+		if err != nil {
+			if errors.Is(err, outbound.ErrHostNotAllowed) {
+				c.deadLetter(ctx, ev, fmt.Errorf("calling out: %w", err))
+				return outbox.Outcome{Done: true}
+			}
+			return retry(err, "calling out")
+		}
+		if w.FollowUps, err = rule.HandleResponse(ev, resp); err != nil {
+			c.deadLetter(ctx, ev, fmt.Errorf("handling response: %w", err))
+			return outbox.Outcome{Done: true}
+		}
+		w.Called, w.Tries = true, 0
 	}
 
-	resp, err := c.callWithRetry(ctx, req)
-	if err != nil {
-		c.deadLetter(ctx, ev, fmt.Errorf("calling out after %d attempt(s): %w", c.cfg.Retry.MaxAttempts, err))
-		return nil
-	}
-
-	followUps, err := rule.HandleResponse(ev, resp)
-	if err != nil {
-		c.deadLetter(ctx, ev, fmt.Errorf("handling response: %w", err))
-		return nil
-	}
-
-	for i, f := range followUps {
+	for i := w.Next; i < len(w.FollowUps); i++ {
+		f := w.FollowUps[i]
 		cmd := Command{
 			Aggregate:           f.Aggregate,
 			ID:                  f.ID,
@@ -233,45 +311,23 @@ func (c *Consumer) Apply(ctx context.Context, ev events.Event) error {
 			CorrelationID:       correlationID(ev),
 		}
 		if err := c.cfg.Gateway.Dispatch(ctx, cmd); err != nil {
-			// A follow-up dispatch failure (domain rejection, concurrency
-			// conflict, the target deployment unreachable) dead-letters the
-			// SOURCE event rather than retrying just this follow-up: partial
-			// application (an earlier follow-up in this same slice already
-			// succeeded) is a real possibility the operator needs visibility
-			// into, not something to silently paper over.
-			c.deadLetter(ctx, ev, fmt.Errorf("dispatching follow-up %d/%d (%s %s/%s): %w",
-				i+1, len(followUps), f.Name, f.Aggregate, f.ID, err))
-			return nil
+			where := fmt.Sprintf("dispatching follow-up %d/%d (%s %s/%s)", i+1, len(w.FollowUps), f.Name, f.Aggregate, f.ID)
+			var again *RetryableError
+			if errors.As(err, &again) {
+				w.Next = i // the ones before it are dispatched; their keys make a resend harmless anyway
+				return retry(err, where)
+			}
+			// A rejection dead-letters the SOURCE event rather than this
+			// follow-up alone: partial application (an earlier follow-up in
+			// this same slice already succeeded) is a real possibility the
+			// operator needs visibility into, not something to paper over.
+			c.deadLetter(ctx, ev, fmt.Errorf("%s: %w", where, err))
+			return outbox.Outcome{Done: true}
 		}
 		c.cfg.Logger("follow-up dispatched",
 			"consumer", c.Name(), "event", ev.ID, "command", f.Name, "target", f.Aggregate+"/"+f.ID)
 	}
-	return nil
-}
-
-// callWithRetry calls req through cfg.Outbound up to cfg.Retry.MaxAttempts
-// times, pausing cfg.Retry.Backoff between attempts. One attempt means no
-// retry, matching outbound.Client.Do's own "one attempt, no retry"
-// contract — the retry budget lives here, one layer up, so it stays visible
-// and boundable rather than hidden inside the HTTP client.
-func (c *Consumer) callWithRetry(ctx context.Context, req outbound.Request) (*outbound.Response, error) {
-	var lastErr error
-	for attempt := 1; attempt <= c.cfg.Retry.MaxAttempts; attempt++ {
-		resp, err := c.cfg.Outbound.Do(ctx, req)
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
-		if attempt == c.cfg.Retry.MaxAttempts {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(c.cfg.Retry.Backoff):
-		}
-	}
-	return nil, lastErr
+	return outbox.Outcome{Done: true}
 }
 
 // correlationID inherits the causing event's own correlationId metadata,
@@ -305,6 +361,17 @@ func (a gatewayClientAdapter) Dispatch(ctx context.Context, cmd Command) error {
 		CausationID:         cmd.CausationID,
 		CorrelationID:       cmd.CorrelationID,
 	})
+	if err == nil {
+		return nil
+	}
+	var status *gatewayclient.ErrStatus
+	if !errors.As(err, &status) {
+		return &RetryableError{Err: err} // the deployment unreachable
+	}
+	switch status.Status {
+	case http.StatusConflict, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return &RetryableError{Err: err}
+	}
 	return err
 }
 

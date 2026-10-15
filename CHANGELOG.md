@@ -111,6 +111,16 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **An outbox for work that calls out of the process (R4).** New package `outbox`: work recorded in
+  its own SQLite file, keyed by what asked for it (a redelivery records it once), and a `Worker` that
+  takes each entry when due and hands it to its consumer's `Handler`, which says done or when to try
+  again. The worker waits for the next due entry or a nudge from an enqueue, never a fixed pause.
+- **extcaller works from the outbox (breaking: `Config.Outbox` is required).** `Apply` only records the
+  work; `Consumer.Worker()` does it: the call, then the follow-ups (kept in the entry, so a retry
+  never calls out twice). A failed call, or a follow-up answered with a conflict (re-decided by the
+  gateway on the next try), 503 or 504, is due again after `RetryPolicy.Backoff`; it used to sleep
+  between attempts inside the engine's pass and dead-letter every conflict. `extcaller.RetryableError`
+  marks a retryable dispatch for a `Gateway` of your own. `cmd/extcaller` gains `-outbox`.
 - **One transaction per projected event (R2).** A projection's row ops for an event and its position
   now commit together in one PocketBase transaction in `data.db` (table `_cqrsPositions`), so a crash
   or a failing op can't leave an event half applied, or applied without its position (and applied

@@ -15,6 +15,7 @@ import (
 
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/outbound"
+	"github.com/jamestryand/pocketcqrs/outbox"
 
 	"github.com/jamestryand/pocketcqrs/extcaller"
 )
@@ -88,6 +89,7 @@ func TestBurstRecoversWithinRetryBudget(t *testing.T) {
 		Outbound:    outClient,
 		Gateway:     h.gatewayClient(),
 		DeadLetters: stores.Local,
+		Outbox:      openOutbox(t),
 		Retry:       extcaller.RetryPolicy{MaxAttempts: 3, Backoff: 20 * time.Millisecond},
 		Logger:      logger,
 	})
@@ -100,6 +102,7 @@ func TestBurstRecoversWithinRetryBudget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	engine.Start(ctx)
+	go consumer.Worker().Run(ctx)
 
 	// Burst: create 3 tasks. t1's event absorbs the two configured
 	// failures (see the atomic counter above) and recovers on attempt 3;
@@ -158,6 +161,7 @@ func TestRedeliveryDoesNotDuplicateDispatch(t *testing.T) {
 		Outbound:    outClient,
 		Gateway:     h.gatewayClient(),
 		DeadLetters: stores.Local,
+		Outbox:      openOutbox(t),
 		Retry:       extcaller.RetryPolicy{MaxAttempts: 1},
 		Logger:      logger,
 	})
@@ -182,16 +186,19 @@ func TestRedeliveryDoesNotDuplicateDispatch(t *testing.T) {
 		return false
 	})
 
-	// Simulate redelivery: Apply the same committed event twice, exactly as
-	// the engine would if a process crash landed between the follow-up
-	// dispatch succeeding and the checkpoint save that normally follows it
-	// immediately (consumers.go's RunOnce).
+	// Simulate redelivery: Apply the same committed event twice, each time
+	// with the outbox worker doing its work, exactly as if a crash landed
+	// after the follow-up was dispatched (the entry done) and before the
+	// engine's checkpoint save: the second Apply records the work again.
 	ctx := context.Background()
-	if err := consumer.Apply(ctx, ev); err != nil {
-		t.Fatalf("first Apply: %v", err)
-	}
-	if err := consumer.Apply(ctx, ev); err != nil {
-		t.Fatalf("second Apply (simulated redelivery): %v", err)
+	worker := consumer.Worker()
+	for i := 1; i <= 2; i++ {
+		if err := consumer.Apply(ctx, ev); err != nil {
+			t.Fatalf("Apply %d: %v", i, err)
+		}
+		if _, err := worker.RunOnce(ctx); err != nil {
+			t.Fatalf("worker pass %d: %v", i, err)
+		}
 	}
 
 	if !h.taskExists("echo-t-redelivery") {
@@ -226,4 +233,14 @@ func thirdPartyHost(t *testing.T, rawURL string) string {
 		t.Fatal(err)
 	}
 	return u.Hostname()
+}
+
+func openOutbox(t *testing.T) *outbox.Store {
+	t.Helper()
+	box, err := outbox.Open(t.TempDir() + "/outbox.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { box.Close() })
+	return box
 }

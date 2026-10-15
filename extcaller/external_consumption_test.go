@@ -37,6 +37,7 @@ import (
 
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/outbound"
+	"github.com/jamestryand/pocketcqrs/outbox"
 
 	"github.com/jamestryand/pocketcqrs/extcaller"
 )
@@ -60,11 +61,18 @@ func main() {
 	}
 	defer store.Close()
 
+	box, err := outbox.Open("outbox.db")
+	if err != nil {
+		panic(err)
+	}
+	defer box.Close()
+
 	if _, err := extcaller.New(extcaller.Config{
 		Name:        "smoke",
 		Outbound:    outClient,
 		Gateway:     myGateway{},
 		DeadLetters: store,
+		Outbox:      box,
 	}); err != nil {
 		panic(err)
 	}

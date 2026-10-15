@@ -17,11 +17,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/jamestryand/pocketcqrs/outbound"
+	"github.com/jamestryand/pocketcqrs/outbox"
 
 	"github.com/jamestryand/pocketcqrs/extcaller"
 	"github.com/jamestryand/pocketcqrs/internal/localstore"
@@ -46,7 +48,8 @@ func run() error {
 		maxInFlight     = flag.Int("outboundMaxInFlight", 16, "process-wide cap on concurrent third-party calls")
 		maxBodyBytes    = flag.Int64("outboundMaxBodyBytes", 1<<20, "cap on a third-party response body, in bytes")
 		retryAttempts   = flag.Int("retryAttempts", 3, "max attempts per event before dead-lettering")
-		retryBackoff    = flag.Duration("retryBackoff", 2*time.Second, "fixed pause between attempts")
+		retryBackoff    = flag.Duration("retryBackoff", 2*time.Second, "how long after a failed attempt the next is due (a due time, not a pause)")
+		outboxPath      = flag.String("outbox", "", "this component's outbox file, where each event's work waits until done (default: beside -localStore, <name>-outbox.db)")
 	)
 	flag.Parse()
 
@@ -73,6 +76,15 @@ func run() error {
 	}
 	defer stores.Close()
 
+	if *outboxPath == "" {
+		*outboxPath = filepath.Join(filepath.Dir(*localStorePath), *name+"-outbox.db")
+	}
+	box, err := outbox.Open(*outboxPath)
+	if err != nil {
+		return err
+	}
+	defer box.Close()
+
 	var hosts []string
 	for _, h := range strings.Split(*allowedHosts, ",") {
 		if h = strings.TrimSpace(h); h != "" {
@@ -98,6 +110,7 @@ func run() error {
 		Outbound:    outClient,
 		Gateway:     gwClient,
 		DeadLetters: stores.Local,
+		Outbox:      box,
 		Retry:       extcaller.RetryPolicy{MaxAttempts: *retryAttempts, Backoff: *retryBackoff},
 		Logger:      logger,
 	})
@@ -111,8 +124,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger("extcaller starting", "consumer", consumer.Name())
+	logger("extcaller starting", "consumer", consumer.Name(), "outbox", *outboxPath)
 	engine.Start(ctx)
+	// the work Apply records is done here, off the engine's pass, each
+	// entry when it is due
+	go consumer.Worker().Run(ctx)
 	<-ctx.Done()
 	logger("extcaller shutting down")
 	return nil
