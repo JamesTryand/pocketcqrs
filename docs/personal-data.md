@@ -161,5 +161,48 @@ bounded lag** (it is a projection of the event), not instant effect.
 every command is allowed, so the gateway refuses every `dataSubject` command with `403` and records
 nothing. Wire `gateway.Config.Authorize` with a policy saying who may erase whom (an administrator
 role, say). Once a hook is wired, `dataSubject` commands go through it like any other command. A
-document can't declare this yet: schema 3.2.0's `dataSubjects` is refused on import (it authorises a
-*request* for erasure, which pocketcqrs doesn't model yet).
+document can't declare this yet: schema 3.2.0's `dataSubjects` is refused on import.
+
+## Governed erasure
+
+A request is not an erasure. Erasure is permanent, and a business usually has to keep some records
+about a person for years (payroll, tax, pensions), so the `dataSubject` aggregate carries a governed
+lifecycle, the same as dotnetcqrs's (same command and event names):
+
+```
+ (none) --RequestErasure--> Requested --policy: not yet--> Held --review--> (asked again)
+                               |  policy: go                                   |
+                               v                                               |
+                            Approved --EraseSubject--> Erased (terminal)  <----+
+ a legal hold (PlaceLegalHold / ReleaseLegalHold) blocks approval and erasure at any stage
+```
+
+| Command | Event | Who (`pii.DefaultRequiredRoles`) |
+|---|---|---|
+| `RequestErasure` | `ErasureRequested` | `manager`, `administrator` |
+| `HoldErasure` | `ErasureHeld` (reason, review date) | the governor, or `administrator` |
+| `ApproveErasure` | `ErasureApproved` | the governor, or `administrator` |
+| `PlaceLegalHold` / `ReleaseLegalHold` | `LegalHoldPlaced` / `LegalHoldReleased` | `administrator` |
+| `EraseSubject` | `SubjectErased` | the governor; `administrator` as a direct override |
+
+Asking twice is harmless; asking after erasure does nothing. A reason is a short code (`payroll-tax`,
+`legal-hold`), stored in the clear and kept after the erasure, so never personal data; over 200
+characters is refused. `SubjectErased` still carries no payload. `pii.AcceptedCommands(state)` says
+which commands a subject would act on, for a screen.
+
+Whether a request may proceed is the business's call: a `pii.RetentionPolicy`.
+`PeriodRetentionPolicy{Years: 6, Activity: a, Reason: "payroll-tax"}` holds a request until six years
+after the subject's last activity (`SubjectActivity` is yours to implement);
+`CompositeRetentionPolicy` holds while any duty holds, until the latest date; `AllowAllRetentionPolicy`
+is for a system with nothing to retain.
+
+`pii.RegisterErasureGovernance(ctx, app, engine, registry, store, policy, box, logger)` wires the rest
+on the writer. The `ErasureGovernor` asks the policy on each request (and when a legal hold is
+released), then approves or holds; it sends `EraseSubject` once approved, and the key destroyer does
+the rest. A hold with a review date is a review recorded in the outbox `box`, due on that date, so a
+held request is looked at again exactly then (no timer loop). Everything the governor sends is
+attributed to `system:retention-policy`. The `erasureRequests` collection (superusers only; guard it)
+is the queue an administrator screen lists: `pii.ListErasureRequests(ctx, app, stage)`.
+
+Not built: erasing part of a subject (their free text but not their payroll record). That needs a
+retention class per field.

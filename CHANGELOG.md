@@ -111,6 +111,16 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **Governed erasure (decision 3), ported from dotnetcqrs with the same names.** The `dataSubject`
+  aggregate now has the lifecycle `RequestErasure` → (`HoldErasure` ↔ review) → `ApproveErasure` →
+  `EraseSubject`, with `PlaceLegalHold`/`ReleaseLegalHold` blocking approval and erasure; reasons are
+  short codes (200 characters at most). `pii.RetentionPolicy` (`PeriodRetentionPolicy`,
+  `CompositeRetentionPolicy`, `AllowAllRetentionPolicy`, `SubjectActivity`), the `ErasureGovernor`
+  (asks the policy, approves or holds, erases once approved; held requests are reviewed by an outbox
+  entry due on the review date, not a timer loop), the `erasureRequests` queue collection
+  (`ErasureRequests`, `ListErasureRequests`), `DefaultRequiredRoles`, `AcceptedCommands` and
+  `RegisterErasureGovernance`. `pii.SubjectState` gains the stage, legal hold, reason and review
+  date. Direct `EraseSubject` still works, and is refused under a legal hold.
 - **A secondary wakes when LiteFS applies the master's transactions (R7).** `--cqrsLiteFSEvents`
   follows LiteFS's `/events` stream (package `litefswatch`) and nudges the engine (new
   `Engine.Nudge`) on each transaction applied to the log, after it is readable; the 1 s tick stays as

@@ -3,7 +3,6 @@ package pii
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -13,58 +12,6 @@ import (
 	"github.com/jamestryand/pocketcqrs/kms"
 	"github.com/jamestryand/pocketcqrs/outbox"
 )
-
-// The built-in data-subject aggregate. Erasure isn't a property of any
-// domain aggregate that happens to mention a person: an order's stream holds
-// the customer's email, but the customer outlives the order and is erased
-// independently of it. So the subject gets its own stream (id = subject id),
-// and every reader learns of an erasure the way it learns anything else:
-// from an event. Deliberately not modelled in eventmodelschema — erasure is
-// a runtime concern, not something a document describes.
-//
-// Erased is terminal. A person who is erased and later returns is a NEW
-// subject with a new id and a new key, never a reactivation: reusing the id
-// gains nothing (a destroyed key's material is gone, so a new key of the
-// same name can't read the old ciphertext) and would undo the erasure by
-// reconnecting a live identity to the history erasure severed. Subject ids
-// are therefore opaque, never derived from personal data, never reused.
-const (
-	SubjectAggregate    = "dataSubject"
-	EraseSubjectCommand = "EraseSubject"
-	SubjectErasedEvent  = "SubjectErased"
-)
-
-// SubjectState is the folded state of a data subject's stream.
-type SubjectState struct{ Erased bool }
-
-// DataSubject is the pure decider. The stream id IS the subject id, so
-// nothing in the payload names it, and no personal data reaches this
-// aggregate.
-func DataSubject() *decider.Decider[SubjectState] {
-	return &decider.Decider[SubjectState]{
-		Commands:     []string{EraseSubjectCommand},
-		InitialState: func() SubjectState { return SubjectState{} },
-		Decide: func(cmd decider.Command, state SubjectState) ([]events.NewEvent, error) {
-			switch cmd.Name {
-			case EraseSubjectCommand:
-				// Idempotent: erasing an erased subject appends nothing, so a
-				// retried erasure request is harmless.
-				if state.Erased {
-					return nil, nil
-				}
-				return []events.NewEvent{{Type: SubjectErasedEvent, Data: json.RawMessage(`{}`)}}, nil
-			default:
-				return nil, errors.New("unknown command: " + cmd.Name)
-			}
-		},
-		Evolve: func(state SubjectState, ev events.Event) (SubjectState, error) {
-			if ev.Type == SubjectErasedEvent {
-				state.Erased = true
-			}
-			return state, nil
-		},
-	}
-}
 
 // RegisterDataSubjects registers the built-in aggregate. A host that stores
 // any personal data needs it, or nothing can ever be erased.
