@@ -108,16 +108,16 @@ func TestUnknownKeysAreRefusedAtAnyDepth(t *testing.T) {
 	wantRefused(t, refusedAt(t, p), "/readModels/r/fields/0/subfields/0/futureThing")
 }
 
-// A derivation kind added later (3.16.0's sumOfItems and byEvent) carries a
+// A derivation kind added later (3.16.0's sumOfItems) carries a
 // meaning the projection generator would otherwise skip without a word.
 func TestUnknownDerivationKindIsRefused(t *testing.T) {
 	p := writeDoc(t, docHead+`
 		"readModels":{"r":{"name":"R","fields":[
-			{"name":"status","type":"string","derivation":{"kind":"byEvent","values":{"e":"done"}}}]}},
+			{"name":"status","type":"string","derivation":{"kind":"sumOfItems","subfield":"amount"}}]}},
 		"slices":[]}`)
 	wantRefused(t, refusedAt(t, p),
 		"/readModels/r/fields/0/derivation/kind",
-		"/readModels/r/fields/0/derivation/values")
+		"/readModels/r/fields/0/derivation/subfield")
 }
 
 // A filter kind this importer does not know is refused the same way.

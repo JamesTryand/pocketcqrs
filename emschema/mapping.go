@@ -468,7 +468,23 @@ func (m *mapper) mapDerivation(in *FieldDerivation) *scaffold.FieldDerivation {
 		AmountField:         in.AmountField,
 		RowKeyField:         scaffold.SanitizeName(in.RowKeyField),
 		GroupByField:        scaffold.SanitizeName(in.GroupByField),
+		Values:              m.byEventValues(in.Values),
 	}
+}
+
+// byEventValues maps byEvent's event ids to event types, with their
+// literals decoded.
+func (m *mapper) byEventValues(in map[string]json.RawMessage) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for id, raw := range in {
+		var v any
+		_ = json.Unmarshal(raw, &v)
+		out[m.eventType(id)] = v
+	}
+	return out
 }
 
 // mapReadModels attaches each read model to the aggregate owning the events

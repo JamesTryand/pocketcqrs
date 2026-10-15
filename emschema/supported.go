@@ -72,18 +72,16 @@ var laterFeatures = map[string]string{
 	"partitionFrom":   "partitionFrom (schema 3.7.0)",
 	"rowsPerListItem": "rowsPerListItem, a row per group of a stream's list items (schema 3.16.0)",
 	"subfield":        "a sumOfItems derivation (schema 3.16.0)",
-	"values":          "a byEvent derivation (schema 3.16.0)",
 	"projection":      "projection: a read model built by a hand-written projection (schema 3.17.0)",
 }
 
 // laterKinds names the enum values added later, for the message only.
 var laterKinds = map[string]string{
 	"sumOfItems": "derivation kind sumOfItems (schema 3.16.0)",
-	"byEvent":    "derivation kind byEvent (schema 3.16.0)",
 }
 
 var (
-	derivationKinds = map[string]bool{DerivationToggle: true, DerivationCount: true, DerivationSum: true, DerivationGroupBy: true}
+	derivationKinds = map[string]bool{DerivationToggle: true, DerivationCount: true, DerivationSum: true, DerivationGroupBy: true, DerivationByEvent: true}
 	filterKinds     = map[string]bool{FilterDateRange: true, FilterMatch: true}
 	rawMessageType  = reflect.TypeOf(json.RawMessage{})
 )

@@ -111,6 +111,10 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **Fields set by event (schema 3.16.0 `byEvent`).** A read-model field set to a literal per event,
+  applied after the event's own row update in both generated projections (JS and Go), so it sits
+  beside a plain merge or a count/sum. Events it doesn't name leave it as it was; a literal of the
+  wrong type for its field is refused.
 - **Rows keyed by a field of the event (schema 3.14.0).** A read model's `rowKeyField` keys every
   row it writes, merges, toggles and removes by that event field instead of the stream, in both
   generated projections; the import refuses it when an event lacks the field.

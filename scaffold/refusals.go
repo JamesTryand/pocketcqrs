@@ -34,6 +34,19 @@ type RefusalOperand struct {
 	Literal any    `json:"literal,omitempty"`
 }
 
+// literalType is the //@schema type a JSON literal is: text, number or bool.
+func literalType(v any) string {
+	switch v.(type) {
+	case string:
+		return "text"
+	case float64, int:
+		return "number"
+	case bool:
+		return "bool"
+	}
+	return "null"
+}
+
 var numericOps = map[string]bool{"lessThan": true, "atMost": true, "greaterThan": true, "atLeast": true}
 
 // hasRefusals reports whether any rule reads the aggregate's state or the

@@ -164,6 +164,10 @@ const (
 	DerivationCount   = "count"
 	DerivationSum     = "sum"
 	DerivationGroupBy = "groupBy"
+	// DerivationByEvent (schema 3.16.0): a literal per event (a status, say;
+	// toggle is the true/false case). An event not named leaves the field
+	// as it was.
+	DerivationByEvent = "byEvent"
 )
 
 // FieldDerivation computes a read-model field as a fold over named events —
@@ -205,6 +209,10 @@ type FieldDerivation struct {
 	// value is just the grouping key, copied straight from the matching
 	// event payload.
 	GroupByField string `json:"groupByField,omitempty"`
+
+	// byEvent: Values maps an event type to the literal the field takes
+	// when that event lands.
+	Values map[string]any `json:"values,omitempty"`
 }
 
 // ReadModel is a projection's target collection.
@@ -438,6 +446,15 @@ func (d Domain) Validate() error {
 			}
 			if dv := f.Derivation; dv != nil {
 				switch dv.Kind {
+				case DerivationByEvent:
+					if len(dv.Values) == 0 {
+						add("read model %q: field %q is a byEvent derivation but names no event", rm.Collection, f.Name)
+					}
+					for ev, v := range dv.Values {
+						if want := literalType(v); want != f.Type {
+							add("read model %q: field %q (%s) is given a %s value on %s", rm.Collection, f.Name, f.Type, want, ev)
+						}
+					}
 				case DerivationToggle:
 					if len(dv.OnEventIDs) == 0 || len(dv.OffEventIDs) == 0 {
 						add("read model %q: field %q is a toggle derivation but is missing onEventIds/offEventIds",
@@ -863,6 +880,24 @@ func (d Domain) decider() string {
 // only ever a row key (count and sum derivations key by their own field).
 func (d Domain) projection(rm ReadModel) string {
 	src := d.projectionBody(rm)
+	if values := byEventValues(rm); len(values) > 0 {
+		// byEvent (schema 3.16.0): on top of an event's own row op, the
+		// fields it sets to a literal
+		literal, _ := json.Marshal(values)
+		removals, _ := json.Marshal(append([]string{}, rm.RemovedBy...))
+		src = strings.Replace(src, "function project(event) {", "function projectEvent(event) {", 1) + fmt.Sprintf(`
+// byEvent (schema 3.16.0): a field set to a literal per event; an event not
+// named leaves it as it was. Applied after the event's own row op.
+const byEventValues = %s;
+function project(event) {
+  var ops = projectEvent(event);
+  var values = byEventValues[event.type];
+  if (!values || %s.includes(event.type)) { return ops; }
+  ops = ops === undefined || ops === null ? [] : (Array.isArray(ops) ? ops : [ops]);
+  return ops.concat([{ upsert: { key: event.aggregateId, fields: values } }]);
+}
+`, literal, removals)
+	}
 	if rm.RowKeyField == "" {
 		return src
 	}
@@ -1113,6 +1148,24 @@ func (d Domain) reactor(r Reactor) string {
 	b.WriteString("  }];\n")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// byEventValues is a read model's byEvent derivations (schema 3.16.0) by
+// event: event type -> field -> literal.
+func byEventValues(rm ReadModel) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, f := range rm.Fields {
+		if f.Derivation == nil || f.Derivation.Kind != DerivationByEvent {
+			continue
+		}
+		for ev, v := range f.Derivation.Values {
+			if out[ev] == nil {
+				out[ev] = map[string]any{}
+			}
+			out[ev][f.Name] = v
+		}
+	}
+	return out
 }
 
 // writeJSRemoval opens project() with the read model's removals (schema

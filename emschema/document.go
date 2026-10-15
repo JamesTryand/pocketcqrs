@@ -407,6 +407,7 @@ const (
 	DerivationCount   = "count"
 	DerivationSum     = "sum"
 	DerivationGroupBy = "groupBy"
+	DerivationByEvent = "byEvent"
 )
 
 // FieldDerivation computes a read-model field as a fold over named events.
@@ -450,6 +451,10 @@ type FieldDerivation struct {
 	// needs no derivation of its own; its value is just the grouping key,
 	// copied straight from the matching event payload.
 	GroupByField string `json:"groupByField,omitempty"`
+
+	// byEvent (schema 3.16.0): Values maps an event id to the literal the
+	// field takes when that event lands.
+	Values map[string]json.RawMessage `json:"values,omitempty"`
 }
 
 // Slice is one vertical slice. The pattern-specific fields are flattened

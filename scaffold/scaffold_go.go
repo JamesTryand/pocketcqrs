@@ -644,6 +644,9 @@ func (d Domain) writeProtectorGo(b *strings.Builder, fields []namedField, eventH
 // (schema 3.14.0) where there is one; see projection.
 func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 	src := d.projectionGoBody(pkg, rm)
+	if values := byEventValues(rm); len(values) > 0 {
+		src = goByEvent(src, rm, values)
+	}
 	if rm.RowKeyField == "" {
 		return src
 	}
@@ -675,6 +678,52 @@ func (p *%[1]s) rowKey(ev events.Event) string {
 	return ""
 }
 `, typeName, rm.RowKeyField)
+}
+
+// goByEvent wraps a Go projection's Apply with its byEvent fields (schema
+// 3.16.0): after the event's own row op, each field it names is set to its
+// literal on the same row (a removal stays a removal).
+func goByEvent(src string, rm ReadModel, values map[string]map[string]any) string {
+	typeName := ExportName(rm.Collection) + "Projection"
+	src = strings.Replace(src, fmt.Sprintf("func (p *%s) Apply(ctx context.Context, ev events.Event) error {", typeName),
+		fmt.Sprintf("func (p *%s) applyEvent(ctx context.Context, ev events.Event) error {", typeName), 1)
+	events := make([]string, 0, len(values))
+	for ev := range values {
+		if !contains(rm.RemovedBy, ev) {
+			events = append(events, ev)
+		}
+	}
+	sort.Strings(events)
+	var b strings.Builder
+	b.WriteString("\n// Apply is applyEvent, then the byEvent fields (schema 3.16.0): a field set\n")
+	b.WriteString("// to a literal per event; an event not named leaves it as it was.\n")
+	fmt.Fprintf(&b, "func (p *%s) Apply(ctx context.Context, ev events.Event) error {\n", typeName)
+	b.WriteString("\tif err := p.applyEvent(ctx, ev); err != nil {\n\t\treturn err\n\t}\n")
+	b.WriteString("\tvar values map[string]any\n\tswitch ev.Type {\n")
+	for _, ev := range events {
+		fields := make([]string, 0, len(values[ev]))
+		for f := range values[ev] {
+			fields = append(fields, f)
+		}
+		sort.Strings(fields)
+		parts := make([]string, len(fields))
+		for i, f := range fields {
+			parts[i] = fmt.Sprintf("%q: %s", f, goLiteral(values[ev][f]))
+		}
+		fmt.Fprintf(&b, "\tcase %q:\n\t\tvalues = map[string]any{%s}\n", ev, strings.Join(parts, ", "))
+	}
+	b.WriteString("\tdefault:\n\t\treturn nil\n\t}\n")
+	// a plain projection's merge has just written the row; a derived one
+	// may not have (its triggers skip the merge), so it creates it here
+	if strings.Contains(src, ") getOrCreate(rowKey string)") {
+		b.WriteString("\trec, err := p.getOrCreate(ev.AggregateID)\n")
+	} else {
+		fmt.Fprintf(&b, "\trec, err := p.app.FindFirstRecordByData(%q, %q, ev.AggregateID)\n", rm.Collection, rm.Key)
+	}
+	b.WriteString("\tif err != nil {\n\t\treturn err\n\t}\n")
+	b.WriteString("\tfor field, value := range values {\n\t\trec.Set(field, value)\n\t}\n")
+	b.WriteString("\treturn p.app.SaveWithContext(writeguard.MarkInternal(ctx), rec)\n}\n")
+	return src + b.String()
 }
 
 func dedupe(list []string) []string {
@@ -1196,9 +1245,10 @@ func writeProjectionScopes(b *strings.Builder, rm ReadModel, typeName string) {
 // FieldDerivation's split on/off/increment/decrement/add/subtract id lists
 // into a single per-event, per-field operation.
 type derivedAction struct {
-	field       string
-	kind        string
-	boolValue   bool
+	field     string
+	kind      string
+	boolValue bool
+
 	delta       int
 	sign        float64
 	amountField string

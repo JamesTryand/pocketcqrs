@@ -80,9 +80,8 @@ and the pointer starts with the file's path.
 
 Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
 ingresses, delays, schedules and `elapsed`, automation `effect`,
-partitioning, `rowsPerListItem`, the `sumOfItems` and
-`byEvent` derivations, and `projection`. Each leaves this list as it is
-implemented.
+partitioning, `rowsPerListItem`, the `sumOfItems` derivation, and
+`projection`. Each leaves this list as it is implemented.
 
 ### Who may read a read model
 
@@ -171,6 +170,15 @@ rows (a pay run recording a payment per person). Every event the read model is
 built from or removed by must carry it, or the import is refused; at run time
 an event without it stops the projection rather than write a row keyed by
 nothing.
+
+### A field set by event
+
+A `byEvent` derivation (3.16.0) sets a field to a literal per event: a status
+that reads `staged` after one event and `sent` after another. It is applied
+after the event's own row update, so the event's other fields still land; an
+event it doesn't name leaves the field as it was, and a removing event removes
+the row as usual. A literal of the wrong type for its field is refused at
+import.
 
 ### Removals
 
