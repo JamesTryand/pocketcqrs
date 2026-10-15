@@ -211,6 +211,12 @@ clean. A failing projection **blocks** at the failing event (correctness over
 progress); fix the code and [rebuild](reference/cli.md#projection) or let it
 catch up.
 
+**One transaction per event.** An event's ops and the projection's position
+commit together in one PocketBase transaction in `data.db` (the position is
+kept beside the rows, in `_cqrsPositions`), so an event is never applied half,
+or applied and then applied again because the position didn't land. A
+projection that kept its position in `events.db` before carries on from it.
+
 ## Deciders (tier 3)
 
 ```js

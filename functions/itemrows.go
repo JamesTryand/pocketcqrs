@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pocketbase/pocketbase/core"
+
 	"github.com/jamestryand/pocketcqrs/projections/itemrows"
 )
 
@@ -60,8 +62,7 @@ func parseItemRows(v any) (*itemRowsOp, error) {
 
 // applyItemRows applies op live: the stream's state from its companion row,
 // then the rows it plans.
-func (spec *ProjectionSpec) applyItemRows(ctx context.Context, s *SchemaSpec, op *itemRowsOp) error {
-	app := spec.app
+func (spec *ProjectionSpec) applyItemRows(ctx context.Context, app core.App, s *SchemaSpec, op *itemRowsOp) error {
 	streams, err := spec.schemaNamed(op.Streams)
 	if err != nil {
 		return err
@@ -78,19 +79,19 @@ func (spec *ProjectionSpec) applyItemRows(ctx context.Context, s *SchemaSpec, op
 	}
 	next, drop, rows := op.Plan(prior)
 	for _, key := range drop {
-		if err := spec.applyOp(ctx, s, rowOp{delete: true, key: key}); err != nil {
+		if err := spec.applyOp(ctx, app, s, rowOp{delete: true, key: key}); err != nil {
 			return err
 		}
 	}
 	for _, r := range rows {
-		if err := spec.applyOp(ctx, s, rowOp{key: r.Key, fields: r.Fields}); err != nil {
+		if err := spec.applyOp(ctx, app, s, rowOp{key: r.Key, fields: r.Fields}); err != nil {
 			return err
 		}
 	}
 	if next == nil {
-		return spec.applyOp(ctx, streams, rowOp{delete: true, key: op.Stream})
+		return spec.applyOp(ctx, app, streams, rowOp{delete: true, key: op.Stream})
 	}
-	return spec.applyOp(ctx, streams, rowOp{key: op.Stream, fields: map[string]any{"state": next}})
+	return spec.applyOp(ctx, app, streams, rowOp{key: op.Stream, fields: map[string]any{"state": next}})
 }
 
 // simulateItemRows is applyItemRows over a dry run's rows.

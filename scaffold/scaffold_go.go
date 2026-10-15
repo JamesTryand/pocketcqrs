@@ -642,6 +642,34 @@ func (d Domain) writeProtectorGo(b *strings.Builder, fields []namedField, eventH
 // projectionGo is the Go projection for rm, keyed by a rowKeyField
 // (schema 3.14.0) where there is one; see projection.
 func (d Domain) projectionGo(pkg string, rm ReadModel) string {
+	return goCommit(d.projectionGoShape(pkg, rm), rm)
+}
+
+// goCommit gives a Go projection Commit and Checkpoints (R2): each event's
+// row writes and its position in data.db commit in one transaction, Apply
+// running on the transaction's app.
+func goCommit(src string, rm ReadModel) string {
+	typeName := ExportName(rm.Collection) + "Projection"
+	src = strings.Replace(src, "\t\"github.com/jamestryand/pocketcqrs/events\"\n",
+		"\t\"github.com/jamestryand/pocketcqrs/consumers\"\n\t\"github.com/jamestryand/pocketcqrs/events\"\n\t\"github.com/jamestryand/pocketcqrs/projections\"\n", 1)
+	return src + fmt.Sprintf(`
+// Commit applies ev and records its position in data.db in one transaction
+// (R2): a failure part-way leaves neither, so no event is applied twice or
+// half. The engine calls it in place of Apply.
+func (p *%[1]s) Commit(ctx context.Context, ev events.Event) error {
+	return projections.Commit(ctx, p.app, p.Name(), ev.Position, func(tx core.App) error {
+		return (&%[1]s{app: tx}).Apply(ctx, ev)
+	})
+}
+
+// Checkpoints is where the projection's position lives: data.db, beside its
+// rows.
+func (p *%[1]s) Checkpoints() consumers.CheckpointStore { return projections.Positions{App: p.app} }
+`, typeName)
+}
+
+// projectionGoShape is the Go projection for rm, before Commit.
+func (d Domain) projectionGoShape(pkg string, rm ReadModel) string {
 	if rm.RowsPerListItem != nil {
 		return d.itemRowsProjectionGo(pkg, rm)
 	}

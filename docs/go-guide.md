@@ -220,6 +220,22 @@ content; add yours unconditionally rather than inside that branch. The target
 collection is created by a **PocketBase Go migration** in `migrations/`
 (collections-as-DDL), not by the projection.
 
+Make it a `consumers.Committer` so each event's writes and its position
+commit in one `data.db` transaction (the generated Go projections do this):
+
+```go
+func (p tasksProjection) Commit(ctx context.Context, ev events.Event) error {
+	return projections.Commit(ctx, p.app, p.Name(), ev.Position, func(tx core.App) error {
+		return tasksProjection{app: tx}.Apply(ctx, ev) // write through tx
+	})
+}
+func (p tasksProjection) Checkpoints() consumers.CheckpointStore { return projections.Positions{App: p.app} }
+```
+
+The engine then calls `Commit` instead of `Apply` and reads the position from
+`data.db`; a projection with none there yet carries on from the one it kept
+in the engine's store.
+
 Rebuild with `pocketcqrs projection rebuild <name>` (or the admin API): it
 records a request, and the running server's engine wipes, resets the
 checkpoint and replays, so it stays the only thing that runs the projection.

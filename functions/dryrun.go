@@ -207,6 +207,10 @@ type ProjectionDryRun struct {
 	// groupByBump finds-or-creates a nested entry and adds to ITS running
 	// value).
 	Rows map[string]map[string]map[string]any
+	// Position is the last event the run applied, as Commit records it live
+	// (R2): every event counts, one the projection doesn't handle too. A
+	// failing event fails the whole run, so no rows are seen part-applied.
+	Position int64
 }
 
 // DryRunProjection runs a candidate projection over the whole event log
@@ -251,6 +255,7 @@ func DryRunProjectionOver(spec *ProjectionSpec, fixture []events.Event) (*Projec
 func runProjectionOver(spec *ProjectionSpec, log []events.Event, isolated bool) (*ProjectionDryRun, error) {
 	out := &ProjectionDryRun{Name: spec.Name, Rows: map[string]map[string]map[string]any{}}
 	for _, ev := range log {
+		out.Position = ev.Position
 		if !contains(spec.EventTypes, ev.Type) {
 			continue
 		}

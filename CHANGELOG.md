@@ -111,6 +111,14 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **One transaction per projected event (R2).** A projection's row ops for an event and its position
+  now commit together in one PocketBase transaction in `data.db` (table `_cqrsPositions`), so a crash
+  or a failing op can't leave an event half applied, or applied without its position (and applied
+  again). New `consumers.Committer` (the engine calls `Commit` in place of `Apply` then
+  `SaveCheckpoint`) and `consumers.ErrNoCheckpoint` (a store with no position yet: the engine reads
+  the old one, so an upgrade carries on rather than replaying). `projections.Commit` and
+  `projections.Positions` are the pieces; JS projections and generated Go projections use them. The
+  dry run reports the position it reached (`ProjectionDryRun.Position`), as `Commit` records it.
 - **`schema verify --lang go` runs the scenarios against the Go code itself.** The generated Go (hand
   hooks as stand-ins reporting HAND), or with `--functions` a host's own Go packages, compiled with
   the new `verifyharness` package in a scratch module and run once: deciders through the registry

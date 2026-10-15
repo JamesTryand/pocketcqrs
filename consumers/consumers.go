@@ -79,9 +79,28 @@ func IsEffect(c Consumer) bool {
 	return ok && e.IsEffect()
 }
 
-// deliver hands ev to c: Apply, except that an effect consumer folds an
-// imported event instead of acting on it (see Effect).
+// Committer is a consumer that applies an event and records its position in
+// one transaction of its own store (R2): a projection's row ops and its
+// position in data.db, so a crash between them can't apply an event twice
+// or lose one. The engine calls Commit instead of Apply then SaveCheckpoint,
+// and reads the position from the consumer's own store (OwnCheckpoints).
+type Committer interface {
+	Commit(ctx context.Context, ev events.Event) error
+}
+
+// ErrNoCheckpoint is a consumer's own store saying it holds no position for
+// the name yet: the engine reads the name's position from its own store
+// instead, once (a projection moving its position into data.db carries on
+// where it was rather than replaying everything).
+var ErrNoCheckpoint = errors.New("consumers: no checkpoint recorded")
+
+// deliver hands ev to c: Commit for a Committer, else Apply, except that an
+// effect consumer folds an imported event instead of acting on it (see
+// Effect).
 func deliver(ctx context.Context, c Consumer, ev events.Event) error {
+	if cm, ok := c.(Committer); ok {
+		return cm.Commit(ctx, ev)
+	}
 	if IsEffect(c) && events.IsImported(ev) {
 		if f, ok := c.(Folder); ok {
 			return f.Fold(ctx, ev)
@@ -454,7 +473,17 @@ func (e *Engine) Checkpoint(ctx context.Context, name string) (int64, error) {
 		}
 	}
 	e.mu.RUnlock()
-	return store.Checkpoint(ctx, name)
+	return e.position(ctx, store, name)
+}
+
+// position reads name's position from store, or from the engine's own
+// store when store has none yet (ErrNoCheckpoint).
+func (e *Engine) position(ctx context.Context, store CheckpointStore, name string) (int64, error) {
+	pos, err := store.Checkpoint(ctx, name)
+	if errors.Is(err, ErrNoCheckpoint) && store != e.checkpoints {
+		return e.checkpoints.Checkpoint(ctx, name)
+	}
+	return pos, err
 }
 
 // checkpointsFor is the store c's position lives in: its own (see
@@ -575,10 +604,11 @@ func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer, head *int64) 
 		return err
 	}
 	checkpoints := e.checkpointsFor(c)
-	pos, err := checkpoints.Checkpoint(ctx, name)
+	pos, err := e.position(ctx, checkpoints, name)
 	if err != nil {
 		return fail(err)
 	}
+	_, commits := c.(Committer)
 	for {
 		batch, err := e.source.Poll(ctx, pos, 100)
 		if err != nil {
@@ -596,8 +626,11 @@ func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer, head *int64) 
 					"consumer", name, "position", ev.Position, "error", err)
 				return fail(err)
 			}
-			if err := checkpoints.SaveCheckpoint(ctx, name, ev.Position); err != nil {
-				return fail(err)
+			// a committer recorded its position with the event's effects
+			if !commits {
+				if err := checkpoints.SaveCheckpoint(ctx, name, ev.Position); err != nil {
+					return fail(err)
+				}
 			}
 			pos = ev.Position
 			blocked = false

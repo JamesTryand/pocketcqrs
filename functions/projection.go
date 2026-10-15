@@ -10,7 +10,9 @@ import (
 	"github.com/dop251/goja"
 	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/jamestryand/pocketcqrs/consumers"
 	"github.com/jamestryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/projections"
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
@@ -57,18 +59,47 @@ func (p *JSProjection) Collections() []string { return p.spec.Collections() }
 // failures are returned: a failing projection blocks at the failing event
 // (correctness over progress — rebuild after fixing).
 func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
+	ops, err := p.ops(ev)
+	if err != nil {
+		return err
+	}
+	return p.applyOps(ctx, p.spec.app, ops)
+}
+
+// Commit is Apply with the event's position, in one data.db transaction
+// (R2, consumers.Committer): project(event) runs first, outside it (it is
+// pure), then its ops and the position commit together or not at all. An
+// event the projection doesn't handle still records its position.
+func (p *JSProjection) Commit(ctx context.Context, ev events.Event) error {
+	ops, err := p.ops(ev)
+	if err != nil {
+		return err
+	}
+	return projections.Commit(ctx, p.spec.app, p.spec.Name, ev.Position, func(tx core.App) error {
+		return p.applyOps(ctx, tx, ops)
+	})
+}
+
+// Checkpoints is where a JS projection's position lives: data.db, beside its
+// rows (consumers.OwnCheckpoints).
+func (p *JSProjection) Checkpoints() consumers.CheckpointStore {
+	return projections.Positions{App: p.spec.app}
+}
+
+// ops runs project(event): none for an event it doesn't handle.
+func (p *JSProjection) ops(ev events.Event) ([]rowOp, error) {
 	if !contains(p.spec.EventTypes, ev.Type) {
-		return nil
+		return nil, nil
 	}
 
 	result, err := p.spec.runtime.runProjection(p.spec, ev)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ops, ignored, err := normalizeOps(result)
 	if err != nil {
-		return fmt.Errorf("projection %s: %w", p.spec.Name, err)
+		return nil, fmt.Errorf("projection %s: %w", p.spec.Name, err)
 	}
 	// An object that is neither an upsert nor a delete is not an op, and was
 	// silently discarded: a projection returning plain rows wrote nothing,
@@ -81,7 +112,12 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 			"projection", p.spec.Name, "event", ev.Type, "position", ev.Position, "ignored", ignored,
 			"hint", "project(event) must return {upsert:{key,fields}}, {delete:key}, {increment:{key,field,delta}} or {groupByBump:{key,field,groupField,groupValue,subfield,delta}} or {itemRows:{...}}")
 	}
+	return ops, nil
+}
 
+// applyOps applies an event's ops through app (the projection's own, or a
+// transaction's).
+func (p *JSProjection) applyOps(ctx context.Context, app core.App, ops []rowOp) error {
 	ctx = writeguard.MarkInternal(ctx)
 	for _, op := range ops {
 		s, err := p.spec.resolveSchema(op)
@@ -89,12 +125,12 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 			return fmt.Errorf("projection %s: %w", p.spec.Name, err)
 		}
 		if op.itemRows != nil {
-			if err := p.spec.applyItemRows(ctx, s, op.itemRows); err != nil {
+			if err := p.spec.applyItemRows(ctx, app, s, op.itemRows); err != nil {
 				return fmt.Errorf("projection %s: %w", p.spec.Name, err)
 			}
 			continue
 		}
-		if err := p.spec.applyOp(ctx, s, op); err != nil {
+		if err := p.spec.applyOp(ctx, app, s, op); err != nil {
 			return fmt.Errorf("projection %s: %w", p.spec.Name, err)
 		}
 	}
@@ -404,8 +440,7 @@ func groupByRowIndex(rows []map[string]any, groupKeyField string, groupKeyValue 
 // applyOp applies one row op to the schema's collection with the internal
 // writeguard marker. Upserts are keyed (idempotent); deletes are no-ops
 // when the row is absent.
-func (spec *ProjectionSpec) applyOp(ctx context.Context, s *SchemaSpec, op rowOp) error {
-	app := spec.app
+func (spec *ProjectionSpec) applyOp(ctx context.Context, app core.App, s *SchemaSpec, op rowOp) error {
 	keyField := s.Key
 
 	rec, err := app.FindFirstRecordByData(s.Collection, keyField, op.key)
