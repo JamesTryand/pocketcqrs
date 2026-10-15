@@ -189,7 +189,9 @@ the read model's other fields merge from the stream's events onto every row
 its issue rebuilt). A group that leaves the list loses its row, an item with
 no group is in no row, and a removing event removes all of the stream's rows.
 A `sumOfItems` field is the sum of a subfield over the row's items, and null
-until every one of them carries it.
+until every one of them carries it. Its column is json, whatever number type
+the model gives it, because a PocketBase number field can't hold null (it would
+read 0); a Go host's migration declares it json too.
 
 The host keeps each stream's merged fields and list in a companion
 collection, `<collection>_streams`, readable by superusers only

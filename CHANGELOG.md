@@ -111,6 +111,9 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **A `sumOfItems` column is json** (James's call), so its null before every item carries the subfield
+  stays null; a PocketBase number field read it back as 0, which the Go check reported against
+  upstream's `rows-per-list-item.json`. A Go host's migration declares the column json too.
 - **Governed erasure (decision 3), ported from dotnetcqrs with the same names.** The `dataSubject`
   aggregate now has the lifecycle `RequestErasure` → (`HoldErasure` ↔ review) → `ApproveErasure` →
   `EraseSubject`, with `PlaceLegalHold`/`ReleaseLegalHold` blocking approval and erasure; reasons are

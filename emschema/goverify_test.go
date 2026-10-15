@@ -112,21 +112,20 @@ func TestGoVerifyViews(t *testing.T) {
 	}
 }
 
-// Upstream's rows-per-list-item.json through the Go projection: the
-// parts and the discard pass; a draft's subtotal, null in the model, reads
-// 0 from a PocketBase number field, and the Go check says so where the JS
-// dry run can't.
+// Upstream's rows-per-list-item.json through the Go projection, against
+// PocketBase: every scenario passes, a draft's null subtotal included. A
+// sumOfItems column is json (James, 2026-10-15), since a PocketBase number
+// field can't hold null and read 0.
 func TestGoVerifyRowsPerListItem(t *testing.T) {
 	doc, mapped := loadMapped(t, fixture(t, "examples/rows-per-list-item.json"))
 	results := goVerify(t, doc, mapped, "")
 	for id, r := range results {
-		wantPass := id != "a-drafts-parts-have-no-subtotal"
-		if r.Passed != wantPass {
-			t.Errorf("%s: passed=%v: %s", id, r.Passed, r.Detail)
+		if !r.Passed {
+			t.Errorf("%s: %s", id, r.Detail)
 		}
 	}
-	if r := results["a-drafts-parts-have-no-subtotal"]; !strings.Contains(r.Detail, "subtotal") {
-		t.Errorf("the draft's failure isn't about its subtotal: %s", r.Detail)
+	if len(results) != 3 {
+		t.Fatalf("want 3 scenarios, got %d", len(results))
 	}
 }
 

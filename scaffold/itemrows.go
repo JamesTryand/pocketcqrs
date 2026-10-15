@@ -76,6 +76,17 @@ func validateItemRows(rm ReadModel, collections map[string]bool, add func(string
 	}
 }
 
+// StorageType is the column type f is stored as: its own, except a
+// sumOfItems field, which is json (James, 2026-10-15): its null, before
+// every item carries the subfield, has to stay null, and a PocketBase
+// number field reads it back as 0.
+func StorageType(f Field) string {
+	if f.Derivation != nil && f.Derivation.Kind == DerivationSumOfItems {
+		return "json"
+	}
+	return f.Type
+}
+
 // itemRowsParts is what both targets' projections are generated from.
 type itemRowsParts struct {
 	columns []string                  // plain fields merged from events
@@ -112,7 +123,7 @@ func (d Domain) itemRowsProjection(rm ReadModel) string {
 	columns := []string{rm.Key + ":text"}
 	for _, f := range rm.Fields {
 		if f.Name != rm.Key {
-			columns = append(columns, f.Name+":"+f.Type)
+			columns = append(columns, f.Name+":"+StorageType(f))
 		}
 	}
 	var b strings.Builder
@@ -184,7 +195,8 @@ func (d Domain) itemRowsProjectionGo(pkg string, rm ReadModel) string {
 	fmt.Fprintf(&b, "// %s projects %s events into the %q collection: rowsPerListItem\n", ctor, d.Aggregate, rm.Collection)
 	fmt.Fprintf(&b, "// (schema 3.16.0), one row per %s of a stream's %s, keyed\n", rp.GroupBy, rp.ListField)
 	fmt.Fprintf(&b, "// '<stream>|<%s>'. Each stream's state is kept in %q (stream:text,\n", rp.GroupBy, streams)
-	b.WriteString("// state:json; superusers only). Both collections are ordinary PocketBase\n")
+	b.WriteString("// state:json; superusers only). A sumOfItems field's column is json, so its\n")
+	b.WriteString("// null stays null. Both collections are ordinary PocketBase\n")
 	b.WriteString("// migrations (see migrations/1754200000_tasks_collection.go for the\n")
 	b.WriteString("// shape) — this file does not create them.\n")
 	fmt.Fprintf(&b, "func %s(app core.App) *%s { return &%s{app: app} }\n\n", ctor, typeName, typeName)

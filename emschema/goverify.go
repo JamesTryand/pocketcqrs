@@ -229,7 +229,7 @@ func goCollections(mapped *Mapped) []wire.Collection {
 			c := wire.Collection{Name: rm.Collection, Key: rm.Key, Fields: []wire.Field{{Name: rm.Key, Type: "text"}}}
 			for _, f := range rm.Fields {
 				if f.Name != rm.Key {
-					c.Fields = append(c.Fields, wire.Field{Name: f.Name, Type: f.Type, PII: f.PII})
+					c.Fields = append(c.Fields, wire.Field{Name: f.Name, Type: scaffold.StorageType(f), PII: f.PII})
 				}
 			}
 			out = append(out, c)

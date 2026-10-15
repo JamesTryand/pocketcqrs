@@ -45,6 +45,7 @@ const partsBehaviour = `package invoice
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -52,6 +53,11 @@ import (
 
 	"github.com/jamestryand/pocketcqrs/events"
 )
+
+func subtotal(r *core.Record) string {
+	raw, _ := json.Marshal(r.PublicExport()["subtotal"])
+	return string(raw)
+}
 
 func TestParts(t *testing.T) {
 	app, err := tests.NewTestApp()
@@ -63,7 +69,7 @@ func TestParts(t *testing.T) {
 	for _, f := range []string{"partId", "invoiceId", "projectId", "customerId", "status"} {
 		parts.Fields.Add(&core.TextField{Name: f})
 	}
-	parts.Fields.Add(&core.JSONField{Name: "lines"}, &core.NumberField{Name: "subtotal"})
+	parts.Fields.Add(&core.JSONField{Name: "lines"}, &core.JSONField{Name: "subtotal"}) // sumOfItems: json, so null stays null
 	streams := core.NewBaseCollection("parts_streams")
 	streams.Fields.Add(&core.TextField{Name: "stream"}, &core.JSONField{Name: "state"})
 	if err := app.Save(parts); err != nil {
@@ -92,7 +98,7 @@ func TestParts(t *testing.T) {
 
 	apply("InvoiceDrafted", ` + "`" + `{"invoiceId":"inv-1","customerId":"c1","lines":[{"projectId":"p1","localAmount":225},{"projectId":"p2","localAmount":100},{"projectId":"p3","localAmount":5}]}` + "`" + `)
 	got := rows()
-	if len(got) != 3 || got["inv-1|p1"].GetString("status") != "draft" || got["inv-1|p1"].Get("subtotal") != 0.0 {
+	if len(got) != 3 || got["inv-1|p1"].GetString("status") != "draft" || subtotal(got["inv-1|p1"]) != "null" {
 		t.Fatalf("after the draft: %v", got)
 	}
 	apply("InvoiceIssued", ` + "`" + `{"invoiceId":"inv-1","lines":[{"projectId":"p1","convertedAmount":306},{"projectId":"p1","convertedAmount":306},{"projectId":"p2","convertedAmount":136},{"convertedAmount":22.44}]}` + "`" + `)
@@ -102,7 +108,7 @@ func TestParts(t *testing.T) {
 	}
 	for key, want := range map[string]float64{"inv-1|p1": 612, "inv-1|p2": 136} {
 		r := got[key]
-		if r == nil || r.GetFloat("subtotal") != want || r.GetString("customerId") != "c1" || r.GetString("status") != "issued" {
+		if r == nil || subtotal(r) != strconv.FormatFloat(want, 'f', -1, 64) || r.GetString("customerId") != "c1" || r.GetString("status") != "issued" {
 			t.Errorf("%s: %v", key, r)
 		}
 	}
