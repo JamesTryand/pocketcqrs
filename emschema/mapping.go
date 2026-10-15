@@ -22,6 +22,12 @@ type Options struct {
 	// silently merge unrelated stream families into one, invisibly, until
 	// the log is already wrong — the operator states the intent here.
 	AggregateOverrides map[string]string
+
+	// RoleField and SubjectField name the auth-record fields the generated
+	// read rules read a caller's role and data-subject id from ("" = "role"
+	// and the record id); match the server's --cqrsRoleField and
+	// --cqrsSubjectField.
+	RoleField, SubjectField string
 }
 
 // Mapped is a document translated into this project's terms.
@@ -61,6 +67,10 @@ func Map(doc *Document, opts Options) (*Mapped, error) {
 	sort.Strings(names)
 	for _, name := range names {
 		d := *m.byAggregate[name]
+		d.RoleField, d.SubjectField = opts.RoleField, opts.SubjectField
+		// schema 3.8.0: a read model declaring no access rule is read by
+		// every signed-in caller (decision 8, 2026-10-15)
+		d.SignedInByDefault = true
 		if err := d.Validate(); err != nil {
 			rep.errorf("aggregate %q: %v", name, err)
 			continue
@@ -471,6 +481,7 @@ func (m *mapper) mapReadModels() {
 			Scopes:       m.mapScopes(id, rm),
 			Filters:      m.mapFilters(id, rm),
 			RequiredRole: append([]string(nil), rm.RequiredRole...),
+			SelfAccess:   m.mapSelfAccess(id, rm),
 		})
 	}
 }
@@ -493,8 +504,14 @@ func (m *mapper) mapScopes(id string, rm ReadModel) []scaffold.ReadModelScope {
 				id, sc.Param, sc.Via.ReadModelID)
 			continue
 		}
+		if sc.GrantsAccess && !hasField(rm.Fields, sc.Via.FilterLocalField) {
+			m.rep.errorf("read model %q: granting scope %q filters on %q, which is not one of its fields",
+				id, sc.Param, sc.Via.FilterLocalField)
+			continue
+		}
 		out = append(out, scaffold.ReadModelScope{
-			Param: sc.Param,
+			Param:        sc.Param,
+			GrantsAccess: sc.GrantsAccess,
 			Via: scaffold.ReadModelScopeVia{
 				Collection:       scaffold.SanitizeName(ReadModelCollectionName(via.Name, sc.Via.ReadModelID)),
 				MatchParamTo:     scaffold.SanitizeName(sc.Via.MatchParamTo),
@@ -504,6 +521,30 @@ func (m *mapper) mapScopes(id string, rm ReadModel) []scaffold.ReadModelScope {
 		})
 	}
 	return out
+}
+
+// mapSelfAccess carries selfAccess through. Its subject field must be one
+// of the read model's own fields: a rule naming a column that isn't there
+// would match nothing, or the wrong thing.
+func (m *mapper) mapSelfAccess(id string, rm ReadModel) *scaffold.SelfAccess {
+	sa := rm.SelfAccess
+	if sa == nil {
+		return nil
+	}
+	if !hasField(rm.Fields, sa.SubjectField) {
+		m.rep.errorf("read model %q: selfAccess.subjectField %q is not one of its fields", id, sa.SubjectField)
+		return nil
+	}
+	return &scaffold.SelfAccess{SubjectField: scaffold.SanitizeName(sa.SubjectField), Param: sa.Param}
+}
+
+func hasField(fields []Field, name string) bool {
+	for _, f := range fields {
+		if f.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // mapFilters carries a read model's declared query filters through,

@@ -55,7 +55,9 @@ func newSchemaImportCommand() *cobra.Command {
 				return fmt.Errorf("--lang wants \"js\" or \"go\", got %q", lang)
 			}
 
-			opts := emschema.Options{AggregateOverrides: map[string]string{}}
+			roleField, _ := cmd.Flags().GetString("roleField")
+			subjectField, _ := cmd.Flags().GetString("subjectField")
+			opts := emschema.Options{AggregateOverrides: map[string]string{}, RoleField: roleField, SubjectField: subjectField}
 			for _, kv := range overrides {
 				id, name, ok := strings.Cut(kv, "=")
 				if !ok || id == "" || name == "" {
@@ -130,6 +132,10 @@ func newSchemaImportCommand() *cobra.Command {
 	imp.Flags().StringSlice("aggregate", nil,
 		"map an untagged element to an aggregate: --aggregate notify-shipping-partner=shipmentNotice (repeatable)")
 	imp.Flags().Bool("force", false, "overwrite existing files")
+	imp.Flags().String("roleField", "role",
+		"the auth-record field generated read rules take a caller's role from (match the server's --cqrsRoleField)")
+	imp.Flags().String("subjectField", "",
+		"the auth-record field generated read rules take a caller's data-subject id from; empty: the record id (match --cqrsSubjectField)")
 	imp.Flags().Bool("skip-scenarios", false,
 		"do not run the document's scenarios against the generated code")
 	imp.Flags().String("lang", "js", "output language: \"js\" (hot-reloadable functions, the default) or \"go\" (compiled source, CLI-only — see docs/go-guide.md)")

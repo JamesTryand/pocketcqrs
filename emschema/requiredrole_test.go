@@ -120,11 +120,10 @@ func TestGeneratedProjectionEmitsRoleRule(t *testing.T) {
 	}
 }
 
-// TestGeneratedProjectionOmitsRuleWhenNoRoleRequired proves the absence of
-// requiredRole leaves the generated file exactly as before this capability
-// existed — no //@rule line at all, same "no vacuous default" posture
-// dotnetcqrs's own unwired resolveOwnRole takes.
-func TestGeneratedProjectionOmitsRuleWhenNoRoleRequired(t *testing.T) {
+// A read model declaring no access rule is read by every signed-in caller
+// (schema 3.8.0), so the importer gives it "authenticated" rather than the
+// deployment default, which is public unless set (decision 8, 2026-10-15).
+func TestGeneratedProjectionIsSignedInOnlyWhenNoRuleDeclared(t *testing.T) {
 	doc := requiredRoleDocument() // no roles
 	mapped, err := Map(doc, Options{})
 	if err != nil {
@@ -135,8 +134,8 @@ func TestGeneratedProjectionOmitsRuleWhenNoRoleRequired(t *testing.T) {
 		t.Fatalf("expected generation to succeed: %v", err)
 	}
 	for _, f := range files {
-		if f.Name == "staffRoster.js" && strings.Contains(f.Source, "@rule") {
-			t.Fatalf("expected no //@rule directive when requiredRole is absent, got:\n%s", f.Source)
+		if f.Name == "staffRoster.js" && !strings.Contains(f.Source, "//@rule staffRoster authenticated\n") {
+			t.Fatalf("expected //@rule staffRoster authenticated, got:\n%s", f.Source)
 		}
 	}
 }

@@ -233,6 +233,17 @@ type ReadModel struct {
 	// //@rule emission for how this is actually enforced. Added in schema
 	// 2.7.0 (dotnetcqrs's own readModel.requiredRole, commit 382fb9e).
 	RequiredRole RoleList `json:"requiredRole,omitempty"`
+	// SelfAccess (schema 3.2.0; param 3.8.0): a caller without
+	// RequiredRole sees only the rows whose SubjectField is their own
+	// data-subject id. `via` (a subject resolved through another read
+	// model) is not read here, so a document using it is refused.
+	SelfAccess *ReadModelSelfAccess `json:"selfAccess,omitempty"`
+}
+
+// ReadModelSelfAccess is readModel.selfAccess.
+type ReadModelSelfAccess struct {
+	SubjectField string `json:"subjectField"`
+	Param        string `json:"param,omitempty"`
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
@@ -242,6 +253,9 @@ type ReadModel struct {
 type ReadModelScope struct {
 	Param string            `json:"param"`
 	Via   ReadModelScopeVia `json:"via"`
+	// GrantsAccess (schema 3.8.0): the param always names the caller, and
+	// a caller without RequiredRole also sees the rows this scope admits.
+	GrantsAccess bool `json:"grantsAccess,omitempty"`
 }
 
 // ReadModelScopeVia names the resolving read model and the fields the

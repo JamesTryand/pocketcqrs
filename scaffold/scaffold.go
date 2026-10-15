@@ -50,6 +50,17 @@ type Domain struct {
 	ReadModels []ReadModel `json:"readModels,omitempty"`
 	// Reactors map this aggregate's events to commands on another one.
 	Reactors []Reactor `json:"reactors,omitempty"`
+
+	// RoleField and SubjectField name the auth-record fields a read rule
+	// reads the caller's role and data-subject id from ("" = "role" and
+	// the record id). See readRule.
+	RoleField    string `json:"roleField,omitempty"`
+	SubjectField string `json:"subjectField,omitempty"`
+	// SignedInByDefault gives a read model that declares no access rule
+	// the rule "authenticated" (schema 3.8.0: every signed-in caller sees
+	// every row). The importer sets it; a hand-made domain leaves the
+	// collection to the deployment default.
+	SignedInByDefault bool `json:"signedInByDefault,omitempty"`
 }
 
 // Command is one intent and the events it may record.
@@ -208,6 +219,9 @@ type ReadModel struct {
 	// pluggable resolveOwnRole, PocketBase's own collection rule is the
 	// only enforcement point that exists here).
 	RequiredRole []string `json:"requiredRole,omitempty"`
+	// SelfAccess (schema 3.2.0/3.8.0): a caller without RequiredRole sees
+	// their own rows. See readRule.
+	SelfAccess *SelfAccess `json:"selfAccess,omitempty"`
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
@@ -215,6 +229,10 @@ type ReadModel struct {
 type ReadModelScope struct {
 	Param string            `json:"param"`
 	Via   ReadModelScopeVia `json:"via"`
+	// GrantsAccess (schema 3.8.0): the param always names the caller, and
+	// a caller without the read model's RequiredRole may also see the rows
+	// this scope admits for them. See readRule.
+	GrantsAccess bool `json:"grantsAccess,omitempty"`
 }
 
 // ReadModelScopeVia names the resolving read model's GENERATED COLLECTION
@@ -805,12 +823,16 @@ func (d Domain) projection(rm ReadModel) string {
 	fmt.Fprintf(&b, "//@trigger projection %s on %s\n", rm.Collection, strings.Join(on, " "))
 	fmt.Fprintf(&b, "//@schema %s %s\n", rm.Collection, strings.Join(columns, " "))
 	fmt.Fprintf(&b, "//@key %s\n", rm.Key)
-	if len(rm.RequiredRole) > 0 {
-		fmt.Fprintf(&b, "// requiredRole (schema 2.7.0): assumes this deployment's auth collection has\n")
-		fmt.Fprintf(&b, "// a \"role\" field -- hand-edit the rule below if that isn't this project's own\n")
-		fmt.Fprintf(&b, "// convention (this generated file is a one-time scaffold, not regenerated\n")
-		fmt.Fprintf(&b, "// over hand edits, the same posture every other //@... directive here takes).\n")
-		fmt.Fprintf(&b, "//@rule %s %s\n", rm.Collection, requiredRoleRule(rm.RequiredRole))
+	if rule, ok := d.readRule(rm); ok {
+		b.WriteString("// Who may read it (requiredRole 2.7.0, selfAccess 3.2.0, grantsAccess 3.8.0),\n")
+		b.WriteString("// enforced by PocketBase on every list, view and realtime subscription. The\n")
+		b.WriteString("// caller's role and subject id are fields of their auth record, which users\n")
+		b.WriteString("// can't set on themselves (--cqrsRoleField, --cqrsSubjectField).\n")
+		if rm.SelfAccess != nil && rm.SelfAccess.Param != "" {
+			fmt.Fprintf(&b, "// %q narrows a caller to their own rows: filter %s = @request.auth.%s.\n",
+				rm.SelfAccess.Param, rm.SelfAccess.SubjectField, authField(d.SubjectField, "id"))
+		}
+		fmt.Fprintf(&b, "//@rule %s %s\n", rm.Collection, rule)
 	}
 	b.WriteString("//\n")
 
@@ -949,23 +971,6 @@ func jsDerivedOp(a derivedAction) string {
 	default:
 		return "null" // unreachable: Validate rejects any other kind before generation runs
 	}
-}
-
-// requiredRoleRule renders RequiredRole as a PocketBase rule expression: an
-// OR of equality checks against @request.auth.role, one per role, "any one
-// satisfies it" — the same any-of semantics emschema.RoleList already gives
-// command.requiredRole. Assumes the deployment's own auth collection names
-// its role field "role"; there is no pluggable per-deployment hook the way
-// dotnetcqrs's resolveOwnRole delegate is one, because a PocketBase rule is
-// a declarative expression, not a callback — see projection's own emitted
-// comment, which tells an operator how to hand-edit this if their auth
-// collection uses a different field name.
-func requiredRoleRule(roles []string) string {
-	clauses := make([]string, len(roles))
-	for i, r := range roles {
-		clauses[i] = fmt.Sprintf("@request.auth.role = %q", r)
-	}
-	return strings.Join(clauses, " || ")
 }
 
 // writeJSProjectionScopes appends one resolve<Param> helper per declared

@@ -51,8 +51,6 @@ func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 			"/commands/update-entry/refuseWhen",
 		},
 		"examples/read-access.json": {
-			"/readModels/time-entries/selfAccess",
-			"/readModels/time-entries/scopes/0/grantsAccess",
 			"/readModels/project-managers/removedByEventIds",
 			"/slices/3/scenarios/0/when/caller",
 		},
@@ -65,7 +63,6 @@ func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 			"/dataSubjects",
 			"/ingresses",
 			"/partitioning",
-			"/readModels/order-summary/selfAccess",
 			"/slices/5/scenarios/0/given/1/elapsed",
 		},
 	}

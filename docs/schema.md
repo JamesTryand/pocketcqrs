@@ -78,13 +78,35 @@ know. Example data (`data`, `queryParams`, a scenario's expected `result`) is
 the domain's own and isn't checked. A split document is checked file by file,
 and the pointer starts with the file's path.
 
-Refused today, from schema 3.2.0 on: `selfAccess`, `dataSubjects`,
+Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
 `outcomes`, ingresses, delays, schedules and `elapsed`, automation `effect`,
-partitioning, `grantsAccess`, a scenario's `caller`,
+partitioning, a scenario's `caller`,
 `removedByEventIds`, `refuseWhen`, a read model's `rowKeyField`,
 `requiredOwnership.stateField`, `rowsPerListItem`, the `sumOfItems` and
 `byEvent` derivations, and `projection`. Each leaves this list as it is
 implemented.
+
+### Who may read a read model
+
+A read model's access declarations become its PocketBase `ListRule`/`ViewRule`
+on the JS target (a `//@rule` in the generated projection), so the record API
+enforces them on every list, view and realtime subscription:
+
+| declared | the rule admits |
+| --- | --- |
+| `requiredRole` | a caller whose role is one of them: every row |
+| `selfAccess.subjectField` (3.2.0) | any caller: the rows whose subject field is their own subject id |
+| a scope with `grantsAccess` (3.8.0) | any caller: the rows a row of the scope's read model selects for their subject id |
+| none of these | every signed-in caller (3.8.0), as `//@rule <collection> authenticated` |
+
+The caller's role and subject id are fields of their auth record:
+`schema import --roleField` (default `role`) and `--subjectField` (default the
+record's own id), matching the server's `--cqrsRoleField`/`--cqrsSubjectField`,
+which also stop a user setting either on themselves. An empty subject id
+matches nothing. `selfAccess.param` only ever narrows, so on this target it is
+the client's filter (`staffId = @request.auth.staffId`), named in a comment.
+`selfAccess.via` is refused. The Go target refuses `selfAccess` and
+`grantsAccess` until its read route applies them.
 
 ### Untagged aggregates are refused, not guessed
 

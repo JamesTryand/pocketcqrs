@@ -95,6 +95,13 @@ All notable changes to PocketCQRS. Format loosely follows
   to the model never reached an existing collection, which stayed as open as it was first made. Now
   reconcile sets `ListRule`/`ViewRule` to the `//@rule` (or `--cqrsSchemaDefaultRule`) every time,
   and logs a change. A rule set by hand in PocketBase's admin UI is put back to the declared one.
+- **Read access is generated from the model** (JS target): `selfAccess` (3.2.0, without `via`) and
+  `grantsAccess` scopes (3.8.0) join `requiredRole` in each read model's generated `//@rule`, so
+  PocketBase enforces the whole access rule on lists, views and realtime. A read model declaring
+  none is `authenticated` (3.8.0: every signed-in caller), no longer the deployment default.
+  `schema import --roleField`/`--subjectField` name the auth-record fields the rules read. Tested
+  by running the generated rules through PocketBase's own record API as each kind of caller. The Go
+  target refuses `selfAccess`/`grantsAccess` until its read route applies them.
 - The vendored schema is **3.17.0** (`testdata/eventmodelschema/`; 3.1.1's copy, which the
   round-trip tests use, moved to `testdata/eventmodelschema/v3.1.1/`), and an export declares
   3.17.0.

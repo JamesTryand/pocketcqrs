@@ -292,6 +292,14 @@ func (d Domain) GenerateGo() ([]GoFile, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
+	// fail closed: the Go target's read route doesn't apply these yet, and
+	// generating without them would serve rows the model withholds
+	for _, rm := range d.ReadModels {
+		if rm.SelfAccess != nil || hasGrant(rm) {
+			return nil, fmt.Errorf("read model %q declares selfAccess or a grantsAccess scope, "+
+				"which the Go target does not generate yet; use the JS target", rm.Collection)
+		}
+	}
 	if err := d.piiConflicts(); err != nil {
 		return nil, err
 	}
