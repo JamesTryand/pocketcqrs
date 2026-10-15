@@ -111,6 +111,10 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **Verify reads a row's unset bool column as false,** as PocketBase serves it and as dotnetcqrs's
+  harness compares it. Event payloads stay strict, and so do other types (unset text is not "").
+  With this the timesheets model verifies as it does on dotnetcqrs: 300 pass, 1 known failure (the
+  hand-queried payroll preview), 27 HAND.
 - **Fixed: verify binds a self-access param a scenario sends without a caller.** Such a scenario
   reads as a role holder, and the value it sends names the subject, as dotnetcqrs's harness does;
   it admitted nothing. A named caller's own id still wins over the value sent.

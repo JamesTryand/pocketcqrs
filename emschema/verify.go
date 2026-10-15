@@ -512,7 +512,7 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		return
 	}
 	encoded, _ := json.Marshal(matches[0])
-	if diff := subsetDiff(then.Result, encoded); diff != "" {
+	if diff := rowDiff(then.Result, encoded); diff != "" {
 		res.Detail = "result: " + diff
 		return
 	}
@@ -989,7 +989,7 @@ func listDiff(expectedRows []json.RawMessage, actualRows []map[string]any) strin
 		idx := -1
 		for i, a := range unmatched {
 			encoded, _ := json.Marshal(a)
-			if subsetDiff(want, encoded) == "" {
+			if rowDiff(want, encoded) == "" {
 				idx = i
 				break
 			}
@@ -1014,6 +1014,17 @@ func listDiff(expectedRows []json.RawMessage, actualRows []map[string]any) strin
 // the document never mentions, say). Requiring equality would fail every
 // scenario for a reason that is not about the domain.
 func subsetDiff(want, actual json.RawMessage) string {
+	return objectDiff(want, actual, false)
+}
+
+// rowDiff is subsetDiff for a read model's row: a bool column no event has
+// set reads false, as PocketBase serves an unset bool field (and as
+// dotnetcqrs's harness compares one). Event payloads stay strict.
+func rowDiff(want, actual json.RawMessage) string {
+	return objectDiff(want, actual, true)
+}
+
+func objectDiff(want, actual json.RawMessage, unsetIsFalse bool) string {
 	var w, a map[string]any
 	if err := json.Unmarshal(want, &w); err != nil {
 		return "expected value is not an object"
@@ -1029,6 +1040,9 @@ func subsetDiff(want, actual json.RawMessage) string {
 	var diffs []string
 	for _, k := range keys {
 		got, present := a[scaffold.SanitizeName(k)]
+		if unsetIsFalse && got == nil && w[k] == false {
+			continue
+		}
 		if !present {
 			diffs = append(diffs, fmt.Sprintf("%s missing", k))
 			continue
