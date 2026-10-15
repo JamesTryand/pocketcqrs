@@ -84,12 +84,13 @@ func newSchemaImportCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				// Verify runs the scenarios against the JS mapping regardless
-				// of --lang: for go this checks the model the Go files came
-				// from, not the Go files. Say so.
+				// The import checks the scenarios against the JS mapping
+				// whatever --lang is: the Go check compiles the code, which
+				// needs a pocketcqrs to build against. Say so, and where the
+				// Go check is.
 				against := "the generated code"
 				if lang == "go" {
-					against = "the JS mapping of the same model (no Go-specific scenario checker exists yet)"
+					against = "the JS mapping of the same model (`schema verify --lang go` runs them against the Go)"
 				}
 				printScenarios(cmd, results, against)
 			}

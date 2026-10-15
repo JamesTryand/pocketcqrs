@@ -85,10 +85,11 @@ same "starting point, not a translation" caveat above applies to its output
 exactly as it does to the JS scaffolder's.
 
 Two folds worth knowing about before you rely on the generated Go: a
-`//@schema date` field becomes `time.Time`, which `encoding/json` unmarshals
-strictly as RFC3339 — a caller sending PocketBase's own space-separated
-date format will get a rejected command where the JS decider's untyped
-field would have passed it through. And the generated reactor's dispatched
+`//@schema date` field becomes `events.Date`, which reads a calendar date
+(`2026-09-15`), an RFC 3339 date-time or PocketBase's own layout, and writes
+a calendar date back as one (its `Time` is the instant, `IsDay` says which it
+was). It was `time.Time`, which read RFC 3339 only, so a model's own dates
+didn't fold. And the generated reactor's dispatched
 command payload is `ev.Data` untouched (matching the JS scaffolder's
 `Object.assign({}, event.data)`, field-for-field) — this only differs if an
 event's stored `Data` is nil rather than `{}`, which nothing in this

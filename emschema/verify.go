@@ -15,6 +15,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/match"
 	"github.com/jamestryand/pocketcqrs/scaffold"
+	"github.com/jamestryand/pocketcqrs/verifyharness/wire"
 )
 
 // nowFunc is time.Now, overridable in tests so last7Days/lastCalendarMonth
@@ -71,7 +72,16 @@ type VerifyOptions struct {
 	// ones, matched by file name, so the hooks really decide and a hand
 	// projection (schema 3.17.0) really builds its rows. A file the host
 	// doesn't have is a skip that says so. Empty: the generated code.
+	// With Lang "go" it is a directory of Go packages, one per aggregate
+	// (the layout `schema import --lang go` writes).
 	Host string
+	// Lang "go" runs the scenarios against Go code: the Go the import
+	// generates (or the host's), compiled with package verifyharness into a
+	// scratch module and run once. Empty or "js": the JS dry run.
+	Lang string
+	// Pocketcqrs is a checkout of pocketcqrs the Go harness builds against;
+	// empty: the version this binary was built from.
+	Pocketcqrs string
 }
 
 // VerifyWith is Verify against what opts names.
@@ -79,6 +89,9 @@ func VerifyWith(doc *Document, mapped *Mapped, dir string, opts VerifyOptions) (
 	v := &verifier{doc: doc, dir: dir, sources: map[string]scaffold.File{}}
 	if err := v.indexSources(mapped); err != nil {
 		return nil, err
+	}
+	if opts.Lang == "go" {
+		return v.verifyGo(mapped, opts)
 	}
 	if opts.Host != "" {
 		if err := v.useHost(opts.Host); err != nil {
@@ -122,6 +135,106 @@ type verifier struct {
 	roleField, subjectField string
 	// host is VerifyOptions.Host: sources are the host's own files.
 	host string
+	// goRun answers decides and projection runs from Go code (Lang "go").
+	goRun *goRun
+}
+
+// verifyGo is Verify against Go code: a first pass records what every
+// scenario asks, one harness run answers it, and a second pass compares.
+func (v *verifier) verifyGo(mapped *Mapped, opts VerifyOptions) ([]ScenarioResult, error) {
+	dir := filepath.Join(v.dir, "go")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	packages, projections, err := goModule(dir, mapped, opts)
+	if err != nil {
+		return nil, err
+	}
+	v.host = opts.Host
+	v.goRun = &goRun{collecting: true, views: map[string]*wire.View{}, packages: packages, projections: projections}
+	v.goRun.in.Collections = goCollections(mapped)
+	for _, s := range v.doc.Slices {
+		for _, sc := range s.Scenarios {
+			v.run(s, sc)
+		}
+	}
+	v.goRun.collecting = false
+	v.goRun.answer(dir)
+	var out []ScenarioResult
+	for _, s := range v.doc.Slices {
+		for _, sc := range s.Scenarios {
+			out = append(out, v.run(s, sc))
+		}
+	}
+	return out, nil
+}
+
+// collecting is the Go check's first pass, which only records.
+func (v *verifier) collecting() bool { return v.goRun != nil && v.goRun.collecting }
+
+// decide folds a command scenario's own events and decides its command,
+// nothing appended: the JS dry run, or the Go harness's answer. The bool is
+// "there is no decider for aggregate".
+func (v *verifier) decide(id, aggregate, stream string, own []EventRef, cmd decider.Command, meta map[string]any) (*functions.DecideDryRun, string, bool) {
+	if v.goRun != nil {
+		return v.goRun.decide(id, aggregate, stream, v.givenEvents(aggregate, stream, own), cmd, meta)
+	}
+	file, ok := v.sources[aggregate+".js"]
+	if !ok {
+		return nil, "", true
+	}
+	store, err := v.fixtureStore(id, aggregate, stream, own)
+	if err != nil {
+		return nil, err.Error(), false
+	}
+	defer store.Close()
+	spec, err := functions.LoadDeciderSourceWithHand(functions.NewGojaRuntime(nil), aggregate+".js", file.Source, v.handStandIns[aggregate])
+	if err != nil {
+		return nil, "the " + v.which() + " decider did not load: " + err.Error(), false
+	}
+	run, err := functions.DryRunDecide(store, spec, stream, cmd, meta)
+	if err != nil {
+		return nil, "the dry run could not be answered: " + err.Error(), false
+	}
+	return run, "", false
+}
+
+// givenEvents is a command scenario's own events as its stream holds them
+// (fixtureStore's, without the store).
+func (v *verifier) givenEvents(aggregate, stream string, own []EventRef) []events.Event {
+	out := make([]events.Event, 0, len(own))
+	for i, g := range own {
+		data := g.Data
+		if len(data) == 0 {
+			data = json.RawMessage(`{}`)
+		}
+		out = append(out, events.Event{Position: int64(i + 1), ID: fmt.Sprintf("given-%d", i+1), Aggregate: aggregate,
+			AggregateID: stream, Sequence: int64(i + 1), Type: v.eventType(g.EventID), Data: data, Version: 1,
+			Created: "1970-01-01 00:00:00.000Z"})
+	}
+	return out
+}
+
+// project folds fixture through collection's projection: the JS dry run,
+// or the Go harness's answer. The problem reads after "the ... projection";
+// the bool is "there is no projection for collection".
+func (v *verifier) project(id, collection string, fixture []events.Event) (map[string]map[string]any, string, bool) {
+	if v.goRun != nil {
+		return v.goRun.project(id, collection, fixture)
+	}
+	file, ok := v.sources[collection+".js"]
+	if !ok {
+		return nil, "", true
+	}
+	spec, err := functions.LoadProjectionSource(functions.NewGojaRuntime(nil), nil, collection+".js", file.Source)
+	if err != nil {
+		return nil, "did not load: " + err.Error(), false
+	}
+	run, err := functions.DryRunProjectionOver(spec, fixture)
+	if err != nil {
+		return nil, "failed over the fixture: " + err.Error(), false
+	}
+	return run.Rows[collection], "", false
 }
 
 // useHost replaces the generated sources with the host's own .js files,
@@ -153,6 +266,12 @@ func (v *verifier) useHost(dir string) error {
 // missing says a scenario's file isn't there: not generated, or (host mode)
 // not in the host's functions.
 func (v *verifier) missing(what, name string) string {
+	if v.goRun != nil {
+		if v.host != "" {
+			return fmt.Sprintf("the host has no Go %s for %s", what, name)
+		}
+		return fmt.Sprintf("no Go %s was generated for %q", what, name)
+	}
 	if v.host != "" {
 		return fmt.Sprintf("the host has no %s (%s.js)", what, name)
 	}
@@ -161,6 +280,9 @@ func (v *verifier) missing(what, name string) string {
 
 // which is "generated" or "host's", for load and run messages.
 func (v *verifier) which() string {
+	if v.goRun != nil {
+		return "Go"
+	}
 	if v.host != "" {
 		return "host's"
 	}
@@ -342,13 +464,6 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 		res.Detail = fmt.Sprintf("command %q was not generated (its slice may have been skipped)", cmdName)
 		return
 	}
-	file, ok := v.sources[aggregate+".js"]
-	if !ok {
-		res.Skipped = true
-		res.Detail = v.missing("decider", aggregate)
-		return
-	}
-
 	// `given` may name events from ANOTHER aggregate: an automation
 	// scenario's history is the trigger event, which lives on the stream
 	// that caused the reaction, not on the one the command targets. Seeding
@@ -356,27 +471,20 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	// a failure about the fixture, not about the domain.
 	own, foreign := v.splitGiven(aggregate, sc.Given)
 	stream := v.streamID(sc.Given)
-	store, err := v.fixtureStore(sc.ID, aggregate, stream, own)
-	if err != nil {
-		res.Detail = err.Error()
-		return
-	}
-	defer store.Close()
-
-	rt := functions.NewGojaRuntime(nil)
-	spec, err := functions.LoadDeciderSourceWithHand(rt, aggregate+".js", file.Source, v.handStandIns[aggregate])
-	if err != nil {
-		res.Detail = "the " + v.which() + " decider did not load: " + err.Error()
-		return
-	}
 	payload := json.RawMessage(`{}`)
 	if len(ref.Data) > 0 {
 		payload = ref.Data
 	}
-	run, err := functions.DryRunDecide(store, spec, stream,
-		decider.Command{Name: cmdName, Payload: payload}, commandMeta(ref))
-	if err != nil {
-		res.Detail = "the dry run could not be answered: " + err.Error()
+	run, problem, missing := v.decide(sc.ID, aggregate, stream, own, decider.Command{Name: cmdName, Payload: payload}, commandMeta(ref))
+	switch {
+	case missing:
+		res.Skipped = true
+		res.Detail = v.missing("decider", aggregate)
+		return
+	case problem != "":
+		res.Detail = problem
+		return
+	case v.collecting():
 		return
 	}
 
@@ -495,19 +603,6 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		res.Detail = fmt.Sprintf("%q is built by a hand-written projection; only a host check can run it", collection)
 		return
 	}
-	file, ok := v.sources[collection+".js"]
-	if !ok {
-		res.Skipped = true
-		res.Detail = v.missing("projection", collection)
-		return
-	}
-
-	rt := functions.NewGojaRuntime(nil)
-	spec, err := functions.LoadProjectionSource(rt, nil, collection+".js", file.Source)
-	if err != nil {
-		res.Detail = "the " + v.which() + " projection did not load: " + err.Error()
-		return
-	}
 	// Each given event needs its OWN row key for THIS projection, not one key
 	// shared by the whole scenario (the pre-Finding-3 design): an unscoped
 	// "manager sees every flagged entry" scenario deliberately seeds two
@@ -516,9 +611,14 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 	// the same row). See rowKey's doc comment for the resolution rule.
 	sharedDefault := v.streamID(sc.Given)
 	fixture := v.buildFixture(sc.Given, idAttributeField(rm), sharedDefault)
-	run, err := functions.DryRunProjectionOver(spec, fixture)
-	if err != nil {
-		res.Detail = "the projection failed over the fixture: " + err.Error()
+	rows, problem, missing := v.project(sc.ID, collection, fixture)
+	switch {
+	case missing:
+		res.Skipped = true
+		res.Detail = v.missing("projection", collection)
+		return
+	case problem != "":
+		res.Detail = "the " + v.which() + " projection " + problem
 		return
 	}
 	then, terr := sc.ResultThen()
@@ -527,7 +627,6 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		return
 	}
 
-	rows := run.Rows[collection]
 	// who reads: a named caller sees what the generated rule lets them
 	if q.Caller != nil {
 		visible, detail := v.visibleTo(*q.Caller, collection, rows, sc.Given, sharedDefault, sc.ID)
@@ -538,9 +637,12 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		rows = visible
 	}
 	rows, queryParams := bindCaller(rm, rows, q.QueryParams, q.Caller)
-	scopedRows, remainingParams, scopeErr := v.filterByScopes(rm, rows, queryParams, sc.Given, sharedDefault)
+	scopedRows, remainingParams, scopeErr := v.filterByScopes(rm, rows, queryParams, sc.Given, sharedDefault, sc.ID)
 	if scopeErr != "" {
 		res.Detail = scopeErr
+		return
+	}
+	if v.collecting() {
 		return
 	}
 	filteredRows, remainingParams, filterErr := filterByFilters(rm, scopedRows, remainingParams, ref)
@@ -659,7 +761,7 @@ func (v *verifier) buildFixture(given []EventRef, idField, fallback string) []ev
 // mirrors the real semi-join (`WHERE filterLocalField IN (SELECT selectField
 // FROM via WHERE matchParamTo = :param)`) at verify-scenario grain: one via
 // row set, checked against one candidate target row set.
-func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage, given []EventRef, sharedDefault string) (map[string]map[string]any, json.RawMessage, string) {
+func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, queryParams json.RawMessage, given []EventRef, sharedDefault, scenarioID string) (map[string]map[string]any, json.RawMessage, string) {
 	if len(rm.Scopes) == 0 || len(queryParams) == 0 {
 		return rows, queryParams, ""
 	}
@@ -686,25 +788,18 @@ func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, 
 				scope.Param, scope.Via.ReadModelID)
 		}
 		viaCollection := scaffold.SanitizeName(ReadModelCollectionName(via.Name, scope.Via.ReadModelID))
-		file, ok := v.sources[viaCollection+".js"]
-		if !ok {
+		viaRows, problem, missing := v.project(scenarioID, viaCollection, v.buildFixture(given, idAttributeField(via), sharedDefault))
+		switch {
+		case missing:
 			return nil, nil, fmt.Sprintf("scope %q's via read model %q was not generated", scope.Param, viaCollection)
-		}
-		rt := functions.NewGojaRuntime(nil)
-		spec, err := functions.LoadProjectionSource(rt, nil, viaCollection+".js", file.Source)
-		if err != nil {
-			return nil, nil, "the scope's via projection did not load: " + err.Error()
-		}
-		viaFixture := v.buildFixture(given, idAttributeField(via), sharedDefault)
-		run, err := functions.DryRunProjectionOver(spec, viaFixture)
-		if err != nil {
-			return nil, nil, "the scope's via projection failed over the fixture: " + err.Error()
+		case problem != "":
+			return nil, nil, "the scope's via projection " + problem
 		}
 
 		matchTo := scaffold.SanitizeName(scope.Via.MatchParamTo)
 		selectField := scaffold.SanitizeName(scope.Via.SelectField)
 		var allowed []any
-		for _, viaRow := range run.Rows[viaCollection] {
+		for _, viaRow := range viaRows {
 			if jsonEq(viaRow[matchTo], paramVal) {
 				allowed = append(allowed, viaRow[selectField])
 			}
@@ -1083,14 +1178,16 @@ func subsetDiff(want, actual json.RawMessage) string {
 	return objectDiff(want, actual, false)
 }
 
-// rowDiff is subsetDiff for a read model's row: a bool column no event has
-// set reads false, as PocketBase serves an unset bool field (and as
-// dotnetcqrs's harness compares one). Event payloads stay strict.
+// rowDiff is subsetDiff for a read model's row, read as PocketBase serves
+// it: a bool column no event has set reads false, and a date column's
+// "2026-09-15 00:00:00.000Z" is the model's "2026-09-15" (midnight) or the
+// same instant in RFC 3339 (dotnetcqrs's harness compares both alike).
+// Event payloads stay strict.
 func rowDiff(want, actual json.RawMessage) string {
 	return objectDiff(want, actual, true)
 }
 
-func objectDiff(want, actual json.RawMessage, unsetIsFalse bool) string {
+func objectDiff(want, actual json.RawMessage, row bool) string {
 	var w, a map[string]any
 	if err := json.Unmarshal(want, &w); err != nil {
 		return "expected value is not an object"
@@ -1106,7 +1203,7 @@ func objectDiff(want, actual json.RawMessage, unsetIsFalse bool) string {
 	var diffs []string
 	for _, k := range keys {
 		got, present := a[scaffold.SanitizeName(k)]
-		if unsetIsFalse && got == nil && w[k] == false {
+		if row && (got == nil && w[k] == false || sameInstant(w[k], got)) {
 			continue
 		}
 		if !present {
@@ -1118,6 +1215,26 @@ func objectDiff(want, actual json.RawMessage, unsetIsFalse bool) string {
 		}
 	}
 	return strings.Join(diffs, "; ")
+}
+
+// sameInstant reports whether want, a date or date-time, is the instant
+// PocketBase's date field got holds.
+func sameInstant(want, got any) bool {
+	ws, ok := want.(string)
+	gs, ok2 := got.(string)
+	if !ok || !ok2 {
+		return false
+	}
+	g, err := time.Parse("2006-01-02 15:04:05.000Z", gs)
+	if err != nil {
+		return false
+	}
+	for _, layout := range []string{"2006-01-02", time.RFC3339Nano} {
+		if w, err := time.Parse(layout, ws); err == nil {
+			return w.Equal(g)
+		}
+	}
+	return false
 }
 
 func jsonEq(a, b any) bool {

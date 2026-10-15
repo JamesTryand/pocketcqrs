@@ -735,13 +735,16 @@ Create/update a superuser (admin UI + reload endpoint auth).
 pocketcqrs schema import <document.json|manifest-dir> [--out dir] [--docs dir]
     [--aggregate <elementId>=<name>]... [--lang js|go] [--force]
 pocketcqrs schema verify <document.json|manifest-dir> [--functions dir]
-    [--aggregate <elementId>=<name>]...
+    [--lang js|go] [--pocketcqrs dir] [--aggregate <elementId>=<name>]...
 pocketcqrs schema export <document.json>
 ```
 
 `verify` runs the document's scenarios and writes nothing; it exits non-zero
-when one fails (HAND doesn't count). `--functions` runs them against a host's
-own functions directory instead of the generated code: see
+when one fails (HAND doesn't count). `--lang go` runs them against Go code,
+compiled with a harness in a scratch module (`--pocketcqrs` names the
+checkout it builds against when the binary isn't a released version).
+`--functions` runs them against a host's own functions directory (with
+`--lang go`, its Go packages) instead of the generated code: see
 [the guide](../schema.md#verify-on-its-own-and-against-a-host).
 
 Import and export [EventModeling](https://eventmodeling.org) documents —
@@ -768,9 +771,9 @@ JS→Go table, printing suggested (not applied) registration lines for
 Go guide for what "converting a domain" actually means per tier. Passing
 `--docs` alongside `--lang go` prints a warning that it was ignored, rather
 than writing nothing silently. Scenario checks (unless `--skip-scenarios`)
-always run against the JS mapping of the model — there is no Go-specific
-scenario checker — and the completion text says so for `--lang go` rather
-than implying the generated Go files themselves were exercised.
+always run against the JS mapping of the model, and the completion text says
+so for `--lang go`; `schema verify --lang go` runs them against the Go code
+itself.
 
 Nothing imported is live. Save the generated files through the editor or copy
 them into `--functionsDir`, then reload — schema-bearing files behind the

@@ -42,7 +42,8 @@ func goType(schemaType string) string {
 	case "bool":
 		return "bool"
 	case "date":
-		return "time.Time"
+		// a calendar date stays one (events.Date); time.Time read only RFC 3339
+		return "events.Date"
 	case "json":
 		return "json.RawMessage"
 	default:
@@ -206,15 +207,6 @@ func GoPackageName(aggregate string) string {
 	r := []rune(aggregate)
 	r[0] = unicode.ToLower(r[0])
 	return string(r)
-}
-
-func usesGoType(fields []namedField, want string) bool {
-	for _, f := range fields {
-		if f.GoType == want || f.GoType == "pii.Value["+want+"]" {
-			return true
-		}
-	}
-	return false
 }
 
 // eventFields returns the Fields the FIRST event named name declares
@@ -400,9 +392,6 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 	}
 	b.WriteString("\t\"encoding/json\"\n")
 	b.WriteString("\t\"fmt\"\n")
-	if usesGoType(fields, "time.Time") {
-		b.WriteString("\t\"time\"\n")
-	}
 	b.WriteString("\n")
 	b.WriteString("\t\"github.com/jamestryand/pocketcqrs/decider\"\n")
 	b.WriteString("\t\"github.com/jamestryand/pocketcqrs/events\"\n")

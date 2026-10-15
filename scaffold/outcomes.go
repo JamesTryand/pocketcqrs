@@ -178,6 +178,18 @@ func (d Domain) JSHandStandIn() string {
 	return b.String()
 }
 
+// GoHandStandIn is JSHandStandIn for the Go target: <aggregate>_hand.go
+// with every hook panicking HandMarker+name, for verify's Go harness to
+// recover and report HAND. The same skeleton as goHandExample, so the
+// signatures can't drift.
+func (d Domain) GoHandStandIn(pkg string) string {
+	src := d.goHandExample(pkg)
+	for _, h := range d.Hooks() {
+		src = strings.Replace(src, fmt.Sprintf("panic(%q)", "write "+h), fmt.Sprintf("panic(%q)", HandMarker+h), 1)
+	}
+	return src
+}
+
 // HandMarker prefixes the error a stand-in hook throws.
 const HandMarker = "$hand:"
 

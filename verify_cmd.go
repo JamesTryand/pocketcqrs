@@ -34,6 +34,11 @@ func newSchemaVerifyCommand() *cobra.Command {
 				return err
 			}
 			host, _ := cmd.Flags().GetString("functions")
+			lang, _ := cmd.Flags().GetString("lang")
+			checkout, _ := cmd.Flags().GetString("pocketcqrs")
+			if lang != "js" && lang != "go" {
+				return fmt.Errorf("--lang wants \"js\" or \"go\", got %q", lang)
+			}
 			doc, err := emschema.Load(args[0])
 			if err != nil {
 				return err
@@ -48,13 +53,16 @@ func newSchemaVerifyCommand() *cobra.Command {
 				return err
 			}
 			defer os.RemoveAll(scratch)
-			results, err := emschema.VerifyWith(doc, mapped, scratch, emschema.VerifyOptions{Host: host})
+			results, err := emschema.VerifyWith(doc, mapped, scratch, emschema.VerifyOptions{Host: host, Lang: lang, Pocketcqrs: checkout})
 			if err != nil {
 				return err
 			}
 			against := "the generated code"
 			if host != "" {
 				against = "the host's functions in " + host
+			}
+			if lang == "go" {
+				against = "the Go code (" + against[4:] + ")"
 			}
 			if failed := printScenarios(cmd, results, against); failed > 0 {
 				return fmt.Errorf("%d scenario(s) failed", failed)
@@ -64,6 +72,10 @@ func newSchemaVerifyCommand() *cobra.Command {
 	}
 	addMapFlags(v)
 	v.Flags().String("functions", "",
-		"a functions directory (a host's pb_functions) whose own files the scenarios run against, by name; empty: the generated code")
+		"a functions directory (a host's pb_functions; with --lang go, a directory of its Go packages) whose own files the scenarios run against, by name; empty: the generated code")
+	v.Flags().String("lang", "js",
+		"\"js\": the JS dry run; \"go\": the Go code, compiled with a harness in a scratch module and run against PocketBase")
+	v.Flags().String("pocketcqrs", "",
+		"with --lang go, a pocketcqrs checkout the harness builds against; empty: the version this binary was built from")
 	return v
 }

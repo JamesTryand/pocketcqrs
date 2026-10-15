@@ -294,6 +294,20 @@ place. A projection's `pb` reads are isolated in a scenario run as they are in
 any dry run, so a hand projection that joins other rows can't be checked this
 way yet.
 
+With `--lang go` the scenarios run against Go code rather than the JS dry run:
+the Go the import generates (hand hooks as stand-ins that report HAND), or,
+with `--functions`, a host's own Go packages in the import's layout
+(`<dir>/<package>/`). The code is compiled with package `verifyharness` into a
+scratch module and run once: deciders fold each scenario's events and decide
+through the registry, nothing appended, personal data sealed and revealed by
+an in-memory key service; each view scenario gets its own PocketBase test app,
+so its rows are read back as PocketBase serves them. The answers are compared
+by the same code as the JS check's, reading a row as PocketBase serves it: an
+unset bool is false, and a date field's `2026-09-15 00:00:00.000Z` is the
+model's `2026-09-15` or the same instant. So the Go check can find what the
+JS dry run can't: a model's null that a PocketBase number field holds as 0,
+say (`sumOfItems` before every item is converted).
+
 Event **types** are the assertion; example `data` is reported but does not
 fail a scenario, because the source schema is explicit that scenario data is
 not cross-checked against declared fields.

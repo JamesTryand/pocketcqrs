@@ -33,3 +33,27 @@ func TestUnsetBoolReadsFalse(t *testing.T) {
 		}
 	}
 }
+
+// A row's date reads as PocketBase serves a date field ("2026-09-15
+// 00:00:00.000Z"): it matches the model's "2026-09-15" (midnight, as
+// dotnetcqrs's harness matches one) and the same instant written RFC 3339,
+// and nothing else. Event payloads stay strict.
+func TestRowDatesMatchByInstant(t *testing.T) {
+	for _, c := range []struct {
+		want, got string
+		match     bool
+	}{
+		{`{"d":"2026-09-15"}`, `{"d":"2026-09-15 00:00:00.000Z"}`, true},
+		{`{"d":"2026-09-30T17:00:00Z"}`, `{"d":"2026-09-30 17:00:00.000Z"}`, true},
+		{`{"d":"2026-09-15"}`, `{"d":"2026-09-16 00:00:00.000Z"}`, false},
+		{`{"d":"2026-09-15"}`, `{"d":"2026-09-15 10:00:00.000Z"}`, false},
+		{`{"d":"not a date"}`, `{"d":"2026-09-15 00:00:00.000Z"}`, false},
+	} {
+		if got := rowDiff([]byte(c.want), []byte(c.got)) == ""; got != c.match {
+			t.Errorf("rowDiff(%s, %s) match=%v, want %v", c.want, c.got, got, c.match)
+		}
+	}
+	if subsetDiff([]byte(`{"d":"2026-09-15"}`), []byte(`{"d":"2026-09-15 00:00:00.000Z"}`)) == "" {
+		t.Error("an event payload's date matched by instant")
+	}
+}

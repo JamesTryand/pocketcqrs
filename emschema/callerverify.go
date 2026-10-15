@@ -15,7 +15,6 @@ import (
 	_ "github.com/pocketbase/pocketbase/migrations"
 	"github.com/pocketbase/pocketbase/tools/types"
 
-	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/scaffold"
 )
 
@@ -46,6 +45,21 @@ func (v *verifier) visibleTo(caller ScenarioCaller, collection string, rows map[
 	if !ok {
 		return nil, fmt.Sprintf("no read rule was generated for %q", collection)
 	}
+	// every collection the rule may join, with its own rows
+	tables := map[string]map[string]map[string]any{collection: rows}
+	for _, name := range collectionsIn(rule) {
+		if name == collection {
+			continue
+		}
+		joinedRows, detail := v.projectRows(name, given, sharedDefault, scenarioID)
+		if detail != "" {
+			return nil, detail
+		}
+		tables[name] = joinedRows
+	}
+	if v.collecting() {
+		return rows, ""
+	}
 	dir, err := os.MkdirTemp(v.dir, "rules-")
 	if err != nil {
 		return nil, err.Error()
@@ -57,18 +71,6 @@ func (v *verifier) visibleTo(caller ScenarioCaller, collection string, rows map[
 		return nil, "the rule sandbox did not start: " + err.Error()
 	}
 
-	// every collection the rule may join, with its own rows
-	tables := map[string]map[string]map[string]any{collection: rows}
-	for _, name := range collectionsIn(rule) {
-		if name == collection {
-			continue
-		}
-		joinedRows, detail := v.projectRows(name, given, sharedDefault)
-		if detail != "" {
-			return nil, detail
-		}
-		tables[name] = joinedRows
-	}
 	// every collection first: a rule naming another (@collection) is only
 	// accepted once that one exists
 	cols := map[string]*core.Collection{}
@@ -180,26 +182,21 @@ func collectionsIn(rule string) []string {
 
 // projectRows folds the given events through the generated projection for
 // collection, as the queried read model's own rows are.
-func (v *verifier) projectRows(collection string, given []EventRef, sharedDefault string) (map[string]map[string]any, string) {
-	file, ok := v.sources[collection+".js"]
-	if !ok {
-		return nil, fmt.Sprintf("the rule joins %q, which was not generated", collection)
-	}
+func (v *verifier) projectRows(collection string, given []EventRef, sharedDefault, scenarioID string) (map[string]map[string]any, string) {
 	var rm ReadModel
 	for id, candidate := range v.doc.ReadModels {
 		if scaffold.SanitizeName(ReadModelCollectionName(candidate.Name, id)) == collection {
 			rm = candidate
 		}
 	}
-	spec, err := functions.LoadProjectionSource(functions.NewGojaRuntime(nil), nil, collection+".js", file.Source)
-	if err != nil {
-		return nil, fmt.Sprintf("the projection for %q did not load: %v", collection, err)
+	rows, problem, missing := v.project(scenarioID, collection, v.buildFixture(given, idAttributeField(rm), sharedDefault))
+	switch {
+	case missing:
+		return nil, fmt.Sprintf("the rule joins %q, which was not generated", collection)
+	case problem != "":
+		return nil, fmt.Sprintf("the projection for %q %s", collection, problem)
 	}
-	run, err := functions.DryRunProjectionOver(spec, v.buildFixture(given, idAttributeField(rm), sharedDefault))
-	if err != nil {
-		return nil, fmt.Sprintf("the projection for %q failed over the fixture: %v", collection, err)
-	}
-	return run.Rows[collection], ""
+	return rows, ""
 }
 
 // fieldsOf is a sandbox column per generated field of collection, typed as

@@ -111,6 +111,21 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **`schema verify --lang go` runs the scenarios against the Go code itself.** The generated Go (hand
+  hooks as stand-ins reporting HAND), or with `--functions` a host's own Go packages, compiled with
+  the new `verifyharness` package in a scratch module and run once: deciders through the registry
+  (nothing appended; personal data sealed and revealed by an in-memory key service), projections
+  against a PocketBase test app per view scenario. The answers are compared by the same code as the
+  JS check. `--pocketcqrs` names the checkout to build against. The timesheets model: 300 pass, 1
+  known failure, 27 HAND, the same as the JS check and dotnetcqrs.
+- **Generated Go date fields are `events.Date` (breaking for hand-written code that used `time.Time`).**
+  It reads a calendar date, an RFC 3339 date-time or PocketBase's layout, and writes a calendar date
+  back as one. `time.Time` read RFC 3339 only, so the generated Go couldn't fold a model's own
+  `2026-09-15` (found by the Go check: 148 of timesheets' scenarios failed on it).
+- **Verify reads a row's date as PocketBase serves it:** `2026-09-15 00:00:00.000Z` matches the
+  model's `2026-09-15` (midnight, as dotnetcqrs's harness matches) or the same instant in RFC 3339.
+  View rows only.
+- **`pii.RevealAll`** opens every personal-data envelope in a decoded JSON value.
 - **Fixed (layout change): `schema import --lang go` writes each aggregate to `<out>/<package>/`.** It
   wrote every aggregate's package into one directory, which doesn't compile once there are two
   (the timesheets model has fourteen). A single-aggregate import moves down one directory too.
