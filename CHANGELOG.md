@@ -111,6 +111,12 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
+- **`schema verify`, standalone, and against a host's functions.** Runs a document's scenarios
+  with nothing written and exits non-zero when one fails (HAND is not a failure); like `import`, it
+  never boots PocketBase. `--functions <dir>` runs them against a host's own deciders, hand files
+  and projections by name, as dotnetcqrs's host check does: a hook really decides its scenario, and
+  a hand projection's view scenarios run. A file the host lacks is a skip that says so.
+  `emschema.VerifyWith` and `VerifyOptions.Host` are the API.
 - **Verify reads a row's unset bool column as false,** as PocketBase serves it and as dotnetcqrs's
   harness compares it. Event payloads stay strict, and so do other types (unset text is not "").
   With this the timesheets model verifies as it does on dotnetcqrs: 300 pass, 1 known failure (the

@@ -278,6 +278,22 @@ written yet — like a read model field that no event carries — which is the
 most useful thing an import can tell you. Pass `--skip-scenarios` to turn the
 check off.
 
+### Verify on its own, and against a host
+
+`pocketcqrs schema verify <document>` runs the same scenarios with nothing
+written, and exits non-zero when one fails, so a build can run it. HAND is not
+a failure.
+
+With `--functions <dir>` (a host's `pb_functions`), the scenarios run against
+that directory's own files in place of the generated ones, matched by name:
+its deciders, its hand files (`<aggregate>.hand.js`, so a hook really decides
+and its scenario passes or fails instead of being HAND), and its projections,
+including a hand-written one (3.17.0), whose view scenarios then run. A file
+the host doesn't have is a skip that says so, never the generated code in its
+place. A projection's `pb` reads are isolated in a scenario run as they are in
+any dry run, so a hand projection that joins other rows can't be checked this
+way yet.
+
 Event **types** are the assertion; example `data` is reported but does not
 fail a scenario, because the source schema is explicit that scenario data is
 not cross-checked against declared fields.

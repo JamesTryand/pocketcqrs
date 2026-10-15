@@ -46,7 +46,6 @@ func newSchemaImportCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			outDir, _ := cmd.Flags().GetString("out")
 			docsDir, _ := cmd.Flags().GetString("docs")
-			overrides, _ := cmd.Flags().GetStringSlice("aggregate")
 			force, _ := cmd.Flags().GetBool("force")
 			skipScenarios, _ := cmd.Flags().GetBool("skip-scenarios")
 			functionsDir, _ := cmd.Flags().GetString("functionsDir")
@@ -55,15 +54,9 @@ func newSchemaImportCommand() *cobra.Command {
 				return fmt.Errorf("--lang wants \"js\" or \"go\", got %q", lang)
 			}
 
-			roleField, _ := cmd.Flags().GetString("roleField")
-			subjectField, _ := cmd.Flags().GetString("subjectField")
-			opts := emschema.Options{AggregateOverrides: map[string]string{}, RoleField: roleField, SubjectField: subjectField}
-			for _, kv := range overrides {
-				id, name, ok := strings.Cut(kv, "=")
-				if !ok || id == "" || name == "" {
-					return fmt.Errorf("--aggregate wants <elementId>=<aggregateName>, got %q", kv)
-				}
-				opts.AggregateOverrides[id] = name
+			opts, err := mapOptions(cmd)
+			if err != nil {
+				return err
 			}
 
 			doc, err := emschema.Load(args[0])
@@ -91,7 +84,14 @@ func newSchemaImportCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				printScenarios(cmd, results, lang)
+				// Verify runs the scenarios against the JS mapping regardless
+				// of --lang: for go this checks the model the Go files came
+				// from, not the Go files. Say so.
+				against := "the generated code"
+				if lang == "go" {
+					against = "the JS mapping of the same model (no Go-specific scenario checker exists yet)"
+				}
+				printScenarios(cmd, results, against)
 			}
 
 			if outDir == "" {
@@ -129,13 +129,8 @@ func newSchemaImportCommand() *cobra.Command {
 	}
 	imp.Flags().String("out", "", "write the generated function files into this directory")
 	imp.Flags().String("docs", "", "write per-aggregate domain docs into this directory (e.g. docs/domains); ignored with --lang go")
-	imp.Flags().StringSlice("aggregate", nil,
-		"map an untagged element to an aggregate: --aggregate notify-shipping-partner=shipmentNotice (repeatable)")
 	imp.Flags().Bool("force", false, "overwrite existing files")
-	imp.Flags().String("roleField", "role",
-		"the auth-record field generated read rules take a caller's role from (match the server's --cqrsRoleField)")
-	imp.Flags().String("subjectField", "",
-		"the auth-record field generated read rules take a caller's data-subject id from; empty: the record id (match --cqrsSubjectField)")
+	addMapFlags(imp)
 	imp.Flags().Bool("skip-scenarios", false,
 		"do not run the document's scenarios against the generated code")
 	imp.Flags().String("lang", "js", "output language: \"js\" (hot-reloadable functions, the default) or \"go\" (compiled source, CLI-only — see docs/go-guide.md)")
@@ -145,6 +140,33 @@ func newSchemaImportCommand() *cobra.Command {
 	imp.Flags().String("functionsDir", "pb_functions",
 		"the directory the completion message tells you to copy generated files into")
 	return imp
+}
+
+// addMapFlags registers the flags that shape the mapping, shared by import
+// and verify.
+func addMapFlags(cmd *cobra.Command) {
+	cmd.Flags().StringSlice("aggregate", nil,
+		"map an untagged element to an aggregate: --aggregate notify-shipping-partner=shipmentNotice (repeatable)")
+	cmd.Flags().String("roleField", "role",
+		"the auth-record field generated read rules take a caller's role from (match the server's --cqrsRoleField)")
+	cmd.Flags().String("subjectField", "",
+		"the auth-record field generated read rules take a caller's data-subject id from; empty: the record id (match --cqrsSubjectField)")
+}
+
+// mapOptions reads addMapFlags' flags.
+func mapOptions(cmd *cobra.Command) (emschema.Options, error) {
+	overrides, _ := cmd.Flags().GetStringSlice("aggregate")
+	roleField, _ := cmd.Flags().GetString("roleField")
+	subjectField, _ := cmd.Flags().GetString("subjectField")
+	opts := emschema.Options{AggregateOverrides: map[string]string{}, RoleField: roleField, SubjectField: subjectField}
+	for _, kv := range overrides {
+		id, name, ok := strings.Cut(kv, "=")
+		if !ok || id == "" || name == "" {
+			return opts, fmt.Errorf("--aggregate wants <elementId>=<aggregateName>, got %q", kv)
+		}
+		opts.AggregateOverrides[id] = name
+	}
+	return opts, nil
 }
 
 // newSchemaCommand builds the `schema` CLI group: import and export
@@ -163,6 +185,7 @@ func newSchemaCommand(c *components) *cobra.Command {
 	}
 
 	cmd.AddCommand(newSchemaImportCommand())
+	cmd.AddCommand(newSchemaVerifyCommand())
 
 	exp := &cobra.Command{
 		Use:   "export <document.json>",
@@ -231,20 +254,12 @@ func printReport(cmd *cobra.Command, rep *emschema.Report) {
 // whose rules are the author's job, so a scenario failing usually means the
 // document describes behaviour nobody has written yet — which is worth
 // knowing precisely, and worth not treating as a broken import.
-func printScenarios(cmd *cobra.Command, results []emschema.ScenarioResult, lang string) {
-	// Verify always runs the scenarios against the JS mapping (dryrun's
-	// engine has no Go counterpart) regardless of --lang: for --lang go this
-	// checks the same model the Go files were generated from, not the Go
-	// files themselves. Say so, rather than letting "the generated code"
-	// read as a claim that the Go output was exercised.
-	against := "the generated code"
-	if lang == "go" {
-		against = "the JS mapping of the same model (no Go-specific scenario checker exists yet)"
-	}
+// It returns how many failed. against names what the scenarios ran against.
+func printScenarios(cmd *cobra.Command, results []emschema.ScenarioResult, against string) int {
 	if len(results) == 0 {
 		cmd.Printf("\nThe document declares no scenarios, so nothing could be checked "+
 			"against %s.\n", against)
-		return
+		return 0
 	}
 	var passed, failed, skipped, hand int
 	for _, r := range results {
@@ -278,6 +293,7 @@ func printScenarios(cmd *cobra.Command, results []emschema.ScenarioResult, lang 
 			"happened and refuses the obvious contradictions, and every other rule is yours to write. " +
 			"These are the rules the document says are still missing.")
 	}
+	return failed
 }
 
 // writeSlice writes the generated files and the domain docs.

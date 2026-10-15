@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -60,9 +61,29 @@ type ScenarioResult struct {
 // usually the document describing behaviour nobody has written yet — the
 // useful output is the list, not a verdict.
 func Verify(doc *Document, mapped *Mapped, dir string) ([]ScenarioResult, error) {
+	return VerifyWith(doc, mapped, dir, VerifyOptions{})
+}
+
+// VerifyOptions says what Verify runs the scenarios against.
+type VerifyOptions struct {
+	// Host is a functions directory (a host's pb_functions): its own
+	// deciders, hand files and projections run in place of the generated
+	// ones, matched by file name, so the hooks really decide and a hand
+	// projection (schema 3.17.0) really builds its rows. A file the host
+	// doesn't have is a skip that says so. Empty: the generated code.
+	Host string
+}
+
+// VerifyWith is Verify against what opts names.
+func VerifyWith(doc *Document, mapped *Mapped, dir string, opts VerifyOptions) ([]ScenarioResult, error) {
 	v := &verifier{doc: doc, dir: dir, sources: map[string]scaffold.File{}}
 	if err := v.indexSources(mapped); err != nil {
 		return nil, err
+	}
+	if opts.Host != "" {
+		if err := v.useHost(opts.Host); err != nil {
+			return nil, err
+		}
 	}
 
 	var out []ScenarioResult
@@ -99,6 +120,51 @@ type verifier struct {
 	// roleField and subjectField are the auth-record fields the generated
 	// read rules read (the import's --roleField/--subjectField).
 	roleField, subjectField string
+	// host is VerifyOptions.Host: sources are the host's own files.
+	host string
+}
+
+// useHost replaces the generated sources with the host's own .js files,
+// and each hand stand-in with the host's hand file (none: the decider
+// doesn't load, as it wouldn't live).
+func (v *verifier) useHost(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("reading the host's functions: %w", err)
+	}
+	v.host = dir
+	v.sources = map[string]scaffold.File{}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".js" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return err
+		}
+		v.sources[e.Name()] = scaffold.File{Name: e.Name(), Source: string(raw)}
+	}
+	for agg := range v.handStandIns {
+		v.handStandIns[agg] = v.sources[agg+".hand.js"].Source
+	}
+	return nil
+}
+
+// missing says a scenario's file isn't there: not generated, or (host mode)
+// not in the host's functions.
+func (v *verifier) missing(what, name string) string {
+	if v.host != "" {
+		return fmt.Sprintf("the host has no %s (%s.js)", what, name)
+	}
+	return fmt.Sprintf("no %s was generated for %q", what, name)
+}
+
+// which is "generated" or "host's", for load and run messages.
+func (v *verifier) which() string {
+	if v.host != "" {
+		return "host's"
+	}
+	return "generated"
 }
 
 func (v *verifier) indexSources(mapped *Mapped) error {
@@ -279,7 +345,7 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	file, ok := v.sources[aggregate+".js"]
 	if !ok {
 		res.Skipped = true
-		res.Detail = fmt.Sprintf("no decider was generated for %q", aggregate)
+		res.Detail = v.missing("decider", aggregate)
 		return
 	}
 
@@ -300,7 +366,7 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	rt := functions.NewGojaRuntime(nil)
 	spec, err := functions.LoadDeciderSourceWithHand(rt, aggregate+".js", file.Source, v.handStandIns[aggregate])
 	if err != nil {
-		res.Detail = "the generated decider did not load: " + err.Error()
+		res.Detail = "the " + v.which() + " decider did not load: " + err.Error()
 		return
 	}
 	payload := json.RawMessage(`{}`)
@@ -422,7 +488,7 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		return
 	}
 	collection := scaffold.SanitizeName(ReadModelCollectionName(rm.Name, q.ReadModelID))
-	if rm.Projection == ProjectionHand {
+	if rm.Projection == ProjectionHand && v.host == "" {
 		// schema 3.17.0: the rows are the host's own projection's to build,
 		// which only a host check can run
 		res.Hand = true
@@ -432,14 +498,14 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 	file, ok := v.sources[collection+".js"]
 	if !ok {
 		res.Skipped = true
-		res.Detail = fmt.Sprintf("no projection was generated for %q", collection)
+		res.Detail = v.missing("projection", collection)
 		return
 	}
 
 	rt := functions.NewGojaRuntime(nil)
 	spec, err := functions.LoadProjectionSource(rt, nil, collection+".js", file.Source)
 	if err != nil {
-		res.Detail = "the generated projection did not load: " + err.Error()
+		res.Detail = "the " + v.which() + " projection did not load: " + err.Error()
 		return
 	}
 	// Each given event needs its OWN row key for THIS projection, not one key

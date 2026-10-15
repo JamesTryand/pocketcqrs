@@ -61,3 +61,34 @@ func TestSchemaImportRefusalWritesNoPbData(t *testing.T) {
 		}
 	}
 }
+
+// `schema verify` gets the same short-circuit: a failing scenario is a
+// non-zero process exit (the check a build runs), and nothing bootstraps a
+// pb_data/. A hand file whose hook never flags fails the over-limit
+// scenario of upstream's conditional-outcomes.json.
+func TestSchemaVerifyFailureExitsNonZeroWithNoPbData(t *testing.T) {
+	bin := build(t, "github.com/jamestryand/pocketcqrs", filepath.Join(t.TempDir(), "pocketcqrs"))
+	dir := t.TempDir()
+	doc, err := filepath.Abs("../testdata/eventmodelschema/examples/conditional-outcomes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	functions := filepath.Join(dir, "functions")
+	if out, err := exec.Command(bin, "schema", "import", doc, "--skip-scenarios", "--out", functions).CombinedOutput(); err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	hand := "function SubmitExpenseOutcome0(state, command) { return false; }\n"
+	if err := os.WriteFile(filepath.Join(functions, "expense.hand.js"), []byte(hand), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "schema", "verify", doc, "--functions", functions)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() == 0 {
+		t.Fatalf("a failing scenario exited %v; output:\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pb_data")); err == nil {
+		t.Fatal("verify bootstrapped a pb_data/ (F-10)")
+	}
+}

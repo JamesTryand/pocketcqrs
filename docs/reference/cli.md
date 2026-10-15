@@ -734,8 +734,15 @@ Create/update a superuser (admin UI + reload endpoint auth).
 ```sh
 pocketcqrs schema import <document.json|manifest-dir> [--out dir] [--docs dir]
     [--aggregate <elementId>=<name>]... [--lang js|go] [--force]
+pocketcqrs schema verify <document.json|manifest-dir> [--functions dir]
+    [--aggregate <elementId>=<name>]...
 pocketcqrs schema export <document.json>
 ```
+
+`verify` runs the document's scenarios and writes nothing; it exits non-zero
+when one fails (HAND doesn't count). `--functions` runs them against a host's
+own functions directory instead of the generated code: see
+[the guide](../schema.md#verify-on-its-own-and-against-a-host).
 
 Import and export [EventModeling](https://eventmodeling.org) documents —
 see [the guide](../schema.md) for the mapping and what survives a round trip.

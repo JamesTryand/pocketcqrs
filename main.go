@@ -152,8 +152,11 @@ func main() {
 	// pb.Execute() discards RootCmd.Execute()'s return value, so a RunE
 	// error used to print correctly but never reach a non-zero exit code.
 	// Running Execute() directly here lets main() act on it.
-	if len(os.Args) > 2 && os.Args[1] == "schema" && os.Args[2] == "import" {
+	if len(os.Args) > 2 && os.Args[1] == "schema" && (os.Args[2] == "import" || os.Args[2] == "verify") {
 		ic := newSchemaImportCommand()
+		if os.Args[2] == "verify" {
+			ic = newSchemaVerifyCommand()
+		}
 		ic.SetArgs(os.Args[3:])
 		if err := ic.Execute(); err != nil {
 			os.Exit(1)
