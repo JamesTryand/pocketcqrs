@@ -7,15 +7,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 )
 
-// The governed-erasure lifecycle (decision 3), ported from dotnetcqrs's
-// DataSubject with the same command and event names and the same tests
-// (ErasureWorkflowTests, DataSubjectAcceptedCommandsTests).
+// The core data-subject aggregate: a request, and the erasure. What decides
+// a request (retention duties, legal holds) is a module's, not this
+// package's: see package retention.
 
 func bareSubjects(t *testing.T) (*events.Store, *decider.Registry) {
 	t.Helper()
@@ -38,7 +37,7 @@ func do(t *testing.T, r *decider.Registry, id, cmd, payload, actor string) ([]ev
 		actor = "u"
 	}
 	return r.HandleWithMeta(context.Background(), SubjectAggregate, id, decider.Command{Name: cmd, Payload: json.RawMessage(payload)},
-		map[string]any{"actor": actor})
+		map[string]any{"actor": actor, "now": "2026-10-16T09:00:00.000Z"})
 }
 
 func must(t *testing.T) func([]events.Event, error) []events.Event {
@@ -51,22 +50,14 @@ func must(t *testing.T) func([]events.Event, error) []events.Event {
 	}
 }
 
-func refused(t *testing.T) func([]events.Event, error) {
-	return func(_ []events.Event, err error) {
-		t.Helper()
-		if !decider.IsRejection(err) {
-			t.Fatalf("want a refusal, got %v", err)
-		}
-	}
-}
-
 func TestARequestRecordsWhoAskedAndWhyAndIsIdempotentWhileOpen(t *testing.T) {
 	store, r := bareSubjects(t)
-	first := must(t)(do(t, r, "s1", RequestErasureCommand, `{"reason":"data-subject-request"}`, "u:manager-1"))
+	first := must(t)(do(t, r, "s1", RequestErasureCommand, `{"reason":"data-subject-request"}`, "u:clerk-1"))
 	again := must(t)(do(t, r, "s1", RequestErasureCommand, "", ""))
 	if len(first) != 1 || first[0].Type != ErasureRequestedEvent ||
-		!strings.Contains(string(first[0].Data), `"requestedBy":"u:manager-1"`) ||
-		!strings.Contains(string(first[0].Data), `"reason":"data-subject-request"`) {
+		!strings.Contains(string(first[0].Data), `"requestedBy":"u:clerk-1"`) ||
+		!strings.Contains(string(first[0].Data), `"reason":"data-subject-request"`) ||
+		!strings.Contains(string(first[0].Data), `"requestedAt":"2026-10-16T09:00:00.000Z"`) {
 		t.Fatalf("first: %+v", first)
 	}
 	if len(again) != 0 {
@@ -84,49 +75,11 @@ func TestAReasonIsRefusedWhenTooLongToBeACode(t *testing.T) {
 	if !decider.IsRejection(err) || !strings.Contains(err.Error(), "not personal data") {
 		t.Fatalf("got %v", err)
 	}
-}
-
-func TestHoldAndApproveNeedAnOpenRequest(t *testing.T) {
-	_, r := bareSubjects(t)
-	refused(t)(do(t, r, "s1", HoldErasureCommand, `{"reason":"x"}`, ""))
-	refused(t)(do(t, r, "s1", ApproveErasureCommand, "", ""))
-}
-
-func TestAHoldNeedsAReasonAndCanBeRestatedWithoutDuplicatingTheEvent(t *testing.T) {
-	store, r := bareSubjects(t)
-	must(t)(do(t, r, "s1", RequestErasureCommand, "", ""))
-	refused(t)(do(t, r, "s1", HoldErasureCommand, "{}", ""))
-	hold := `{"reason":"payroll","reviewAt":"2030-01-01T00:00:00Z"}`
-	if evs := must(t)(do(t, r, "s1", HoldErasureCommand, hold, "")); len(evs) != 1 {
-		t.Fatal("the hold wasn't recorded")
+	if _, err := CheckReason("  "+strings.Repeat("é", MaxReasonLength)+" ", true); err != nil {
+		t.Fatalf("200 characters, trimmed, must pass: %v", err)
 	}
-	if evs := must(t)(do(t, r, "s1", HoldErasureCommand, hold, "")); len(evs) != 0 {
-		t.Fatal("the same hold restated was recorded again")
-	}
-	if evs := must(t)(do(t, r, "s1", HoldErasureCommand, `{"reason":"payroll","reviewAt":"2031-01-01T00:00:00Z"}`, "")); len(evs) != 1 {
-		t.Fatal("a new review date is news")
-	}
-	stream, _ := store.LoadStream(context.Background(), SubjectAggregate, "s1")
-	if len(stream) != 3 {
-		t.Fatalf("stream %d", len(stream))
-	}
-}
-
-func TestALegalHoldBlocksApprovalAndErasureUntilReleased(t *testing.T) {
-	_, r := bareSubjects(t)
-	must(t)(do(t, r, "s1", RequestErasureCommand, "", ""))
-	must(t)(do(t, r, "s1", PlaceLegalHoldCommand, `{"reason":"litigation"}`, ""))
-	refused(t)(do(t, r, "s1", ApproveErasureCommand, "", ""))
-	refused(t)(do(t, r, "s1", EraseSubjectCommand, "", ""))
-	if evs := must(t)(do(t, r, "s1", PlaceLegalHoldCommand, `{"reason":"again"}`, "")); len(evs) != 0 {
-		t.Fatal("a second legal hold was recorded")
-	}
-	must(t)(do(t, r, "s1", ReleaseLegalHoldCommand, "", ""))
-	if evs := must(t)(do(t, r, "s1", ApproveErasureCommand, "", "")); len(evs) != 1 {
-		t.Fatal("not approved after release")
-	}
-	if evs := must(t)(do(t, r, "s1", ReleaseLegalHoldCommand, "", "")); len(evs) != 0 {
-		t.Fatal("nothing to release, yet recorded")
+	if _, err := CheckReason(" ", true); err == nil {
+		t.Fatal("a required reason that is only white space must be refused")
 	}
 }
 
@@ -139,11 +92,9 @@ func TestNothingButANoOpIsPossibleAfterErasure(t *testing.T) {
 	if evs := must(t)(do(t, r, "s1", RequestErasureCommand, "", "")); len(evs) != 0 {
 		t.Fatal("a request after erasure was recorded")
 	}
-	refused(t)(do(t, r, "s1", PlaceLegalHoldCommand, `{"reason":"x"}`, ""))
-	refused(t)(do(t, r, "s1", ApproveErasureCommand, "", ""))
 }
 
-func TestTheDirectEraseOverrideStillWorksForASubjectWithNoRequest(t *testing.T) {
+func TestTheDirectEraseWorksForASubjectWithNoRequest(t *testing.T) {
 	store, r := bareSubjects(t)
 	if evs := must(t)(do(t, r, "s1", EraseSubjectCommand, "", "")); len(evs) != 1 {
 		t.Fatal("not erased")
@@ -154,87 +105,71 @@ func TestTheDirectEraseOverrideStillWorksForASubjectWithNoRequest(t *testing.T) 
 	}
 }
 
-func TestEveryCommandHasADefaultRolePolicyAndOnlyTheRequestIsOpenToAManager(t *testing.T) {
-	for _, c := range SubjectCommands {
-		if DefaultRequiredRoles(c) == nil {
-			t.Errorf("%s has no default roles", c)
+// The core aggregate has the request and the erasure, nothing else: a
+// workflow over them (hold, approve, legal hold) is a module's.
+func TestTheCoreAggregateKnowsOnlyTheRequestAndTheErasure(t *testing.T) {
+	if !slices.Equal(SubjectCommands, []string{RequestErasureCommand, EraseSubjectCommand}) {
+		t.Fatalf("commands %v", SubjectCommands)
+	}
+	_, r := bareSubjects(t)
+	if got := r.Commands(SubjectAggregate); !slices.Equal(got, []string{EraseSubjectCommand, RequestErasureCommand}) {
+		t.Fatalf("registered %v", got)
+	}
+	must(t)(do(t, r, "s1", RequestErasureCommand, "", ""))
+	if _, err := do(t, r, "s1", "HoldErasure", `{"reason":"x"}`, ""); err == nil {
+		t.Fatal("the core aggregate accepted a module's command")
+	}
+	if evs := must(t)(do(t, r, "s1", EraseSubjectCommand, "", "")); len(evs) != 1 {
+		t.Fatal("an open request must not stop the erasure")
+	}
+}
+
+func TestASubjectAcceptsWhatItsStateAllows(t *testing.T) {
+	for _, c := range []struct {
+		state SubjectState
+		want  []string
+	}{
+		{SubjectState{}, []string{RequestErasureCommand, EraseSubjectCommand}},
+		{SubjectState{Requested: true}, []string{EraseSubjectCommand}},
+		{SubjectState{Requested: true, Erased: true}, nil},
+		{SubjectState{Erased: true}, nil},
+	} {
+		if got := AcceptedCommands(c.state); !slices.Equal(got, c.want) {
+			t.Errorf("%+v: %v, want %v", c.state, got, c.want)
 		}
-	}
-	if got := DefaultRequiredRoles(RequestErasureCommand); !slices.Equal(got, []string{"manager", "administrator"}) {
-		t.Errorf("request: %v", got)
-	}
-	for _, c := range SubjectCommands {
-		if c != RequestErasureCommand && !slices.Equal(DefaultRequiredRoles(c), []string{"administrator"}) {
-			t.Errorf("%s: %v", c, DefaultRequiredRoles(c))
-		}
-	}
-	if DefaultRequiredRoles("NotACommand") != nil {
-		t.Error("an unknown command has roles")
-	}
-}
-
-// A_subject_accepts_what_its_stage_and_legal_hold_allow, worked by hand.
-var acceptedByHand = []struct {
-	stage ErasureStage
-	hold  bool
-	want  []string
-}{
-	{StageNone, false, []string{RequestErasureCommand, PlaceLegalHoldCommand, EraseSubjectCommand}},
-	{StageRequested, false, []string{HoldErasureCommand, ApproveErasureCommand, PlaceLegalHoldCommand, EraseSubjectCommand}},
-	{StageRequested, true, []string{HoldErasureCommand, ReleaseLegalHoldCommand}},
-	{StageHeld, false, []string{HoldErasureCommand, ApproveErasureCommand, PlaceLegalHoldCommand, EraseSubjectCommand}},
-	{StageHeld, true, []string{HoldErasureCommand, ReleaseLegalHoldCommand}},
-	{StageApproved, false, []string{PlaceLegalHoldCommand, EraseSubjectCommand}},
-	{StageApproved, true, []string{ReleaseLegalHoldCommand}},
-	{StageErased, false, nil},
-}
-
-func subjectAt(stage ErasureStage, hold bool) SubjectState {
-	return SubjectState{Erased: stage == StageErased, Stage: stage, LegalHold: hold, Reason: "earlier-reason"}
-}
-
-func TestASubjectAcceptsWhatItsStageAndLegalHoldAllow(t *testing.T) {
-	for _, c := range acceptedByHand {
-		got := AcceptedCommands(subjectAt(c.stage, c.hold))
-		slices.Sort(got)
-		want := slices.Clone(c.want)
-		slices.Sort(want)
-		if !slices.Equal(got, want) {
-			t.Errorf("%s hold=%v: %v, want %v", c.stage, c.hold, got, want)
-		}
-	}
-}
-
-func TestExactlyTheAcceptedCommandsRecordAnEventWhenDecided(t *testing.T) {
-	d := DataSubject()
-	for _, c := range acceptedByHand {
-		state := subjectAt(c.stage, c.hold)
-		accepted := AcceptedCommands(state)
 		for _, cmd := range SubjectCommands {
-			evs, err := d.Decide(decider.Command{Name: cmd, Payload: json.RawMessage(`{"reason":"a-new-reason"}`),
-				Actor: "admin-1", Now: "2026-10-14T09:00:00.000Z"}, state)
-			records := err == nil && len(evs) > 0
-			if records != slices.Contains(accepted, cmd) {
-				t.Errorf("%s at %s hold=%v: records=%v, offered=%v", cmd, c.stage, c.hold, records, slices.Contains(accepted, cmd))
+			evs, err := DecideSubject(decider.Command{Name: cmd, Payload: json.RawMessage(`{}`), Actor: "a", Now: "2026-10-16T09:00:00.000Z"}, c.state)
+			if records := err == nil && len(evs) > 0; records != slices.Contains(c.want, cmd) {
+				t.Errorf("%s at %+v: records=%v", cmd, c.state, records)
 			}
 		}
 	}
 }
 
-func TestApprovingAnApprovedRequestAgainRecordsNothingAndIsNotRefused(t *testing.T) {
-	evs, err := DataSubject().Decide(decider.Command{Name: ApproveErasureCommand, Payload: json.RawMessage(`{}`),
-		Actor: "admin-1", Now: "2026-10-14T09:00:00.000Z"}, subjectAt(StageApproved, false))
-	if err != nil || len(evs) != 0 {
-		t.Fatalf("%v %v", evs, err)
+func TestTheFoldTracksTheRequestAndTheErasure(t *testing.T) {
+	s, _ := EvolveSubject(SubjectState{}, events.Event{Type: ErasureRequestedEvent,
+		Data: json.RawMessage(`{"requestedBy":"u:clerk-1","reason":"asked"}`)})
+	if !s.Requested || s.RequestedBy != "u:clerk-1" || s.Reason != "asked" || s.Erased {
+		t.Fatalf("requested: %+v", s)
+	}
+	s, _ = EvolveSubject(s, events.Event{Type: "ErasureHeld", Data: json.RawMessage(`{"reason":"other"}`)})
+	if s.Reason != "asked" {
+		t.Fatalf("a module's event changed the core state: %+v", s)
+	}
+	s, _ = EvolveSubject(s, events.Event{Type: SubjectErasedEvent, Data: json.RawMessage(`{}`)})
+	if !s.Erased {
+		t.Fatalf("erased: %+v", s)
 	}
 }
 
 // The clock arrives on the command; a command with none is refused, never
-// given the current time.
+// given the current time. The erasure carries no payload, so needs none.
 func TestACommandWithNoTimeIsRefused(t *testing.T) {
 	_, err := DataSubject().Decide(decider.Command{Name: RequestErasureCommand, Payload: json.RawMessage(`{}`)}, SubjectState{})
 	if err == nil || !strings.Contains(err.Error(), "carries no time") {
 		t.Fatalf("got %v", err)
 	}
-	_ = time.Now
+	if evs, err := DataSubject().Decide(decider.Command{Name: EraseSubjectCommand}, SubjectState{}); err != nil || len(evs) != 1 {
+		t.Fatalf("erase: %v %v", evs, err)
+	}
 }

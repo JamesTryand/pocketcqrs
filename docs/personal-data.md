@@ -163,11 +163,21 @@ nothing. Wire `gateway.Config.Authorize` with a policy saying who may erase whom
 role, say). Once a hook is wired, `dataSubject` commands go through it like any other command. A
 document can't declare this yet: schema 3.2.0's `dataSubjects` is refused on import.
 
-## Governed erasure
+## Requests, and governing them
 
-A request is not an erasure. Erasure is permanent, and a business usually has to keep some records
-about a person for years (payroll, tax, pensions), so the `dataSubject` aggregate carries a governed
-lifecycle, the same as dotnetcqrs's (same command and event names):
+Besides `EraseSubject`, the core `dataSubject` aggregate has one more command: `RequestErasure`
+records `ErasureRequested` (`requestedBy`, `reason`, `requestedAt`). A request records that someone
+asked; it erases nothing. Asking twice is harmless; asking after erasure does nothing. A reason is a
+short code (`asked-by-subject`, `legal-hold`), stored in the clear and kept after the erasure, so
+never personal data; over 200 characters is refused. `pii.AcceptedCommands(state)` says which
+commands a subject would act on, for a screen.
+
+With only `pii`, nothing acts on a request: deciding one is the host's. Erasure is permanent, and a
+business is usually obliged to keep some records about a person for a time (GDPR Article 17(3)
+exempts what the law requires kept), so pocketcqrs ships an opt-in module that governs requests:
+package `retention`, the same lifecycle as dotnetcqrs's, with the same command and event names.
+
+### Package retention
 
 ```
  (none) --RequestErasure--> Requested --policy: not yet--> Held --review--> (asked again)
@@ -177,32 +187,41 @@ lifecycle, the same as dotnetcqrs's (same command and event names):
  a legal hold (PlaceLegalHold / ReleaseLegalHold) blocks approval and erasure at any stage
 ```
 
-| Command | Event | Who (`pii.DefaultRequiredRoles`) |
+| Command | Event | Sent by |
 |---|---|---|
-| `RequestErasure` | `ErasureRequested` | `manager`, `administrator` |
-| `HoldErasure` | `ErasureHeld` (reason, review date) | the governor, or `administrator` |
-| `ApproveErasure` | `ErasureApproved` | the governor, or `administrator` |
-| `PlaceLegalHold` / `ReleaseLegalHold` | `LegalHoldPlaced` / `LegalHoldReleased` | `administrator` |
-| `EraseSubject` | `SubjectErased` | the governor; `administrator` as a direct override |
+| `RequestErasure` | `ErasureRequested` | whoever your hook lets ask |
+| `HoldErasure` | `ErasureHeld` (reason, review date) | the governor, or an administrator |
+| `ApproveErasure` | `ErasureApproved` | the governor, or an administrator |
+| `PlaceLegalHold` / `ReleaseLegalHold` | `LegalHoldPlaced` / `LegalHoldReleased` | an administrator |
+| `EraseSubject` | `SubjectErased` | the governor; an administrator as a direct override |
 
-Asking twice is harmless; asking after erasure does nothing. A reason is a short code (`payroll-tax`,
-`legal-hold`), stored in the clear and kept after the erasure, so never personal data; over 200
-characters is refused. `SubjectErased` still carries no payload. `pii.AcceptedCommands(state)` says
-which commands a subject would act on, for a screen.
+The module only adds refusals to the core: `EraseSubject` is refused under a legal hold.
+`retention.AcceptedCommands(state)` covers all six commands.
 
-Whether a request may proceed is the business's call: a `pii.RetentionPolicy`.
-`PeriodRetentionPolicy{Years: 6, Activity: a, Reason: "payroll-tax"}` holds a request until six years
-after the subject's last activity (`SubjectActivity` is yours to implement);
-`CompositeRetentionPolicy` holds while any duty holds, until the latest date; `AllowAllRetentionPolicy`
-is for a system with nothing to retain.
+Whether a request may proceed is the business's call: a `retention.Policy`.
+`retention.PeriodPolicy{Years: 6, Activity: a, Reason: "statutory-records"}` holds a request until
+six years after the subject's last activity (`SubjectActivity` is yours to implement);
+`CompositePolicy` holds while any duty holds, until the latest date; `AllowAll` is for a system with
+nothing to retain.
 
-`pii.RegisterErasureGovernance(ctx, app, engine, registry, store, policy, box, logger)` wires the rest
-on the writer. The `ErasureGovernor` asks the policy on each request (and when a legal hold is
-released), then approves or holds; it sends `EraseSubject` once approved, and the key destroyer does
-the rest. A hold with a review date is a review recorded in the outbox `box`, due on that date, so a
-held request is looked at again exactly then (no timer loop). Everything the governor sends is
-attributed to `system:retention-policy`. The `erasureRequests` collection (superusers only; guard it)
-is the queue an administrator screen lists: `pii.ListErasureRequests(ctx, app, stage)`.
+```go
+gov, err := retention.Wire(ctx, retention.WireOptions{
+	Registry: registry, Engine: engine, Loader: store, Policy: policy, Outbox: box, Logger: logger,
+})
+```
 
-Not built: erasing part of a subject (their free text but not their payroll record). That needs a
-retention class per field.
+Call it on the writer, before or after `pii.Wire`: either way the governed decider is the one
+registered. The `Governor` asks the policy on each request (and when a legal hold is released), then
+approves or holds; it sends `EraseSubject` once approved, and the key destroyer does the rest. A hold
+with a review date is a review recorded in the outbox, due on that date, so a held request is looked
+at again exactly then (no timer loop). Everything the governor sends is attributed to
+`system:retention-policy`.
+
+Who may send which command is yours to declare: your `Authorize` hook must cover every command in
+`retention.Commands`. Typically a wider group may ask than may hold, approve, place or release a legal
+hold, or erase directly.
+
+For an administrator screen, build a read model like any other. `examples/erasurequeue` is one you
+can copy: a projection of the `dataSubject` events into a superusers-only collection.
+
+Erasure is whole-subject: it makes every value under the subject's key unreadable.

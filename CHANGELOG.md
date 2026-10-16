@@ -127,16 +127,17 @@ All notable changes to PocketCQRS. Format loosely follows
 - **A `sumOfItems` column is json** (James's call), so its null before every item carries the subfield
   stays null; a PocketBase number field read it back as 0, which the Go check reported against
   upstream's `rows-per-list-item.json`. A Go host's migration declares the column json too.
-- **Governed erasure (decision 3), ported from dotnetcqrs with the same names.** The `dataSubject`
-  aggregate now has the lifecycle `RequestErasure` → (`HoldErasure` ↔ review) → `ApproveErasure` →
-  `EraseSubject`, with `PlaceLegalHold`/`ReleaseLegalHold` blocking approval and erasure; reasons are
-  short codes (200 characters at most). `pii.RetentionPolicy` (`PeriodRetentionPolicy`,
-  `CompositeRetentionPolicy`, `AllowAllRetentionPolicy`, `SubjectActivity`), the `ErasureGovernor`
-  (asks the policy, approves or holds, erases once approved; held requests are reviewed by an outbox
-  entry due on the review date, not a timer loop), the `erasureRequests` queue collection
-  (`ErasureRequests`, `ListErasureRequests`), `DefaultRequiredRoles`, `AcceptedCommands` and
-  `RegisterErasureGovernance`. `pii.SubjectState` gains the stage, legal hold, reason and review
-  date. Direct `EraseSubject` still works, and is refused under a legal hold.
+- **Erasure requests, and an opt-in module that governs them (decision 3), ported from dotnetcqrs
+  with the same names.** The core `dataSubject` aggregate gains `RequestErasure` (`ErasureRequested`:
+  who asked, why, when), beside `EraseSubject`; a request erases nothing, and with only `pii` nothing
+  acts on one. New package `retention` governs requests: `HoldErasure` (↔ review), `ApproveErasure`,
+  `PlaceLegalHold`/`ReleaseLegalHold` (blocking approval and erasure), a business-owned `Policy`
+  (`PeriodPolicy`, `CompositePolicy`, `AllowAll`, `SubjectActivity`), and the `Governor` (asks the
+  policy, approves or holds, erases once approved; held requests are reviewed by an outbox entry due
+  on the review date, not a timer loop). `retention.Wire` registers its decider in place of the
+  core's (`pii.Wire` now keeps a `dataSubject` decider already registered, so the order doesn't
+  matter). Reasons are short codes (200 characters at most). Roles are the host's to declare in its
+  `Authorize` hook; an administrator's queue is an ordinary read model (`examples/erasurequeue`).
 - **A secondary wakes when LiteFS applies the master's transactions (R7).** `--cqrsLiteFSEvents`
   follows LiteFS's `/events` stream (package `litefswatch`) and nudges the engine (new
   `Engine.Nudge`) on each transaction applied to the log, after it is readable; the 1 s tick stays as

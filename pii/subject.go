@@ -13,12 +13,6 @@ import (
 	"github.com/jamestryand/pocketcqrs/outbox"
 )
 
-// RegisterDataSubjects registers the built-in aggregate. A host that stores
-// any personal data needs it, or nothing can ever be erased.
-func RegisterDataSubjects(r *decider.Registry) {
-	decider.Register(r, SubjectAggregate, DataSubject())
-}
-
 // SubjectStatus answers "has this subject been erased?".
 type SubjectStatus interface {
 	IsErased(ctx context.Context, subjectID string) (bool, error)

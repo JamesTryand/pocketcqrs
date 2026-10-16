@@ -62,3 +62,25 @@ func TestWireRegistersSubjectsDestroyerAndEvictor(t *testing.T) {
 		}
 	}
 }
+
+// A module that governs erasure (package retention) registers its own
+// dataSubject decider, a superset of the core one. Wire keeps it whichever
+// was registered first, so the order a host wires them in can't quietly
+// drop the module's refusals.
+func TestWireKeepsADataSubjectDeciderAlreadyRegistered(t *testing.T) {
+	t.Setenv(kms.EnvFacadeURL, "https://kms.example.test/")
+	store := wireStore(t)
+	reg := decider.NewRegistry(store)
+	reg.RegisterUntyped(pii.SubjectAggregate, decider.Untyped{Commands: []string{"ModuleCommand"},
+		Initial: func() any { return nil },
+		Decide:  func(decider.Command, any, map[string]any) ([]events.NewEvent, error) { return nil, nil },
+		Evolve:  func(s any, _ events.Event) (any, error) { return s, nil }})
+	if _, err := pii.Wire(context.Background(), pii.WireOptions{
+		Registry: reg, Engine: consumers.NewEngine(store, nil), Checkpoints: store, Loader: store,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.Commands(pii.SubjectAggregate); len(got) != 1 || got[0] != "ModuleCommand" {
+		t.Fatalf("Wire replaced the module's decider: %v", got)
+	}
+}

@@ -1,4 +1,4 @@
-package pii
+package retention
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/kms"
 	"github.com/jamestryand/pocketcqrs/outbox"
+	"github.com/jamestryand/pocketcqrs/pii"
 )
 
 // The governor, ported from dotnetcqrs's ErasureWorkflowTests. Where
@@ -36,11 +37,11 @@ type rig struct {
 	engine   *consumers.Engine
 	box      *outbox.Store
 	worker   *outbox.Worker
-	governor *ErasureGovernor
+	governor *Governor
 	now      time.Time
 }
 
-func newRig(t *testing.T, policy RetentionPolicy) *rig {
+func newRig(t *testing.T, policy Policy) *rig {
 	t.Helper()
 	store, r := bareSubjects(t)
 	box, err := outbox.Open(filepath.Join(t.TempDir(), "outbox.db"))
@@ -49,12 +50,12 @@ func newRig(t *testing.T, policy RetentionPolicy) *rig {
 	}
 	t.Cleanup(func() { box.Close() })
 	g := &rig{t: t, store: store, registry: r, kms: kms.NewMemory(), box: box, now: epoch}
-	g.governor = &ErasureGovernor{Registry: r, Loader: store, Policy: policy, Outbox: box, Now: func() time.Time { return g.now }}
+	g.governor = &Governor{Registry: r, Loader: store, Policy: policy, Outbox: box, Now: func() time.Time { return g.now }}
 	g.engine = consumers.NewEngine(store, nil)
-	g.engine.Register(KeyDestroyer{KMS: g.kms})
+	g.engine.Register(pii.KeyDestroyer{KMS: g.kms})
 	g.engine.Register(g.governor)
 	g.worker = &outbox.Worker{Store: box, Now: func() time.Time { return g.now },
-		Handlers: map[string]outbox.Handler{ErasureReviewConsumer: g.governor.Review}}
+		Handlers: map[string]outbox.Handler{ReviewConsumer: g.governor.Review}}
 	return g
 }
 
@@ -66,7 +67,7 @@ func (g *rig) send(id, cmd, payload, actor string) {
 	if actor == "" {
 		actor = "u"
 	}
-	if _, err := g.registry.HandleWithMeta(context.Background(), SubjectAggregate, id,
+	if _, err := g.registry.HandleWithMeta(context.Background(), pii.SubjectAggregate, id,
 		decider.Command{Name: cmd, Payload: json.RawMessage(payload)},
 		map[string]any{"actor": actor, "now": g.now.Format("2006-01-02T15:04:05.000Z")}); err != nil {
 		g.t.Fatal(err)
@@ -93,7 +94,7 @@ func (g *rig) settle() {
 }
 
 func (g *rig) types(id string) []string {
-	stream, _ := g.store.LoadStream(context.Background(), SubjectAggregate, id)
+	stream, _ := g.store.LoadStream(context.Background(), pii.SubjectAggregate, id)
 	var out []string
 	for _, ev := range stream {
 		out = append(out, ev.Type)
@@ -101,10 +102,10 @@ func (g *rig) types(id string) []string {
 	return out
 }
 
-func (g *rig) state(id string) SubjectState {
+func (g *rig) state(id string) State {
 	d := DataSubject()
 	s := d.InitialState()
-	stream, _ := g.store.LoadStream(context.Background(), SubjectAggregate, id)
+	stream, _ := g.store.LoadStream(context.Background(), pii.SubjectAggregate, id)
 	for _, ev := range stream {
 		s, _ = d.Evolve(s, ev)
 	}
@@ -112,12 +113,12 @@ func (g *rig) state(id string) SubjectState {
 }
 
 func TestWithNoRetentionDutyARequestIsApprovedAndTheKeyIsDestroyed(t *testing.T) {
-	g := newRig(t, AllowAllRetentionPolicy{})
+	g := newRig(t, AllowAll{})
 	ctx := context.Background()
 	_ = g.kms.EnsureKey(ctx, "s1")
-	g.send("s1", RequestErasureCommand, "", "u:manager-1")
+	g.send("s1", pii.RequestErasureCommand, "", "u:clerk-1")
 	g.settle()
-	if got := g.types("s1"); !slices.Equal(got, []string{ErasureRequestedEvent, ErasureApprovedEvent, SubjectErasedEvent}) {
+	if got := g.types("s1"); !slices.Equal(got, []string{pii.ErasureRequestedEvent, ErasureApprovedEvent, pii.SubjectErasedEvent}) {
 		t.Fatalf("events %v", got)
 	}
 	if !kms.IsSubjectErased(g.kms.EnsureKey(ctx, "s1")) {
@@ -127,13 +128,13 @@ func TestWithNoRetentionDutyARequestIsApprovedAndTheKeyIsDestroyed(t *testing.T)
 
 func TestAPeriodPolicyHoldsTheRequestThenTheReviewClosesItWhenThePeriodEnds(t *testing.T) {
 	last := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	g := newRig(t, PeriodRetentionPolicy{Years: 6, Activity: fixedActivity(last), Reason: "payroll-tax"})
+	g := newRig(t, PeriodPolicy{Years: 6, Activity: fixedActivity(last), Reason: "statutory-records"})
 	ctx := context.Background()
 	_ = g.kms.EnsureKey(ctx, "s1")
-	g.send("s1", RequestErasureCommand, "", "")
+	g.send("s1", pii.RequestErasureCommand, "", "")
 	g.settle()
 	held := g.state("s1")
-	if held.Stage != StageHeld || held.Reason != "payroll-tax" || !held.ReviewAt.Equal(last.AddDate(6, 0, 0)) {
+	if held.Stage != StageHeld || held.HoldReason != "statutory-records" || !held.ReviewAt.Equal(last.AddDate(6, 0, 0)) {
 		t.Fatalf("held %+v", held)
 	}
 	// not due yet: nothing moves, the key is intact
@@ -147,18 +148,42 @@ func TestAPeriodPolicyHoldsTheRequestThenTheReviewClosesItWhenThePeriodEnds(t *t
 	// the period ends: the review approves it, and the lifecycle closes itself
 	g.now = last.AddDate(6, 0, 1)
 	g.settle()
-	if got := g.types("s1"); !slices.Equal(got, []string{ErasureRequestedEvent, ErasureHeldEvent, ErasureApprovedEvent, SubjectErasedEvent}) {
+	if got := g.types("s1"); !slices.Equal(got, []string{pii.ErasureRequestedEvent, ErasureHeldEvent, ErasureApprovedEvent, pii.SubjectErasedEvent}) {
 		t.Fatalf("events %v", got)
 	}
 }
 
+func TestAPeriodPolicyAllowsASubjectWithNoActivityAndDefaultsItsReason(t *testing.T) {
+	ctx := context.Background()
+	// a period long enough to hold from the zero time: no activity must not
+	// be read as activity at the zero time
+	d, err := PeriodPolicy{Years: 5000, Activity: noActivity{}}.Evaluate(ctx, "s1", epoch)
+	if err != nil || !d.Allowed {
+		t.Fatalf("no activity: %+v %v", d, err)
+	}
+	d, _ = PeriodPolicy{Years: 1, Activity: fixedActivity(epoch)}.Evaluate(ctx, "s1", epoch)
+	if d.Allowed || d.Reason != "retention-period" {
+		t.Fatalf("default reason: %+v", d)
+	}
+	d, _ = PeriodPolicy{Years: 1, Activity: fixedActivity(epoch)}.Evaluate(ctx, "s1", epoch.AddDate(1, 0, 0))
+	if !d.Allowed {
+		t.Fatalf("the period's last instant has passed: %+v", d)
+	}
+}
+
+type noActivity struct{}
+
+func (noActivity) LastActivity(context.Context, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 func TestALegalHoldOverridesAPolicyThatWouldAllowAndReleasingItResumesTheRequest(t *testing.T) {
-	g := newRig(t, AllowAllRetentionPolicy{})
+	g := newRig(t, AllowAll{})
 	g.send("s1", PlaceLegalHoldCommand, `{"reason":"litigation"}`, "")
-	g.send("s1", RequestErasureCommand, "", "")
+	g.send("s1", pii.RequestErasureCommand, "", "")
 	g.settle()
 	held := g.state("s1")
-	if held.Stage != StageHeld || held.Reason != "legal-hold" || !held.ReviewAt.IsZero() {
+	if held.Stage != StageHeld || held.HoldReason != "legal-hold" || !held.ReviewAt.IsZero() {
 		t.Fatalf("held %+v", held)
 	}
 	g.now = g.now.AddDate(50, 0, 0) // no schedule releases it
@@ -174,8 +199,8 @@ func TestALegalHoldOverridesAPolicyThatWouldAllowAndReleasingItResumesTheRequest
 }
 
 func TestAHoldPlacedAfterAPolicyHoldKeepsTheRequestFromBeingReviewedAway(t *testing.T) {
-	g := newRig(t, PeriodRetentionPolicy{Years: 1, Activity: fixedActivity(epoch), Reason: "tax"})
-	g.send("s1", RequestErasureCommand, "", "")
+	g := newRig(t, PeriodPolicy{Years: 1, Activity: fixedActivity(epoch), Reason: "tax"})
+	g.send("s1", pii.RequestErasureCommand, "", "")
 	g.settle()
 	g.send("s1", PlaceLegalHoldCommand, `{"reason":"audit"}`, "")
 	g.now = epoch.AddDate(5, 0, 0)
@@ -186,9 +211,9 @@ func TestAHoldPlacedAfterAPolicyHoldKeepsTheRequestFromBeingReviewedAway(t *test
 }
 
 func TestARedeliveredRequestEventDoesNotApproveTwice(t *testing.T) {
-	g := newRig(t, AllowAllRetentionPolicy{})
-	g.send("s1", RequestErasureCommand, "", "")
-	stream, _ := g.store.LoadStream(context.Background(), SubjectAggregate, "s1")
+	g := newRig(t, AllowAll{})
+	g.send("s1", pii.RequestErasureCommand, "", "")
+	stream, _ := g.store.LoadStream(context.Background(), pii.SubjectAggregate, "s1")
 	for range 2 { // at-least-once delivery
 		if err := g.governor.Apply(context.Background(), stream[0]); err != nil {
 			t.Fatal(err)
@@ -206,10 +231,10 @@ func TestARedeliveredRequestEventDoesNotApproveTwice(t *testing.T) {
 }
 
 func TestASubjectThatMovedOnIsNotADeliveryFailure(t *testing.T) {
-	g := newRig(t, AllowAllRetentionPolicy{})
-	g.send("s1", RequestErasureCommand, "", "")
-	stream, _ := g.store.LoadStream(context.Background(), SubjectAggregate, "s1")
-	g.send("s1", EraseSubjectCommand, "", "") // erased directly, before the governor ruled
+	g := newRig(t, AllowAll{})
+	g.send("s1", pii.RequestErasureCommand, "", "")
+	stream, _ := g.store.LoadStream(context.Background(), pii.SubjectAggregate, "s1")
+	g.send("s1", pii.EraseSubjectCommand, "", "") // erased directly, before the governor ruled
 	if err := g.governor.Apply(context.Background(), stream[0]); err != nil {
 		t.Fatalf("must not fail: %v", err)
 	}
@@ -219,14 +244,14 @@ func TestASubjectThatMovedOnIsNotADeliveryFailure(t *testing.T) {
 }
 
 func TestACompositePolicyHoldsUntilTheLatestDutyEnds(t *testing.T) {
-	g := newRig(t, CompositeRetentionPolicy{
-		PeriodRetentionPolicy{Years: 6, Activity: fixedActivity(epoch), Reason: "tax"},
-		PeriodRetentionPolicy{Years: 7, Activity: fixedActivity(epoch), Reason: "employment"},
+	g := newRig(t, CompositePolicy{
+		PeriodPolicy{Years: 6, Activity: fixedActivity(epoch), Reason: "tax"},
+		PeriodPolicy{Years: 7, Activity: fixedActivity(epoch), Reason: "employment"},
 	})
-	g.send("s1", RequestErasureCommand, "", "")
+	g.send("s1", pii.RequestErasureCommand, "", "")
 	g.settle()
 	held := g.state("s1")
-	if held.Reason != "tax, employment" || !held.ReviewAt.Equal(epoch.AddDate(7, 0, 0)) {
+	if held.HoldReason != "tax, employment" || !held.ReviewAt.Equal(epoch.AddDate(7, 0, 0)) {
 		t.Fatalf("held %+v", held)
 	}
 }
@@ -234,7 +259,7 @@ func TestACompositePolicyHoldsUntilTheLatestDutyEnds(t *testing.T) {
 // The governor is an effect: it doesn't act on an imported request, which
 // another deployment's governor ruled on.
 func TestTheGovernorIsAnEffect(t *testing.T) {
-	if !consumers.IsEffect(&ErasureGovernor{}) {
+	if !consumers.IsEffect(&Governor{}) {
 		t.Fatal("not an effect")
 	}
 }
@@ -243,11 +268,11 @@ func TestTheGovernorIsAnEffect(t *testing.T) {
 // placed after the approval) is the current state winning, not a delivery
 // failure; the key stays.
 func TestARefusedDispatchIsNotADeliveryFailure(t *testing.T) {
-	g := newRig(t, AllowAllRetentionPolicy{})
-	g.send("s1", RequestErasureCommand, "", "")
+	g := newRig(t, AllowAll{})
+	g.send("s1", pii.RequestErasureCommand, "", "")
 	g.send("s1", ApproveErasureCommand, "", "admin")
 	g.send("s1", PlaceLegalHoldCommand, `{"reason":"audit"}`, "admin")
-	stream, _ := g.store.LoadStream(context.Background(), SubjectAggregate, "s1")
+	stream, _ := g.store.LoadStream(context.Background(), pii.SubjectAggregate, "s1")
 	if err := g.governor.Apply(context.Background(), stream[1]); err != nil { // ErasureApproved
 		t.Fatalf("a refused EraseSubject failed delivery: %v", err)
 	}

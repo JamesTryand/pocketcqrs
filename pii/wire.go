@@ -39,6 +39,10 @@ type WireOptions struct {
 // the Deps every generated protector takes: the key-service client, the
 // per-process reveal cache, the built-in data-subject aggregate, the key
 // destroyer (writer only) and the cache evictor (every node).
+//
+// A dataSubject decider already registered is kept: a module that governs
+// erasure (package retention) registers its own, which adds refusals to the
+// core's, and the order a host wires them in must not drop them.
 func Wire(ctx context.Context, o WireOptions) (Deps, error) {
 	client := o.KMS
 	if client == nil {
@@ -54,7 +58,9 @@ func Wire(ctx context.Context, o WireOptions) (Deps, error) {
 		client = c
 	}
 	cache := NewCache(o.CacheCapacity)
-	RegisterDataSubjects(o.Registry)
+	if !o.Registry.Has(SubjectAggregate) {
+		RegisterDataSubjects(o.Registry)
+	}
 	if o.Writer {
 		destroyer := KeyDestroyer{KMS: client, Outbox: o.Outbox}
 		o.Engine.Register(destroyer)
