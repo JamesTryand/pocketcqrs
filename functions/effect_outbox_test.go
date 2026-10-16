@@ -12,7 +12,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/outbox"
 )
 
-// With an outbox, an effect function runs off the engine's pass (R4): the
+// With an outbox, an effect function runs off the engine's pass: the
 // engine's delivery only records the work, and the outbox worker runs the
 // function's current code, dead-lettering a throw as before (one attempt).
 func TestEffectFunctionsRunFromTheOutbox(t *testing.T) {

@@ -80,7 +80,7 @@ func IsEffect(c Consumer) bool {
 }
 
 // Committer is a consumer that applies an event and records its position in
-// one transaction of its own store (R2): a projection's row ops and its
+// one transaction of its own store: a projection's row ops and its
 // position in data.db, so a crash between them can't apply an event twice
 // or lose one. The engine calls Commit instead of Apply then SaveCheckpoint,
 // and reads the position from the consumer's own store (OwnCheckpoints).
@@ -357,7 +357,7 @@ func NewEngineWithCheckpoints(source PollSource, checkpoints CheckpointStore, lo
 // every consumer reads to the head as it is when its turn comes, so one
 // registered later can be ahead of one registered earlier (a commit lands
 // in between). Never decide from another consumer's output on the strength
-// of the order; a projection reads only its own tables (R6).
+// of the order; a projection reads only its own tables.
 func (e *Engine) Register(c Consumer) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -516,7 +516,7 @@ func (e *Engine) Run(ctx context.Context) {
 }
 
 // Nudge wakes the engine for a pass now rather than at its next tick: for a
-// writer in another process (a secondary's LiteFS watcher, R7), where the
+// writer in another process (a secondary's LiteFS watcher), where the
 // store's own in-process notice never fires.
 func (e *Engine) Nudge() {
 	select {

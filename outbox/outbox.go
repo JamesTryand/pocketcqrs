@@ -1,6 +1,6 @@
 // Package outbox holds the work an event asks of the world outside the
 // process (an HTTP call, a key destroyed), so it runs off the engine's pass
-// and is retried by due time (R4).
+// and is retried by due time.
 //
 // A consumer's Apply only enqueues: its checkpoint advances at once and a
 // slow or failing call never holds up the projections behind it. A Worker

@@ -5,71 +5,72 @@ import (
 	"testing"
 )
 
-// endedDoc is an entry that is logged once and deleted for good (D28): its
-// delete ends the stream, and no scenario shows a log after a delete, so the
-// end is final. A deleted entry's id can never be logged again.
+// endedDoc is a post that is published once and deleted for good: its
+// delete ends the stream, and no scenario shows a publish after a delete, so
+// the end is final. A deleted post's id can never be published again.
 const endedDoc = `{"eventModelingSchemaVersion":"3.17.0","id":"e","name":"E",
 	"swimlanes":[{"id":"s","name":"S","kind":"team"}],
 	"events":{
-		"entry-logged":{"name":"Entry Logged","swimlaneId":"s","aggregate":"entry",
-			"fields":[{"name":"entryId","type":"string","idAttribute":true}]},
-		"entry-deleted":{"name":"Entry Deleted","swimlaneId":"s","aggregate":"entry","endsStream":true,
-			"fields":[{"name":"entryId","type":"string","idAttribute":true}]}},
+		"post-published":{"name":"Post Published","swimlaneId":"s","aggregate":"post",
+			"fields":[{"name":"postId","type":"string","idAttribute":true}]},
+		"post-deleted":{"name":"Post Deleted","swimlaneId":"s","aggregate":"post","endsStream":true,
+			"fields":[{"name":"postId","type":"string","idAttribute":true}]}},
 	"commands":{
-		"log-entry":{"name":"Log Entry","aggregate":"entry","fields":[{"name":"entryId","type":"string","idAttribute":true}]},
-		"delete-entry":{"name":"Delete Entry","aggregate":"entry","fields":[{"name":"entryId","type":"string","idAttribute":true}]}},
+		"publish-post":{"name":"Publish Post","aggregate":"post","fields":[{"name":"postId","type":"string","idAttribute":true}]},
+		"delete-post":{"name":"Delete Post","aggregate":"post","fields":[{"name":"postId","type":"string","idAttribute":true}]}},
 	"screens":{"sc":{"name":"Sc"}},
 	"slices":[
-		{"id":"log","name":"Log","pattern":"stateChange","swimlaneId":"s","status":"planned",
-		 "screenId":"sc","commandId":"log-entry","eventIds":["entry-logged"],"scenarios":[
-			{"id":"log-new","name":"a new entry","kind":"stateChange","given":[],
-			 "when":{"commandId":"log-entry","data":{"entryId":"e1"}},
-			 "then":{"events":[{"eventId":"entry-logged","data":{"entryId":"e1"}}]}},
-			{"id":"log-deleted","name":"a deleted entry is not logged again","kind":"error",
-			 "given":[{"eventId":"entry-logged","data":{"entryId":"e1"}},{"eventId":"entry-deleted","data":{"entryId":"e1"}}],
-			 "when":{"commandId":"log-entry","data":{"entryId":"e1"}},
-			 "then":{"error":{"message":"entry has ended and cannot begin again"}}}]},
+		{"id":"publish","name":"Publish","pattern":"stateChange","swimlaneId":"s","status":"planned",
+		 "screenId":"sc","commandId":"publish-post","eventIds":["post-published"],"scenarios":[
+			{"id":"publish-new","name":"a new post","kind":"stateChange","given":[],
+			 "when":{"commandId":"publish-post","data":{"postId":"p1"}},
+			 "then":{"events":[{"eventId":"post-published","data":{"postId":"p1"}}]}},
+			{"id":"publish-deleted","name":"a deleted post is not published again","kind":"error",
+			 "given":[{"eventId":"post-published","data":{"postId":"p1"}},{"eventId":"post-deleted","data":{"postId":"p1"}}],
+			 "when":{"commandId":"publish-post","data":{"postId":"p1"}},
+			 "then":{"error":{"message":"post has ended and cannot begin again"}}}]},
 		{"id":"delete","name":"Delete","pattern":"stateChange","swimlaneId":"s","status":"planned",
-		 "screenId":"sc","commandId":"delete-entry","eventIds":["entry-deleted"],"scenarios":[
-			{"id":"delete-it","name":"delete an entry","kind":"stateChange",
-			 "given":[{"eventId":"entry-logged","data":{"entryId":"e1"}}],
-			 "when":{"commandId":"delete-entry","data":{"entryId":"e1"}},
-			 "then":{"events":[{"eventId":"entry-deleted","data":{"entryId":"e1"}}]}}]}]}`
+		 "screenId":"sc","commandId":"delete-post","eventIds":["post-deleted"],"scenarios":[
+			{"id":"delete-it","name":"delete a post","kind":"stateChange",
+			 "given":[{"eventId":"post-published","data":{"postId":"p1"}}],
+			 "when":{"commandId":"delete-post","data":{"postId":"p1"}},
+			 "then":{"events":[{"eventId":"post-deleted","data":{"postId":"p1"}}]}}]}]}`
 
-// reassignDoc is the other case: a project manager is assigned, unassigned
-// and assigned again. Its assign slice has a scenario doing exactly that, so
-// the create may begin the stream again (Finding 3 keeps working).
+// reassignDoc is the other case: a team lead is assigned, unassigned and
+// assigned again. Its assign slice has a scenario doing exactly that, so
+// the create may begin the stream again (an endsStream event still resets
+// exists).
 const reassignDoc = `{"eventModelingSchemaVersion":"3.17.0","id":"r","name":"R",
 	"swimlanes":[{"id":"s","name":"S","kind":"team"}],
 	"events":{
-		"pm-assigned":{"name":"Pm Assigned","swimlaneId":"s","aggregate":"assignment",
+		"lead-assigned":{"name":"Lead Assigned","swimlaneId":"s","aggregate":"assignment",
 			"fields":[{"name":"assignmentId","type":"string","idAttribute":true}]},
-		"pm-unassigned":{"name":"Pm Unassigned","swimlaneId":"s","aggregate":"assignment","endsStream":true,
+		"lead-unassigned":{"name":"Lead Unassigned","swimlaneId":"s","aggregate":"assignment","endsStream":true,
 			"fields":[{"name":"assignmentId","type":"string","idAttribute":true}]}},
 	"commands":{
-		"assign-pm":{"name":"Assign Pm","aggregate":"assignment","fields":[{"name":"assignmentId","type":"string","idAttribute":true}]},
-		"unassign-pm":{"name":"Unassign Pm","aggregate":"assignment","fields":[{"name":"assignmentId","type":"string","idAttribute":true}]}},
+		"assign-lead":{"name":"Assign Lead","aggregate":"assignment","fields":[{"name":"assignmentId","type":"string","idAttribute":true}]},
+		"unassign-lead":{"name":"Unassign Lead","aggregate":"assignment","fields":[{"name":"assignmentId","type":"string","idAttribute":true}]}},
 	"screens":{"sc":{"name":"Sc"}},
 	"slices":[
 		{"id":"assign","name":"Assign","pattern":"stateChange","swimlaneId":"s","status":"planned",
-		 "screenId":"sc","commandId":"assign-pm","eventIds":["pm-assigned"],"scenarios":[
+		 "screenId":"sc","commandId":"assign-lead","eventIds":["lead-assigned"],"scenarios":[
 			{"id":"assign-new","name":"assign","kind":"stateChange","given":[],
-			 "when":{"commandId":"assign-pm","data":{"assignmentId":"a1"}},
-			 "then":{"events":[{"eventId":"pm-assigned","data":{"assignmentId":"a1"}}]}},
+			 "when":{"commandId":"assign-lead","data":{"assignmentId":"a1"}},
+			 "then":{"events":[{"eventId":"lead-assigned","data":{"assignmentId":"a1"}}]}},
 			{"id":"assign-again","name":"assign again after an unassign","kind":"stateChange",
-			 "given":[{"eventId":"pm-assigned","data":{"assignmentId":"a1"}},{"eventId":"pm-unassigned","data":{"assignmentId":"a1"}}],
-			 "when":{"commandId":"assign-pm","data":{"assignmentId":"a1"}},
-			 "then":{"events":[{"eventId":"pm-assigned","data":{"assignmentId":"a1"}}]}},
-			{"id":"assign-twice","name":"an assigned pm is not assigned twice","kind":"error",
-			 "given":[{"eventId":"pm-assigned","data":{"assignmentId":"a1"}}],
-			 "when":{"commandId":"assign-pm","data":{"assignmentId":"a1"}},
+			 "given":[{"eventId":"lead-assigned","data":{"assignmentId":"a1"}},{"eventId":"lead-unassigned","data":{"assignmentId":"a1"}}],
+			 "when":{"commandId":"assign-lead","data":{"assignmentId":"a1"}},
+			 "then":{"events":[{"eventId":"lead-assigned","data":{"assignmentId":"a1"}}]}},
+			{"id":"assign-twice","name":"an assigned lead is not assigned twice","kind":"error",
+			 "given":[{"eventId":"lead-assigned","data":{"assignmentId":"a1"}}],
+			 "when":{"commandId":"assign-lead","data":{"assignmentId":"a1"}},
 			 "then":{"error":{"message":"assignment already exists"}}}]},
 		{"id":"unassign","name":"Unassign","pattern":"stateChange","swimlaneId":"s","status":"planned",
-		 "screenId":"sc","commandId":"unassign-pm","eventIds":["pm-unassigned"],"scenarios":[
+		 "screenId":"sc","commandId":"unassign-lead","eventIds":["lead-unassigned"],"scenarios":[
 			{"id":"unassign-it","name":"unassign","kind":"stateChange",
-			 "given":[{"eventId":"pm-assigned","data":{"assignmentId":"a1"}}],
-			 "when":{"commandId":"unassign-pm","data":{"assignmentId":"a1"}},
-			 "then":{"events":[{"eventId":"pm-unassigned","data":{"assignmentId":"a1"}}]}}]}]}`
+			 "given":[{"eventId":"lead-assigned","data":{"assignmentId":"a1"}}],
+			 "when":{"commandId":"unassign-lead","data":{"assignmentId":"a1"}},
+			 "then":{"events":[{"eventId":"lead-unassigned","data":{"assignmentId":"a1"}}]}}]}]}`
 
 func verifyDoc(t *testing.T, body string) map[string]ScenarioResult {
 	t.Helper()
@@ -92,9 +93,9 @@ func verifyDoc(t *testing.T, body string) map[string]ScenarioResult {
 	return byID
 }
 
-// D28: a create must not restart a stream that ended for good. endsStream
+// A create must not restart a stream that ended for good. endsStream
 // reset `exists` to false, so the create's own "already exists" check
-// passed again and a deleted entry could be logged a second time.
+// passed again and a deleted post could be published a second time.
 func TestEndedStreamIsNotBegunAgain(t *testing.T) {
 	results := verifyDoc(t, endedDoc)
 	for id, r := range results {

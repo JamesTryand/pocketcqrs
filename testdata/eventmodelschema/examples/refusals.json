@@ -3,155 +3,155 @@
   "eventModelingSchemaVersion": "3.15.0",
   "id": "refusals-example",
   "name": "Refusals Example",
-  "description": "Declared refusals (3.10.0; numeric comparisons, 3.11.0): a time entry is claimed by one invoice at a time, and cannot be changed while it is claimed. Each rule reads the entry's own state (folded from its own events) and the command, never a read model.",
+  "description": "Declared refusals (3.10.0; numeric comparisons, 3.11.0): a room booking is held by one event plan at a time, and cannot be changed while it is held. Each rule reads the booking's own state (folded from its own events) and the command, never a read model.",
   "swimlanes": [
-    { "id": "billing", "name": "Billing", "kind": "team" }
+    { "id": "bookings", "name": "Bookings", "kind": "team" }
   ],
   "events": {
-    "entry-logged": {
-      "name": "Entry Logged",
-      "swimlaneId": "billing",
-      "aggregate": "entry",
+    "booking-made": {
+      "name": "Booking Made",
+      "swimlaneId": "bookings",
+      "aggregate": "booking",
       "fields": [
-        { "name": "entryId", "type": "string" },
-        { "name": "hours", "type": "decimal" }
+        { "name": "bookingId", "type": "string" },
+        { "name": "duration", "type": "decimal" }
       ]
     },
-    "entry-claimed-for-invoice": {
-      "name": "Entry Claimed For Invoice",
-      "swimlaneId": "billing",
-      "aggregate": "entry",
+    "booking-held-for-event-plan": {
+      "name": "Booking Held For Event Plan",
+      "swimlaneId": "bookings",
+      "aggregate": "booking",
       "fields": [
-        { "name": "entryId", "type": "string" },
-        { "name": "claimedForInvoiceId", "type": "string" }
+        { "name": "bookingId", "type": "string" },
+        { "name": "heldForPlanId", "type": "string" }
       ]
     },
-    "entry-updated": {
-      "name": "Entry Updated",
-      "swimlaneId": "billing",
-      "aggregate": "entry",
+    "booking-changed": {
+      "name": "Booking Changed",
+      "swimlaneId": "bookings",
+      "aggregate": "booking",
       "fields": [
-        { "name": "entryId", "type": "string" },
-        { "name": "hours", "type": "decimal" }
+        { "name": "bookingId", "type": "string" },
+        { "name": "duration", "type": "decimal" }
       ]
     }
   },
   "commands": {
-    "log-entry": {
-      "name": "Log Entry",
-      "aggregate": "entry",
-      "fields": [{ "name": "hours", "type": "decimal" }]
+    "make-booking": {
+      "name": "Make Booking",
+      "aggregate": "booking",
+      "fields": [{ "name": "duration", "type": "decimal" }]
     },
-    "claim-entry-for-invoice": {
-      "name": "Claim Entry For Invoice",
-      "aggregate": "entry",
-      "fields": [{ "name": "claimedForInvoiceId", "type": "string" }],
+    "hold-booking-for-event-plan": {
+      "name": "Hold Booking For Event Plan",
+      "aggregate": "booking",
+      "fields": [{ "name": "heldForPlanId", "type": "string" }],
       "refuseWhen": [
         {
-          "message": "entry is on another invoice",
+          "message": "booking is held by another event plan",
           "all": [
-            { "state": "claimedForInvoiceId", "is": "set" },
-            { "state": "claimedForInvoiceId", "notEquals": { "command": "claimedForInvoiceId" } }
+            { "state": "heldForPlanId", "is": "set" },
+            { "state": "heldForPlanId", "notEquals": { "command": "heldForPlanId" } }
           ]
         }
       ]
     },
-    "update-entry": {
-      "name": "Update Entry",
-      "aggregate": "entry",
-      "fields": [{ "name": "hours", "type": "decimal" }],
+    "change-booking": {
+      "name": "Change Booking",
+      "aggregate": "booking",
+      "fields": [{ "name": "duration", "type": "decimal" }],
       "refuseWhen": [
-        { "message": "entry is on an invoice", "all": [{ "state": "claimedForInvoiceId", "is": "set" }] },
-        { "message": "hours must be positive", "all": [{ "command": "hours", "atMost": 0 }] },
-        { "message": "a day has at most 24 hours", "all": [{ "command": "hours", "greaterThan": 24 }] }
+        { "message": "booking is held by an event plan", "all": [{ "state": "heldForPlanId", "is": "set" }] },
+        { "message": "duration must be positive", "all": [{ "command": "duration", "atMost": 0 }] },
+        { "message": "a booking lasts at most one day", "all": [{ "command": "duration", "greaterThan": 24 }] }
       ]
     }
   },
   "screens": {
-    "entries-screen": { "name": "Entries" },
-    "invoicing-screen": { "name": "Invoicing" }
+    "bookings-screen": { "name": "Bookings" },
+    "event-planning-screen": { "name": "Event Planning" }
   },
   "slices": [
     {
-      "id": "log-entry-slice",
-      "name": "Log Entry",
+      "id": "make-booking-slice",
+      "name": "Make Booking",
       "pattern": "stateChange",
-      "swimlaneId": "billing",
+      "swimlaneId": "bookings",
       "status": "created",
-      "screenId": "entries-screen",
-      "commandId": "log-entry",
-      "eventIds": ["entry-logged"],
+      "screenId": "bookings-screen",
+      "commandId": "make-booking",
+      "eventIds": ["booking-made"],
       "scenarios": [
         {
-          "id": "log-an-entry", "name": "Log an entry", "kind": "stateChange",
-          "given": [], "when": { "commandId": "log-entry", "data": { "hours": 3 } },
-          "then": { "events": [{ "eventId": "entry-logged" }] }
+          "id": "make-a-booking", "name": "Make a booking", "kind": "stateChange",
+          "given": [], "when": { "commandId": "make-booking", "data": { "duration": 6 } },
+          "then": { "events": [{ "eventId": "booking-made" }] }
         }
       ]
     },
     {
-      "id": "claim-entry-slice",
-      "name": "Claim Entry For Invoice",
+      "id": "hold-booking-slice",
+      "name": "Hold Booking For Event Plan",
       "pattern": "stateChange",
-      "swimlaneId": "billing",
+      "swimlaneId": "bookings",
       "status": "created",
-      "screenId": "invoicing-screen",
-      "commandId": "claim-entry-for-invoice",
-      "eventIds": ["entry-claimed-for-invoice"],
+      "screenId": "event-planning-screen",
+      "commandId": "hold-booking-for-event-plan",
+      "eventIds": ["booking-held-for-event-plan"],
       "scenarios": [
         {
-          "id": "claim-an-entry", "name": "An unclaimed entry is claimed", "kind": "stateChange",
-          "given": [{ "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } }],
-          "when": { "commandId": "claim-entry-for-invoice", "data": { "claimedForInvoiceId": "inv-1" } },
-          "then": { "events": [{ "eventId": "entry-claimed-for-invoice" }] }
+          "id": "hold-a-booking", "name": "A booking nobody holds is held", "kind": "stateChange",
+          "given": [{ "eventId": "booking-made", "data": { "bookingId": "b1", "duration": 6 } }],
+          "when": { "commandId": "hold-booking-for-event-plan", "data": { "heldForPlanId": "plan-1" } },
+          "then": { "events": [{ "eventId": "booking-held-for-event-plan" }] }
         },
         {
-          "id": "claimed-by-another-invoice", "name": "An entry on one invoice cannot be claimed by another", "kind": "error",
+          "id": "held-by-another-plan", "name": "A booking held by one event plan cannot be held by another", "kind": "error",
           "given": [
-            { "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } },
-            { "eventId": "entry-claimed-for-invoice", "data": { "entryId": "e1", "claimedForInvoiceId": "inv-1" } }
+            { "eventId": "booking-made", "data": { "bookingId": "b1", "duration": 6 } },
+            { "eventId": "booking-held-for-event-plan", "data": { "bookingId": "b1", "heldForPlanId": "plan-1" } }
           ],
-          "when": { "commandId": "claim-entry-for-invoice", "data": { "claimedForInvoiceId": "inv-2" } },
-          "then": { "error": { "message": "entry is on another invoice" } }
+          "when": { "commandId": "hold-booking-for-event-plan", "data": { "heldForPlanId": "plan-2" } },
+          "then": { "error": { "message": "booking is held by another event plan" } }
         }
       ]
     },
     {
-      "id": "update-entry-slice",
-      "name": "Update Entry",
+      "id": "change-booking-slice",
+      "name": "Change Booking",
       "pattern": "stateChange",
-      "swimlaneId": "billing",
+      "swimlaneId": "bookings",
       "status": "created",
-      "screenId": "entries-screen",
-      "commandId": "update-entry",
-      "eventIds": ["entry-updated"],
+      "screenId": "bookings-screen",
+      "commandId": "change-booking",
+      "eventIds": ["booking-changed"],
       "scenarios": [
         {
-          "id": "update-an-entry", "name": "An unclaimed entry can be updated", "kind": "stateChange",
-          "given": [{ "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } }],
-          "when": { "commandId": "update-entry", "data": { "hours": 4 } },
-          "then": { "events": [{ "eventId": "entry-updated" }] }
+          "id": "change-a-booking", "name": "A booking nobody holds can be changed", "kind": "stateChange",
+          "given": [{ "eventId": "booking-made", "data": { "bookingId": "b1", "duration": 6 } }],
+          "when": { "commandId": "change-booking", "data": { "duration": 8 } },
+          "then": { "events": [{ "eventId": "booking-changed" }] }
         },
         {
-          "id": "claimed-entry-cannot-change", "name": "A claimed entry cannot be updated", "kind": "error",
+          "id": "held-booking-cannot-change", "name": "A held booking cannot be changed", "kind": "error",
           "given": [
-            { "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } },
-            { "eventId": "entry-claimed-for-invoice", "data": { "entryId": "e1", "claimedForInvoiceId": "inv-1" } }
+            { "eventId": "booking-made", "data": { "bookingId": "b1", "duration": 6 } },
+            { "eventId": "booking-held-for-event-plan", "data": { "bookingId": "b1", "heldForPlanId": "plan-1" } }
           ],
-          "when": { "commandId": "update-entry", "data": { "hours": 4 } },
-          "then": { "error": { "message": "entry is on an invoice" } }
+          "when": { "commandId": "change-booking", "data": { "duration": 8 } },
+          "then": { "error": { "message": "booking is held by an event plan" } }
         },
         {
-          "id": "hours-must-be-positive", "name": "Negative hours are refused (3.11.0: atMost)", "kind": "error",
-          "given": [{ "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } }],
-          "when": { "commandId": "update-entry", "data": { "hours": -2 } },
-          "then": { "error": { "message": "hours must be positive" } }
+          "id": "duration-must-be-positive", "name": "A negative duration is refused (3.11.0: atMost)", "kind": "error",
+          "given": [{ "eventId": "booking-made", "data": { "bookingId": "b1", "duration": 6 } }],
+          "when": { "commandId": "change-booking", "data": { "duration": -2 } },
+          "then": { "error": { "message": "duration must be positive" } }
         },
         {
-          "id": "at-most-a-day", "name": "More than 24 hours is refused (3.11.0: greaterThan)", "kind": "error",
-          "given": [{ "eventId": "entry-logged", "data": { "entryId": "e1", "hours": 3 } }],
-          "when": { "commandId": "update-entry", "data": { "hours": 25 } },
-          "then": { "error": { "message": "a day has at most 24 hours" } }
+          "id": "at-most-one-day", "name": "A duration over 24 is refused (3.11.0: greaterThan)", "kind": "error",
+          "given": [{ "eventId": "booking-made", "data": { "bookingId": "b1", "duration": 6 } }],
+          "when": { "commandId": "change-booking", "data": { "duration": 25 } },
+          "then": { "error": { "message": "a booking lasts at most one day" } }
         }
       ]
     }

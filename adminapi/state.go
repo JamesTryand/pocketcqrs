@@ -42,8 +42,7 @@ import (
 // Fields that only the stock CLI needs (idempotency store, batch writer,
 // node role, remote-verify cache) deliberately stay out of State — they
 // are not part of the admin surface, and exporting them here would leak
-// the stock binary's own private configuration as public API. See
-// FAULTS-AND-WORK.md's Item 10 entry for the full design rationale.
+// the stock binary's own private configuration as public API.
 type State struct {
 	App      core.App
 	Store    *events.Store
@@ -65,12 +64,12 @@ type State struct {
 	FnRuntime *functions.GojaRuntime
 
 	// Outbox is where effect functions' work waits to run off the engine's
-	// pass (R4), on the master; nil elsewhere. Every runtime a reload
+	// pass, on the master; nil elsewhere. Every runtime a reload
 	// builds gets it (CarryCapabilities); RunQueuedEffect is its handler.
 	Outbox *outbox.Store
 
 	// Verifier backs remote token verification against the master on a
-	// --cqrsRole=secondary node (F-13). Nil on a single-node deployment or
+	// --cqrsRole=secondary node. Nil on a single-node deployment or
 	// a master, in which case every gate here behaves as a plain
 	// superuser/capability check against this node's own auth tables.
 	Verifier *authverify.Verifier
@@ -97,7 +96,7 @@ type State struct {
 	// and lock this itself.
 	reloadMu sync.Mutex
 
-	// SchemaDefaultRule mirrors --cqrsSchemaDefaultRule (Item 9): the
+	// SchemaDefaultRule mirrors --cqrsSchemaDefaultRule: the
 	// deployment-wide default read-rule ReconcileSchemas applies to a
 	// newly created //@schema collection, both at boot and on every
 	// maintenance-mode reload.

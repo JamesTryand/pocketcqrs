@@ -103,7 +103,7 @@ func TestJSDeciderLifecycle(t *testing.T) {
 
 // TestJSDeciderSeesProvenance proves command.provenance reaches the JS VM
 // the same way command.actor/command.now already do -- the JS-tier half of
-// the federation trust model mechanism (NEEDS.md).
+// the federation trust model mechanism.
 func TestJSDeciderSeesProvenance(t *testing.T) {
 	const src = `
 	function initialState() { return {}; }

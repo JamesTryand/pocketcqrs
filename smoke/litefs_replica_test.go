@@ -62,8 +62,7 @@ func startLitefsProcess(t *testing.T, bin, dir, label, configPath, fuseDir strin
 }
 
 // litefsConfig writes a minimal litefs.yml for one node -- static lease (no
-// Consul, matching this project's own fixed-master design, decided in
-// litestream-vfs-scope.md/NEEDS.md). advertiseURL is always the PRIMARY's
+// Consul, matching this project's own fixed-master design). advertiseURL is always the PRIMARY's
 // address, for every node including the primary itself -- confirmed shape,
 // matches LiteFS's own TestMultiNode_StaticLeaser and this worktree's
 // litefs-concurrent-reader-test.sh.
@@ -165,7 +164,7 @@ func TestSecondaryReplicatesViaLiteFS(t *testing.T) {
 	waitForFile(t, secondaryEventsPath)
 
 	// full secondary node: reads via the FUSE-replicated copy, forwards
-	// commands to master (item 3) -- Step 4's combination, this time fully
+	// commands to master -- Step 4's combination, this time fully
 	// asserted both directions (see the doc comment above).
 	secondary := startSecondaryAt(t, master, secondaryEventsPath, "--cqrsMasterAddr", master.BackendURL)
 

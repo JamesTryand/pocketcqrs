@@ -19,10 +19,10 @@ import (
 // for `skill`) — import is a pure file-to-file transformation (emschema.Load
 // / Map / Verify, then plain os.WriteFile calls) with no dependency on a
 // running platform: it touches no *components field and no core.App. Making
-// it go through app.Start() anyway was F-10 — PocketBase bootstraps
+// it go through app.Start() anyway was a bug — PocketBase bootstraps
 // (creating a full pb_data/) before any RunE runs and offers no per-command
 // opt-out, so even a REFUSED import left a data directory behind. It also
-// enabled F-9 for this command specifically: PocketBase's own
+// lost the exit code for this command specifically: PocketBase's own
 // pb.Execute() discards RootCmd.Execute()'s return value ("leave to the
 // commands to decide whether to print their error" — pocketbase.go), so a
 // RunE error was printed but never turned into a non-zero exit code. Running

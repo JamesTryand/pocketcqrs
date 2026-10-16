@@ -1,20 +1,20 @@
 // Package authforward routes PocketBase's own native auth-collection
-// traffic to the master on a --cqrsRole=secondary node (F-12, the
-// remainder of item 5).
+// traffic to the master on a --cqrsRole=secondary node: a secondary's auth
+// tables are its own, not a replica of the master's.
 //
 // _users, _superusers, _authOrigins, _otps, _mfas and any custom auth-type
 // collection are NOT projected from events.db by anything in this
 // project -- a secondary's copy of these tables is not a stale replica of
 // the master's, it is a different table with different rows, since only
 // events.db is replicated (see docs/reference/cli.md's "Multi-node"
-// section). Extending writeguard to deny writes on them (as item 5
+// section). Extending writeguard to deny writes on them (as originally
 // originally proposed) does not fix this: a login on a secondary reads
 // the wrong local data before any write even happens. The actual fix is
 // routing this traffic to the master entirely -- reads and writes alike
 // -- which is what this package does.
 //
 // This is a global router middleware, not a route the way the CQRS
-// gateway's Forward (item 3) is: PocketBase registers these routes itself
+// gateway's Forward is: PocketBase registers these routes itself
 // (apis.NewRouter), so there is no route for this package to bind auth
 // -skipping/forwarding logic onto directly. Bound early via
 // core.ServeEvent.Router.BindFunc, it intercepts before PocketBase's own
@@ -88,7 +88,7 @@ func Register(e *core.ServeEvent, target http.Handler) {
 // ShouldForward reports whether path (method-qualified) is PocketBase's own
 // native traffic against an auth-type collection: one of the fixed
 // auth-flow suffixes, or any request to an auth-type collection's plain
-// records endpoint -- reads included, since F-12's split-brain applies to
+// records endpoint -- reads included, since the auth split-brain applies to
 // them identically (a secondary listing _users would list its own local,
 // divergent rows, not the fleet's). Only auth-methods stays local, being
 // schema/config identical on every node. A pure function of

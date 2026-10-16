@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// The node-identity contract (platform/cqrs-runtime-contract,
-// contracts/node-identity.md) at the process level: resolution itself is
+// The node-identity contract (node-identity 1.0, shared with dotnetcqrs) at
+// the process level: resolution itself is
 // unit-tested in package nodeidentity against every input combination;
 // these check the binary wires it in -- resolved at serve, stored in the
 // data dir, kept across a restart, and an invalid assignment failing boot.

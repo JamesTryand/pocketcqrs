@@ -56,14 +56,14 @@ func benchmarkPush(b *testing.B, cacheCapacity int) {
 	if err := app.Save(people); err != nil {
 		b.Fatal(err)
 	}
-	staff := core.NewRecord(people)
-	staff.SetEmail("staff@people.test")
-	staff.SetPassword("1234567890")
-	staff.Set("role", "support")
-	if err := app.Save(staff); err != nil {
+	agent := core.NewRecord(people)
+	agent.SetEmail("agent@people.test")
+	agent.SetPassword("1234567890")
+	agent.Set("role", "support")
+	if err := app.Save(agent); err != nil {
 		b.Fatal(err)
 	}
-	token, _ := staff.NewAuthToken()
+	token, _ := agent.NewAuthToken()
 
 	cache := pii.NewCache(cacheCapacity)
 	router, _ := apis.NewRouter(app)

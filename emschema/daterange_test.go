@@ -10,76 +10,74 @@ import (
 )
 
 // dateRangeDocument builds a minimal EventModeling document exercising
-// F-20's dateRange follow-up (schema 2.4.0, readModel.filters): a
-// time-entries read model with a taskDate column and a declared `dateRange`
-// filter over it, mirroring project/timesheets's real export-pm-slice shape
-// (Group C item 3 in platform/eventmodeling-verify-gaps).
+// the dateRange filter (schema 2.4.0, readModel.filters): a tickets read
+// model with an openedOn column and a declared `dateRange` filter over it.
 func dateRangeDocument() *Document {
 	return &Document{
 		EventModelingSchemaVersion: SchemaVersion,
 		ID:                         "d1",
-		Name:                       "Time Entries DateRange",
+		Name:                       "Tickets DateRange",
 		Swimlanes:                  []Swimlane{{ID: "sys", Name: "System", Kind: "system"}},
 		Events: map[string]Event{
-			"time-logged": {
-				Name: "Time Logged", SwimlaneID: "sys", Aggregate: "TimeEntry",
+			"ticket-opened": {
+				Name: "Ticket Opened", SwimlaneID: "sys", Aggregate: "Ticket",
 				Fields: []Field{
-					{Name: "entryId", Type: "string", IDAttribute: true},
-					{Name: "staffId", Type: "string"},
-					{Name: "taskDate", Type: "date"},
+					{Name: "ticketId", Type: "string", IDAttribute: true},
+					{Name: "agentId", Type: "string"},
+					{Name: "openedOn", Type: "date"},
 				},
 			},
 		},
 		Commands: map[string]Command{
-			"log-time": {
-				Name: "Log Time", Aggregate: "TimeEntry",
+			"open-ticket": {
+				Name: "Open Ticket", Aggregate: "Ticket",
 				Fields: []Field{
-					{Name: "entryId", Type: "string"},
-					{Name: "staffId", Type: "string"},
-					{Name: "taskDate", Type: "date"},
+					{Name: "ticketId", Type: "string"},
+					{Name: "agentId", Type: "string"},
+					{Name: "openedOn", Type: "date"},
 				},
 			},
 		},
 		ReadModels: map[string]ReadModel{
-			"time-entries": {
-				Name:              "Time Entries",
-				BuiltFromEventIDs: []string{"time-logged"},
+			"tickets": {
+				Name:              "Tickets",
+				BuiltFromEventIDs: []string{"ticket-opened"},
 				Fields: []Field{
-					{Name: "entryId", Type: "string", IDAttribute: true},
-					{Name: "staffId", Type: "string"},
-					{Name: "taskDate", Type: "date"},
+					{Name: "ticketId", Type: "string", IDAttribute: true},
+					{Name: "agentId", Type: "string"},
+					{Name: "openedOn", Type: "date"},
 				},
 				Filters: []ReadModelFilter{
-					{Param: "dateRange", Field: "taskDate", Kind: FilterDateRange,
+					{Param: "dateRange", Field: "openedOn", Kind: FilterDateRange,
 						Presets: []string{DateRangePresetLast7Days, DateRangePresetLastCalendarMonth, DateRangePresetCustom}},
 				},
 			},
 		},
 		Screens: map[string]Screen{
-			"scr-log":  {Name: "Log Time Screen"},
-			"scr-view": {Name: "View Time Entries"},
+			"scr-log":  {Name: "Open Ticket Screen"},
+			"scr-view": {Name: "View Tickets"},
 		},
 		Slices: []Slice{
 			{
-				ID: "log-time-slice", Name: "Log Time", Pattern: PatternStateChange,
+				ID: "open-ticket-slice", Name: "Open Ticket", Pattern: PatternStateChange,
 				SwimlaneID: "sys", Status: "wireframe", ScreenID: "scr-log",
-				CommandID: "log-time", EventIDs: []string{"time-logged"},
+				CommandID: "open-ticket", EventIDs: []string{"ticket-opened"},
 			},
 			{
-				ID: "view-time-entries-slice", Name: "View Time Entries", Pattern: PatternStateView,
+				ID: "view-tickets-slice", Name: "View Tickets", Pattern: PatternStateView,
 				SwimlaneID: "sys", Status: "wireframe", ScreenID: "scr-view",
-				ReadModelID: "time-entries",
+				ReadModelID: "tickets",
 				Scenarios: []Scenario{
 					{
-						ID: "pm-sees-entries-in-range", Name: "a dateRange query narrows rows to the custom bounds",
+						ID: "lead-sees-tickets-in-range", Name: "a dateRange query narrows rows to the custom bounds",
 						Kind: KindStateView,
 						Given: []EventRef{
-							{EventID: "time-logged", Data: json.RawMessage(`{"entryId":"e1","staffId":"s1","taskDate":"2026-08-15"}`)},
-							{EventID: "time-logged", Data: json.RawMessage(`{"entryId":"e2","staffId":"s1","taskDate":"2026-07-01"}`)},
+							{EventID: "ticket-opened", Data: json.RawMessage(`{"ticketId":"t1","agentId":"a1","openedOn":"2026-08-15"}`)},
+							{EventID: "ticket-opened", Data: json.RawMessage(`{"ticketId":"t2","agentId":"a1","openedOn":"2026-07-01"}`)},
 						},
-						When: json.RawMessage(`{"readModelId":"time-entries",` +
+						When: json.RawMessage(`{"readModelId":"tickets",` +
 							`"queryParams":{"dateRange":{"kind":"custom","from":"2026-08-01","to":"2026-08-31"}}}`),
-						Then: json.RawMessage(`{"result":{"entries":[{"entryId":"e1","staffId":"s1","taskDate":"2026-08-15"}]}}`),
+						Then: json.RawMessage(`{"result":{"entries":[{"ticketId":"t1","agentId":"a1","openedOn":"2026-08-15"}]}}`),
 					},
 				},
 			},
@@ -88,12 +86,11 @@ func dateRangeDocument() *Document {
 }
 
 // TestImportAndVerifyDateRangeFilter is the round-trip proof this feature
-// needs before touching project/timesheets's/project/gotimesheets's real
-// model: Map() must carry a declared filter through to scaffold.ReadModel,
+// needs: Map() must carry a declared filter through to scaffold.ReadModel,
 // and Verify() must prove — through the real generated JS projection, the
 // same path a live import takes — that a custom dateRange query narrows the
 // projected rows to only those inside [from, to], not just report every row
-// unfiltered (Findings 1-3's confirmed gap).
+// unfiltered.
 func TestImportAndVerifyDateRangeFilter(t *testing.T) {
 	doc := dateRangeDocument()
 
@@ -113,7 +110,7 @@ func TestImportAndVerifyDateRangeFilter(t *testing.T) {
 		t.Fatalf("expected one filter carried through, got %d: %+v", len(rm.Filters), rm.Filters)
 	}
 	f := rm.Filters[0]
-	if f.Param != "dateRange" || f.Field != "taskDate" || f.Kind != scaffold.FilterDateRange {
+	if f.Param != "dateRange" || f.Field != "openedOn" || f.Kind != scaffold.FilterDateRange {
 		t.Fatalf("filter not carried through correctly: %+v", f)
 	}
 	if len(f.Presets) != 3 {
@@ -137,8 +134,8 @@ func TestImportAndVerifyDateRangeFilter(t *testing.T) {
 	// scenario that would pass either way proves nothing about filtering.
 	perturbed := dateRangeDocument()
 	perturbed.Slices[1].Scenarios[0].Then = json.RawMessage(
-		`{"result":{"entries":[{"entryId":"e1","staffId":"s1","taskDate":"2026-08-15"},` +
-			`{"entryId":"e2","staffId":"s1","taskDate":"2026-07-01"}]}}`)
+		`{"result":{"entries":[{"ticketId":"t1","agentId":"a1","openedOn":"2026-08-15"},` +
+			`{"ticketId":"t2","agentId":"a1","openedOn":"2026-07-01"}]}}`)
 	badResults, err := Verify(perturbed, mapped, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -154,9 +151,9 @@ func TestImportAndVerifyDateRangeFilter(t *testing.T) {
 // nothing (which would make the missing-filter gap invisible again).
 func TestDateRangeFilterUnknownKindRejected(t *testing.T) {
 	doc := dateRangeDocument()
-	rm := doc.ReadModels["time-entries"]
+	rm := doc.ReadModels["tickets"]
 	rm.Filters[0].Kind = "amountRange"
-	doc.ReadModels["time-entries"] = rm
+	doc.ReadModels["tickets"] = rm
 
 	_, err := Map(doc, Options{})
 	if err == nil {
@@ -172,9 +169,9 @@ func TestDateRangeFilterUnknownKindRejected(t *testing.T) {
 // reasoning mapScopes uses for a via read model that does not exist.
 func TestDateRangeFilterUnknownFieldRejected(t *testing.T) {
 	doc := dateRangeDocument()
-	rm := doc.ReadModels["time-entries"]
+	rm := doc.ReadModels["tickets"]
 	rm.Filters[0].Field = "notAField"
-	doc.ReadModels["time-entries"] = rm
+	doc.ReadModels["tickets"] = rm
 
 	_, err := Map(doc, Options{})
 	if err == nil {
@@ -191,16 +188,16 @@ func TestDateRangeFilterUnknownFieldRejected(t *testing.T) {
 // presets is refused by Validate() directly, not just by the importer.
 func TestScaffoldValidateRejectsBadFilter(t *testing.T) {
 	d := scaffold.Domain{
-		Aggregate: "timeEntry",
+		Aggregate: "ticket",
 		Commands: []scaffold.Command{
 			{Name: "logTime", Once: true, Events: []scaffold.Event{{Name: "timeLogged", NoFields: true}}},
 		},
 		ReadModels: []scaffold.ReadModel{
 			{
-				Collection: "timeEntries", Key: "entryId",
-				Fields: []scaffold.Field{{Name: "entryId", Type: "text"}, {Name: "taskDate", Type: "date"}},
+				Collection: "tickets", Key: "ticketId",
+				Fields: []scaffold.Field{{Name: "ticketId", Type: "text"}, {Name: "openedOn", Type: "date"}},
 				Filters: []scaffold.ReadModelFilter{
-					{Param: "dateRange", Field: "taskDate", Kind: scaffold.FilterDateRange},
+					{Param: "dateRange", Field: "openedOn", Kind: scaffold.FilterDateRange},
 				},
 			},
 		},

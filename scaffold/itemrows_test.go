@@ -5,42 +5,43 @@ import (
 	"testing"
 )
 
-// partsDomain: an invoice's lines as a row per project (rowsPerListItem,
-// schema 3.16.0), with a subtotal once every line is converted (sumOfItems)
-// and a status by event (byEvent); a discard removes every row.
-func partsDomain() Domain {
-	lines := Field{Name: "lines", Type: "json"}
-	drafted := Event{Name: "InvoiceDrafted", Fields: []Field{{Name: "invoiceId", Type: "text"}, {Name: "customerId", Type: "text"}, lines}}
-	issued := Event{Name: "InvoiceIssued", Fields: []Field{{Name: "invoiceId", Type: "text"}, lines}}
-	discarded := Event{Name: "InvoiceDiscarded", Fields: []Field{{Name: "invoiceId", Type: "text"}}}
+// loadsDomain: a delivery's parcels as a row per depot (rowsPerListItem,
+// schema 3.16.0), with a total weight once every parcel is weighed
+// (sumOfItems) and a status by event (byEvent); a cancellation removes every
+// row.
+func loadsDomain() Domain {
+	parcels := Field{Name: "parcels", Type: "json"}
+	planned := Event{Name: "DeliveryPlanned", Fields: []Field{{Name: "deliveryId", Type: "text"}, {Name: "customerId", Type: "text"}, parcels}}
+	dispatched := Event{Name: "DeliveryDispatched", Fields: []Field{{Name: "deliveryId", Type: "text"}, parcels}}
+	cancelled := Event{Name: "DeliveryCancelled", Fields: []Field{{Name: "deliveryId", Type: "text"}}}
 	return Domain{
-		Aggregate: "invoice",
+		Aggregate: "delivery",
 		Commands: []Command{
-			{Name: "Draft", Fields: drafted.Fields, Events: []Event{drafted}},
-			{Name: "Issue", Fields: issued.Fields, Events: []Event{issued}},
-			{Name: "Discard", Fields: discarded.Fields, Events: []Event{discarded}},
+			{Name: "Plan", Fields: planned.Fields, Events: []Event{planned}},
+			{Name: "Dispatch", Fields: dispatched.Fields, Events: []Event{dispatched}},
+			{Name: "Cancel", Fields: cancelled.Fields, Events: []Event{cancelled}},
 		},
 		ReadModels: []ReadModel{{
-			Collection: "parts", Key: "partId",
-			RowsPerListItem: &RowsPerListItem{ListField: "lines", GroupBy: "projectId"},
+			Collection: "loads", Key: "loadId",
+			RowsPerListItem: &RowsPerListItem{ListField: "parcels", GroupBy: "depotId"},
 			Fields: []Field{
-				{Name: "invoiceId", Type: "text"}, {Name: "projectId", Type: "text"}, {Name: "customerId", Type: "text"},
+				{Name: "deliveryId", Type: "text"}, {Name: "depotId", Type: "text"}, {Name: "customerId", Type: "text"},
 				{Name: "status", Type: "text", Derivation: &FieldDerivation{Kind: DerivationByEvent,
-					Values: map[string]any{"InvoiceDrafted": "draft", "InvoiceIssued": "issued"}}},
-				lines,
-				{Name: "subtotal", Type: "number", Derivation: &FieldDerivation{Kind: DerivationSumOfItems, Subfield: "convertedAmount"}},
+					Values: map[string]any{"DeliveryPlanned": "planned", "DeliveryDispatched": "dispatched"}}},
+				parcels,
+				{Name: "totalWeight", Type: "number", Derivation: &FieldDerivation{Kind: DerivationSumOfItems, Subfield: "weighedWeight"}},
 			},
-			On:        []string{"InvoiceDrafted", "InvoiceIssued", "InvoiceDiscarded"},
-			RemovedBy: []string{"InvoiceDiscarded"},
+			On:        []string{"DeliveryPlanned", "DeliveryDispatched", "DeliveryCancelled"},
+			RemovedBy: []string{"DeliveryCancelled"},
 		}},
 	}
 }
 
-// partsBehaviour runs the generated Go projection against a PocketBase test
-// app: rows per project, the unassigned line in none, customerId kept from
-// the draft, the subtotal only once converted, a dropped project's row
-// gone, and a discard leaving nothing.
-const partsBehaviour = `package invoice
+// loadsBehaviour runs the generated Go projection against a PocketBase test
+// app: rows per depot, the unassigned parcel in none, customerId kept from
+// the plan, the total weight only once weighed, a dropped depot's row gone,
+// and a cancellation leaving nothing.
+const loadsBehaviour = `package delivery
 
 import (
 	"context"
@@ -54,84 +55,84 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 )
 
-func subtotal(r *core.Record) string {
-	raw, _ := json.Marshal(r.PublicExport()["subtotal"])
+func totalWeight(r *core.Record) string {
+	raw, _ := json.Marshal(r.PublicExport()["totalWeight"])
 	return string(raw)
 }
 
-func TestParts(t *testing.T) {
+func TestLoads(t *testing.T) {
 	app, err := tests.NewTestApp()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer app.Cleanup()
-	parts := core.NewBaseCollection("parts")
-	for _, f := range []string{"partId", "invoiceId", "projectId", "customerId", "status"} {
-		parts.Fields.Add(&core.TextField{Name: f})
+	loads := core.NewBaseCollection("loads")
+	for _, f := range []string{"loadId", "deliveryId", "depotId", "customerId", "status"} {
+		loads.Fields.Add(&core.TextField{Name: f})
 	}
-	parts.Fields.Add(&core.JSONField{Name: "lines"}, &core.JSONField{Name: "subtotal"}) // sumOfItems: json, so null stays null
-	streams := core.NewBaseCollection("parts_streams")
+	loads.Fields.Add(&core.JSONField{Name: "parcels"}, &core.JSONField{Name: "totalWeight"}) // sumOfItems: json, so null stays null
+	streams := core.NewBaseCollection("loads_streams")
 	streams.Fields.Add(&core.TextField{Name: "stream"}, &core.JSONField{Name: "state"})
-	if err := app.Save(parts); err != nil {
+	if err := app.Save(loads); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.Save(streams); err != nil {
 		t.Fatal(err)
 	}
-	p := NewParts(app)
+	p := NewLoads(app)
 	apply := func(typ, data string) {
-		if err := p.Apply(context.Background(), events.Event{AggregateID: "inv-1", Type: typ, Data: json.RawMessage(data)}); err != nil {
+		if err := p.Apply(context.Background(), events.Event{AggregateID: "del-1", Type: typ, Data: json.RawMessage(data)}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	rows := func() map[string]*core.Record {
-		recs, err := app.FindAllRecords("parts")
+		recs, err := app.FindAllRecords("loads")
 		if err != nil {
 			t.Fatal(err)
 		}
 		out := map[string]*core.Record{}
 		for _, r := range recs {
-			out[r.GetString("partId")] = r
+			out[r.GetString("loadId")] = r
 		}
 		return out
 	}
 
-	apply("InvoiceDrafted", ` + "`" + `{"invoiceId":"inv-1","customerId":"c1","lines":[{"projectId":"p1","localAmount":225},{"projectId":"p2","localAmount":100},{"projectId":"p3","localAmount":5}]}` + "`" + `)
+	apply("DeliveryPlanned", ` + "`" + `{"deliveryId":"del-1","customerId":"c1","parcels":[{"depotId":"d1","declaredWeight":225},{"depotId":"d2","declaredWeight":100},{"depotId":"d3","declaredWeight":5}]}` + "`" + `)
 	got := rows()
-	if len(got) != 3 || got["inv-1|p1"].GetString("status") != "draft" || subtotal(got["inv-1|p1"]) != "null" {
-		t.Fatalf("after the draft: %v", got)
+	if len(got) != 3 || got["del-1|d1"].GetString("status") != "planned" || totalWeight(got["del-1|d1"]) != "null" {
+		t.Fatalf("after the plan: %v", got)
 	}
-	apply("InvoiceIssued", ` + "`" + `{"invoiceId":"inv-1","lines":[{"projectId":"p1","convertedAmount":306},{"projectId":"p1","convertedAmount":306},{"projectId":"p2","convertedAmount":136},{"convertedAmount":22.44}]}` + "`" + `)
+	apply("DeliveryDispatched", ` + "`" + `{"deliveryId":"del-1","parcels":[{"depotId":"d1","weighedWeight":306},{"depotId":"d1","weighedWeight":306},{"depotId":"d2","weighedWeight":136},{"weighedWeight":22.44}]}` + "`" + `)
 	got = rows()
 	if len(got) != 2 {
-		t.Fatalf("after the issue, want p1 and p2: %v", got)
+		t.Fatalf("after the dispatch, want d1 and d2: %v", got)
 	}
-	for key, want := range map[string]float64{"inv-1|p1": 612, "inv-1|p2": 136} {
+	for key, want := range map[string]float64{"del-1|d1": 612, "del-1|d2": 136} {
 		r := got[key]
-		if r == nil || subtotal(r) != strconv.FormatFloat(want, 'f', -1, 64) || r.GetString("customerId") != "c1" || r.GetString("status") != "issued" {
+		if r == nil || totalWeight(r) != strconv.FormatFloat(want, 'f', -1, 64) || r.GetString("customerId") != "c1" || r.GetString("status") != "dispatched" {
 			t.Errorf("%s: %v", key, r)
 		}
 	}
-	apply("InvoiceDiscarded", ` + "`" + `{"invoiceId":"inv-1"}` + "`" + `)
+	apply("DeliveryCancelled", ` + "`" + `{"deliveryId":"del-1"}` + "`" + `)
 	if got := rows(); len(got) != 0 {
-		t.Errorf("after the discard: %v", got)
+		t.Errorf("after the cancellation: %v", got)
 	}
-	if recs, _ := app.FindAllRecords("parts_streams"); len(recs) != 0 {
-		t.Errorf("the discard left the stream's state")
+	if recs, _ := app.FindAllRecords("loads_streams"); len(recs) != 0 {
+		t.Errorf("the cancellation left the stream's state")
 	}
 }
 `
 
 func TestGoItemRowsRun(t *testing.T) {
-	if err := partsDomain().Validate(); err != nil {
+	if err := loadsDomain().Validate(); err != nil {
 		t.Fatal(err)
 	}
-	runGeneratedGo(t, partsDomain(), partsBehaviour)
+	runGeneratedGo(t, loadsDomain(), loadsBehaviour)
 }
 
 func TestItemRowsAreChecked(t *testing.T) {
 	for name, edit := range map[string]func(*ReadModel){
-		"with rowKeyField":     func(rm *ReadModel) { rm.RowKeyField = "invoiceId" },
+		"with rowKeyField":     func(rm *ReadModel) { rm.RowKeyField = "deliveryId" },
 		"listField not a list": func(rm *ReadModel) { rm.RowsPerListItem.ListField = "customerId" },
 		"groupBy not a field":  func(rm *ReadModel) { rm.RowsPerListItem.GroupBy = "ghost" },
 		"sumOfItems on text":   func(rm *ReadModel) { rm.Fields[5].Type = "text" },
@@ -141,7 +142,7 @@ func TestItemRowsAreChecked(t *testing.T) {
 		},
 		"sumOfItems elsewhere": func(rm *ReadModel) { rm.RowsPerListItem = nil },
 	} {
-		d := partsDomain()
+		d := loadsDomain()
 		edit(&d.ReadModels[0])
 		if err := d.Validate(); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -151,27 +152,27 @@ func TestItemRowsAreChecked(t *testing.T) {
 
 // The JS projection keeps its streams' state in a superusers-only companion.
 func TestJSItemRowsDeclareTheirState(t *testing.T) {
-	files, err := partsDomain().Generate()
+	files, err := loadsDomain().Generate()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range files {
-		if strings.HasSuffix(f.Name, "parts.js") {
-			for _, want := range []string{"//@schema parts_streams stream:text state:json", "//@rule parts_streams superuser", "itemRows: op"} {
+		if strings.HasSuffix(f.Name, "loads.js") {
+			for _, want := range []string{"//@schema loads_streams stream:text state:json", "//@rule loads_streams superuser", "itemRows: op"} {
 				if !strings.Contains(f.Source, want) {
-					t.Errorf("parts.js lacks %q:\n%s", want, f.Source)
+					t.Errorf("loads.js lacks %q:\n%s", want, f.Source)
 				}
 			}
 			return
 		}
 	}
-	t.Fatal("no parts.js generated")
+	t.Fatal("no loads.js generated")
 }
 
 // A hand projection (schema 3.17.0) is not generated, on either target:
 // only a .example to start from. Its Go query route still is.
 func TestHandProjectionIsAnExample(t *testing.T) {
-	d := payRunDomain()
+	d := grantRoundDomain()
 	d.ReadModels[0].Hand = true
 	js, err := d.Generate()
 	if err != nil {
@@ -181,10 +182,10 @@ func TestHandProjectionIsAnExample(t *testing.T) {
 	for _, f := range js {
 		names[f.Name] = f
 	}
-	if _, ok := names["payments.js"]; ok {
-		t.Error("payments.js was generated for a hand projection")
+	if _, ok := names["awards.js"]; ok {
+		t.Error("awards.js was generated for a hand projection")
 	}
-	if f, ok := names["payments.js.example"]; !ok || f.Kind != "example" || !strings.Contains(f.Source, "hand-written projection") {
+	if f, ok := names["awards.js.example"]; !ok || f.Kind != "example" || !strings.Contains(f.Source, "hand-written projection") {
 		t.Errorf("no payments.js.example: %v", names)
 	}
 	gofiles, err := d.GenerateGo()
@@ -195,7 +196,7 @@ func TestHandProjectionIsAnExample(t *testing.T) {
 	for _, f := range gofiles {
 		gonames[f.Name] = true
 	}
-	if gonames["payments.go"] || !gonames["payments.go.example"] || !gonames["payments_query.go"] {
+	if gonames["awards.go"] || !gonames["awards.go.example"] || !gonames["awards_query.go"] {
 		t.Errorf("Go files: %v", gonames)
 	}
 }

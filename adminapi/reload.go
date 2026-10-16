@@ -220,7 +220,7 @@ func (s *State) reloadFunctions(ctx context.Context, functionsDir string) (*Relo
 	for _, spec := range s.JSReactors {
 		s.Engine.Unregister(spec.Name())
 	}
-	// //@dispatches gate (F-2). Validated against a PROSPECTIVE command set,
+	// //@dispatches gate. Validated against a PROSPECTIVE command set,
 	// not the live registry: deciders swap further down this function, so at
 	// this point the registry still holds the old ones, and checking against
 	// it would refuse a decider and a reactor added in the SAME maintenance

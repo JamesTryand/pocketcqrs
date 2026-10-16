@@ -3,234 +3,234 @@
   "eventModelingSchemaVersion": "3.15.0",
   "id": "repeated-outcomes-example",
   "name": "Repeated Outcomes Example",
-  "description": "Repeated events in an outcome (3.13.0): releasing a pay run records the release and one payment per person paid, in one decision. Each payment is its own event, so each person's pay is encrypted under their own key. How many payments, and how much each, is worked out by hand from the run's own state. Each payment is a row of its own in the payments read model, keyed by the payment's id rather than the pay run's stream (3.14.0 rowKeyField).",
+  "description": "Repeated events in an outcome (3.13.0): closing a grant round records the closing and one award per recipient, in one decision. Each award is its own event, so each recipient's award is encrypted under their own key. How many awards, and how much each, is worked out by hand from the round's own state. Each award is a row of its own in the awards read model, keyed by the award's id rather than the grant round's stream (3.14.0 rowKeyField).",
   "swimlanes": [
     {
-      "id": "payroll",
-      "name": "Payroll",
+      "id": "grants",
+      "name": "Grants",
       "kind": "team"
     }
   ],
   "events": {
-    "work-recorded": {
-      "name": "Work Recorded",
-      "swimlaneId": "payroll",
-      "aggregate": "pay_run",
+    "application-approved": {
+      "name": "Application Approved",
+      "swimlaneId": "grants",
+      "aggregate": "grant_round",
       "fields": [
         {
-          "name": "payRunId",
+          "name": "grantRoundId",
           "type": "string",
           "idAttribute": true
         },
         {
-          "name": "personId",
+          "name": "recipientId",
           "type": "string"
         },
         {
           "name": "amount",
           "type": "decimal",
           "pii": true,
-          "piiSubject": "personId"
+          "piiSubject": "recipientId"
         }
       ]
     },
-    "pay-run-released": {
-      "name": "Pay Run Released",
-      "swimlaneId": "payroll",
-      "aggregate": "pay_run",
+    "grant-round-closed": {
+      "name": "Grant Round Closed",
+      "swimlaneId": "grants",
+      "aggregate": "grant_round",
       "fields": [
         {
-          "name": "payRunId",
+          "name": "grantRoundId",
           "type": "string",
           "idAttribute": true
         },
         {
-          "name": "periodEnd",
+          "name": "closingDate",
           "type": "date"
         }
       ]
     },
-    "person-paid": {
-      "name": "Person Paid",
-      "swimlaneId": "payroll",
-      "aggregate": "pay_run",
+    "grant-awarded": {
+      "name": "Grant Awarded",
+      "swimlaneId": "grants",
+      "aggregate": "grant_round",
       "fields": [
         {
-          "name": "payRunId",
+          "name": "grantRoundId",
           "type": "string",
           "idAttribute": true
         },
         {
-          "name": "personId",
+          "name": "recipientId",
           "type": "string"
         },
         {
-          "name": "paymentId",
+          "name": "awardId",
           "type": "string"
         },
         {
-          "name": "periodEnd",
+          "name": "closingDate",
           "type": "date"
         },
         {
           "name": "amount",
           "type": "decimal",
           "pii": true,
-          "piiSubject": "personId"
+          "piiSubject": "recipientId"
         }
       ]
     }
   },
   "commands": {
-    "release-pay-run": {
-      "name": "Release Pay Run",
-      "aggregate": "pay_run",
+    "close-grant-round": {
+      "name": "Close Grant Round",
+      "aggregate": "grant_round",
       "fields": [
         {
-          "name": "periodEnd",
+          "name": "closingDate",
           "type": "date"
         }
       ]
     }
   },
   "readModels": {
-    "payments": {
-      "name": "Payments",
-      "question": "What has each person been paid, run by run?",
+    "awards": {
+      "name": "Awards",
+      "question": "What has each recipient been awarded, round by round?",
       "builtFromEventIds": [
-        "person-paid"
+        "grant-awarded"
       ],
-      "rowKeyField": "paymentId",
+      "rowKeyField": "awardId",
       "fields": [
         {
-          "name": "paymentId",
+          "name": "awardId",
           "type": "string",
           "idAttribute": true
         },
         {
-          "name": "payRunId",
+          "name": "grantRoundId",
           "type": "string"
         },
         {
-          "name": "personId",
+          "name": "recipientId",
           "type": "string"
         },
         {
-          "name": "periodEnd",
+          "name": "closingDate",
           "type": "date"
         },
         {
           "name": "amount",
           "type": "decimal",
           "pii": true,
-          "piiSubject": "personId"
+          "piiSubject": "recipientId"
         }
       ]
     }
   },
   "screens": {
-    "payroll-screen": {
-      "name": "Payroll"
+    "grants-screen": {
+      "name": "Grants"
     }
   },
   "slices": [
     {
-      "id": "release-pay-run-slice",
-      "name": "Release Pay Run",
+      "id": "close-grant-round-slice",
+      "name": "Close Grant Round",
       "pattern": "stateChange",
-      "swimlaneId": "payroll",
+      "swimlaneId": "grants",
       "status": "created",
-      "screenId": "payroll-screen",
-      "commandId": "release-pay-run",
+      "screenId": "grants-screen",
+      "commandId": "close-grant-round",
       "eventIds": [
-        "pay-run-released",
-        "person-paid"
+        "grant-round-closed",
+        "grant-awarded"
       ],
       "outcomes": [
         {
           "eventIds": [
-            "pay-run-released",
-            "person-paid"
+            "grant-round-closed",
+            "grant-awarded"
           ],
           "repeated": [
-            "person-paid"
+            "grant-awarded"
           ],
-          "description": "The release, then one payment per person owed something."
+          "description": "The closing, then one award per recipient with an approved application."
         }
       ],
       "scenarios": [
         {
-          "id": "two-people-paid",
-          "name": "Two people with recorded work are each paid",
+          "id": "two-recipients-awarded",
+          "name": "Two recipients with approved applications each receive an award",
           "kind": "stateChange",
           "given": [
             {
-              "eventId": "work-recorded",
+              "eventId": "application-approved",
               "data": {
-                "payRunId": "r1",
-                "personId": "p1",
-                "amount": 120
+                "grantRoundId": "g1",
+                "recipientId": "r1",
+                "amount": 1200
               }
             },
             {
-              "eventId": "work-recorded",
+              "eventId": "application-approved",
               "data": {
-                "payRunId": "r1",
-                "personId": "p2",
-                "amount": 80
+                "grantRoundId": "g1",
+                "recipientId": "r2",
+                "amount": 800
               }
             }
           ],
           "when": {
-            "commandId": "release-pay-run",
+            "commandId": "close-grant-round",
             "data": {
-              "periodEnd": "2026-09-30"
+              "closingDate": "2026-09-30"
             }
           },
           "then": {
             "events": [
               {
-                "eventId": "pay-run-released",
+                "eventId": "grant-round-closed",
                 "data": {
-                  "periodEnd": "2026-09-30"
+                  "closingDate": "2026-09-30"
                 }
               },
               {
-                "eventId": "person-paid",
+                "eventId": "grant-awarded",
                 "data": {
-                  "personId": "p1",
-                  "amount": 120,
-                  "paymentId": "r1:p1"
+                  "recipientId": "r1",
+                  "amount": 1200,
+                  "awardId": "g1:r1"
                 }
               },
               {
-                "eventId": "person-paid",
+                "eventId": "grant-awarded",
                 "data": {
-                  "personId": "p2",
-                  "amount": 80,
-                  "paymentId": "r1:p2"
+                  "recipientId": "r2",
+                  "amount": 800,
+                  "awardId": "g1:r2"
                 }
               }
             ]
           }
         },
         {
-          "id": "nobody-owed",
-          "name": "With no work recorded, the release pays nobody",
+          "id": "no-applications-approved",
+          "name": "With no applications approved, the closing awards nothing",
           "kind": "stateChange",
           "given": [],
           "when": {
-            "commandId": "release-pay-run",
+            "commandId": "close-grant-round",
             "data": {
-              "periodEnd": "2026-09-30"
+              "closingDate": "2026-09-30"
             }
           },
           "then": {
             "events": [
               {
-                "eventId": "pay-run-released",
+                "eventId": "grant-round-closed",
                 "data": {
-                  "periodEnd": "2026-09-30"
+                  "closingDate": "2026-09-30"
                 }
               }
             ]
@@ -239,55 +239,55 @@
       ]
     },
     {
-      "id": "view-payments-slice",
-      "name": "View Payments",
+      "id": "view-awards-slice",
+      "name": "View Awards",
       "pattern": "stateView",
-      "swimlaneId": "payroll",
+      "swimlaneId": "grants",
       "status": "created",
-      "screenId": "payroll-screen",
-      "readModelId": "payments",
+      "screenId": "grants-screen",
+      "readModelId": "awards",
       "scenarios": [
         {
-          "id": "one-row-per-payment",
-          "name": "Two payments in one pay run are two rows",
+          "id": "one-row-per-award",
+          "name": "Two awards in one grant round are two rows",
           "kind": "stateView",
           "given": [
             {
-              "eventId": "person-paid",
+              "eventId": "grant-awarded",
               "data": {
-                "payRunId": "r1",
-                "personId": "p1",
-                "paymentId": "r1:p1",
-                "periodEnd": "2026-09-30",
-                "amount": 120
+                "grantRoundId": "g1",
+                "recipientId": "r1",
+                "awardId": "g1:r1",
+                "closingDate": "2026-09-30",
+                "amount": 1200
               }
             },
             {
-              "eventId": "person-paid",
+              "eventId": "grant-awarded",
               "data": {
-                "payRunId": "r1",
-                "personId": "p2",
-                "paymentId": "r1:p2",
-                "periodEnd": "2026-09-30",
-                "amount": 80
+                "grantRoundId": "g1",
+                "recipientId": "r2",
+                "awardId": "g1:r2",
+                "closingDate": "2026-09-30",
+                "amount": 800
               }
             }
           ],
           "when": {
-            "readModelId": "payments"
+            "readModelId": "awards"
           },
           "then": {
             "result": {
               "entries": [
                 {
-                  "paymentId": "r1:p1",
-                  "personId": "p1",
-                  "amount": 120
+                  "awardId": "g1:r1",
+                  "recipientId": "r1",
+                  "amount": 1200
                 },
                 {
-                  "paymentId": "r1:p2",
-                  "personId": "p2",
-                  "amount": 80
+                  "awardId": "g1:r2",
+                  "recipientId": "r2",
+                  "amount": 800
                 }
               ]
             }

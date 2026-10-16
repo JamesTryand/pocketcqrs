@@ -604,9 +604,9 @@ func (v *verifier) runViewScenario(s Slice, sc Scenario, res *ScenarioResult) {
 		return
 	}
 	// Each given event needs its OWN row key for THIS projection, not one key
-	// shared by the whole scenario (the pre-Finding-3 design): an unscoped
-	// "manager sees every flagged entry" scenario deliberately seeds two
-	// DIFFERENT entries and expects two DIFFERENT rows out, which one shared
+	// shared by the whole scenario (the earlier design): an unscoped
+	// "supervisor sees every flagged ticket" scenario deliberately seeds two
+	// DIFFERENT tickets and expects two DIFFERENT rows out, which one shared
 	// synthesized id can never produce (every given event would collapse onto
 	// the same row). See rowKey's doc comment for the resolution rule.
 	sharedDefault := v.streamID(sc.Given)
@@ -745,12 +745,12 @@ func (v *verifier) buildFixture(given []EventRef, idField, fallback string) []ev
 	return fixture
 }
 
-// filterByScopes applies a read model's declared `scopes` (Finding 3,
-// Addition C) to a stateView scenario's rows: a scoped query param resolves
+// filterByScopes applies a read model's declared `scopes` (schema 2.2.0)
+// to a stateView scenario's rows: a scoped query param resolves
 // through another read model's own row (a semi-join) rather than matching a
 // plain column, so it must be handled BEFORE selectRow's plain field-match
 // runs — a param scopes declares has no matching column on this read model
-// at all (e.g. `pmStaffId` on `flagged-entries`), so leaving it in the
+// at all (e.g. `leadAgentId` on `escalated-tickets`), so leaving it in the
 // remaining params would make selectRow fail to find it and reject every
 // row.
 //
@@ -823,7 +823,7 @@ func (v *verifier) filterByScopes(rm ReadModel, rows map[string]map[string]any, 
 }
 
 // filterByFilters applies a read model's declared `filters` (schema 2.4.0,
-// F-20's dateRange follow-up) to a stateView scenario's rows, mirroring
+// the dateRange filter) to a stateView scenario's rows, mirroring
 // filterByScopes' shape: a declared filter param has no matching column on
 // this read model (its param name, e.g. `dateRange`, is not itself a field —
 // the range applies to a DIFFERENT field, named by filt.Field), so it must

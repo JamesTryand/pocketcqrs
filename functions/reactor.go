@@ -112,7 +112,7 @@ type CommandTarget interface {
 
 // ValidateReactorSpec checks every //@dispatches claim against target, so a
 // reactor wired to a command that cannot succeed is refused AT LOAD rather
-// than silently dropping its reactions at runtime (fault F-2).
+// than silently dropping its reactions at runtime.
 //
 // This is the same gate //@handles already applies to deciders, one tier
 // over: both directives are a claim about what the file talks to, and both

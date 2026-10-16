@@ -421,7 +421,7 @@ func TestGatewayForwardSkipsLocalAuthCheck(t *testing.T) {
 }
 
 // TestActorMetaStampsExtcallPrefixForRecognizedCaller and its siblings below
-// cover item 7/8: a recognized external-caller identity (a record in
+// cover external callers: a recognized external-caller identity (a record in
 // Config.ExternalCallerCollection) gets its commands' actor stamped as
 // "extcall:<name>" and may additionally supply Causation-Id/Correlation-Id;
 // an ordinary caller in any other collection gets neither, unchanged from
@@ -507,7 +507,7 @@ func TestActorMetaHonorsCausationAndCorrelationForRecognizedCaller(t *testing.T)
 	}
 }
 
-// The gating is the point of item 8's design: an arbitrary authenticated
+// The gating is the point of the design: an arbitrary authenticated
 // caller must not be able to fabricate the causation graph ReactorFlows and
 // the catalog explorer display -- only a recognized external caller may.
 func TestActorMetaIgnoresCausationAndCorrelationForOrdinaryCaller(t *testing.T) {

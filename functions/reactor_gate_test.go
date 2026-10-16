@@ -17,7 +17,7 @@ func (f fakeTarget) Has(aggregate string) bool {
 
 func (f fakeTarget) Commands(aggregate string) []string { return f[aggregate] }
 
-// The tutorial's own reproduction of F-2, as a test.
+// The tutorial's own reproduction of the dispatch gap, as a test.
 //
 // docs/tutorial.md deliberately collides a JS `order` decider with the
 // built-in Go one, so the decider is refused and the Go `order` survives —

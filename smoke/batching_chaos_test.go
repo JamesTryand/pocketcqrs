@@ -17,7 +17,7 @@ import (
 )
 
 // TestBatchingSurvivesRealProcessKills is the heavy, real-process half of
-// item 4's fault-injection requirement. The fast, in-process variant
+// batching's fault-injection requirement. The fast, in-process variant
 // (batching package's TestChaosPreCommitCrashReplayIsDeterministic, 300
 // randomized iterations) deterministically proves the exact crash windows
 // by injecting a fault at the precise commit boundary. This exercises the

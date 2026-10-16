@@ -106,8 +106,8 @@ func litestreamConfig(t *testing.T, dir, masterEventsPath, replicaDir string) st
 //
 // Deliberately does NOT also assert a forwarded command's round-trip back
 // through Litestream within this test: that surfaced a real, reproducible
-// stall (NEEDS.md, "Litestream restore -f's follow loop stalls under a
-// concurrent reader") which is a separate, currently-open problem, not a
+// stall (Litestream restore -f's follow loop stalls under a concurrent
+// reader) which is a separate, currently-open problem, not a
 // wiring bug in this test. See TestLitestreamFollowStallsUnderConcurrentReader
 // for the minimal, pocketcqrs-independent reproduction.
 func TestSecondaryReplicatesViaLitestream(t *testing.T) {
@@ -139,7 +139,7 @@ func TestSecondaryReplicatesViaLitestream(t *testing.T) {
 	waitForFile(t, secondaryEventsPath)
 
 	// a full secondary node reading via the Litestream-followed copy, with
-	// forwarding also wired (item 3) -- Step 4's combination. Forwarding
+	// forwarding also wired -- Step 4's combination. Forwarding
 	// itself is verified below (the command lands on master); its
 	// replicate-back leg is deliberately not asserted here, see the doc
 	// comment above.
@@ -177,7 +177,7 @@ func TestSecondaryReplicatesViaLitestream(t *testing.T) {
 		return status == http.StatusOK && len(records.Items) == 1 && records.Items[0].Title == "via litestream"
 	})
 
-	// forwarding itself (item 3) still works normally alongside a
+	// forwarding itself still works normally alongside a
 	// Litestream-followed read path -- a command sent to the secondary
 	// lands on master. Its replication back to the secondary is NOT
 	// asserted here (see the doc comment above).
@@ -224,12 +224,12 @@ func TestSecondaryReplicatesViaLitestream(t *testing.T) {
 // mode. Unconfirmed whether this is Windows-specific (its file-locking
 // fairness characteristics differ from POSIX) or a cross-platform risk.
 //
-// Skipped by default -- this documents a known, unresolved issue (see
-// NEEDS.md, "Litestream restore -f's follow loop stalls under a concurrent
-// reader") rather than a wiring bug this suite should gate on. Remove the
+// Skipped by default -- this documents a known, unresolved issue
+// (Litestream restore -f's follow loop stalls under a concurrent reader)
+// rather than a wiring bug this suite should gate on. Remove the
 // Skip to reproduce or to verify a fix.
 func TestLitestreamFollowStallsUnderConcurrentReader(t *testing.T) {
-	t.Skip("known issue, not yet resolved -- see NEEDS.md; remove this Skip to reproduce")
+	t.Skip("known issue, not yet resolved; remove this Skip to reproduce")
 
 	bin := litestreamBin(t)
 	dir := t.TempDir()
@@ -295,5 +295,5 @@ func TestLitestreamFollowStallsUnderConcurrentReader(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatal("the late append did not replicate within 10s under a concurrent reader -- known issue, see NEEDS.md")
+	t.Fatal("the late append did not replicate within 10s under a concurrent reader -- known issue")
 }

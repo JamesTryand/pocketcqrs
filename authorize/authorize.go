@@ -1,10 +1,8 @@
-// Package authorize is this project's port of platform/command-authorization
-// — dotnetcqrs's own CommandAuthorizationGenerator (a generated
+// Package authorize is this project's port of command authorization —
+// dotnetcqrs's own CommandAuthorizationGenerator (a generated
 // (aggregate, command)-keyed policy table + evaluator) plus
 // CqrsGatewayEndpoints.MapCqrsGateway's pluggable `authorize` hook — proved
-// out first there, in project/timesheets, per that issue's own "prove out
-// on dotnetcqrs first, then port" ordering (the same ordering Finding 3
-// used).
+// out first there, then ported.
 //
 // The shape transfers directly, as predicted: gateway.RegisterRoutes has
 // exactly one generic dispatch path (POST /api/cqrs/{aggregate}/{id}/{command}),
@@ -44,7 +42,7 @@ import (
 )
 
 // Key identifies one command's policy — the (aggregate, command) pair a
-// gateway request actually names, e.g. ("time_entry", "FlagTimeEntry"), not
+// gateway request actually names, e.g. ("support_ticket", "EscalateTicket"), not
 // the document's own kebab-case ids.
 type Key struct {
 	Aggregate string
@@ -206,8 +204,8 @@ type Authorizer struct {
 // (true, nil) — unchanged behavior for a document declaring none of these
 // four keywords on this command.
 //
-// The declarations combine: EVERY one a command declares must hold (S2;
-// the schema's docs say so, and dotnetcqrs's generated evaluator does the
+// The declarations combine: EVERY one a command declares must hold (the
+// schema's docs say so, and dotnetcqrs's generated evaluator does the
 // same since 6649745). They are checked in a fixed order (RequiredRole,
 // FieldGatedRole, Ownership, Scope) and the first that fails refuses. A
 // bypass role skips only its own declaration's check, and a field gate

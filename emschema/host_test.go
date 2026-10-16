@@ -55,12 +55,12 @@ func hostResults(t *testing.T, rel string, own map[string]string) map[string]Sce
 	return out
 }
 
-// Host mode runs the host's own hooks: the over-limit expense, HAND against
+// Host mode runs the host's own hooks: the over-threshold refund, HAND against
 // the generated code, passes with a hook that flags it and fails with one
 // that doesn't. Everything else still passes.
 func TestHostModeRunsTheHostsHooks(t *testing.T) {
 	right := hostResults(t, "examples/conditional-outcomes.json", map[string]string{
-		"expense.hand.js": "function SubmitExpenseOutcome0(state, command) { return command.payload.amount > 500; }\n",
+		"refund.hand.js": "function RequestRefundOutcome0(state, command) { return command.payload.amount > 500; }\n",
 	})
 	for id, r := range right {
 		if !r.Passed || r.Hand {
@@ -68,9 +68,9 @@ func TestHostModeRunsTheHostsHooks(t *testing.T) {
 		}
 	}
 	wrong := hostResults(t, "examples/conditional-outcomes.json", map[string]string{
-		"expense.hand.js": "function SubmitExpenseOutcome0(state, command) { return false; }\n",
+		"refund.hand.js": "function RequestRefundOutcome0(state, command) { return false; }\n",
 	})
-	if r := wrong["expense-over-limit"]; r.Passed || r.Hand {
+	if r := wrong["refund-over-threshold"]; r.Passed || r.Hand {
 		t.Errorf("a hook that never flags: passed=%v hand=%v: %s", r.Passed, r.Hand, r.Detail)
 	}
 }
@@ -79,8 +79,8 @@ func TestHostModeRunsTheHostsHooks(t *testing.T) {
 // that refuses everything fails the scenarios the generated one passes.
 func TestHostModeRunsTheHostsDecider(t *testing.T) {
 	results := hostResults(t, "examples/conditional-outcomes.json", map[string]string{
-		"entry.js":        "//@trigger decider entry\n//@handles EntryLogged EntryFlagged\n//@commands LogEntry\nfunction initialState() { return {}; }\nfunction decide(command, state) { throw new Error('closed'); }\nfunction evolve(state, event) { return state; }\n",
-		"expense.hand.js": "function SubmitExpenseOutcome0(state, command) { return false; }\n",
+		"booking.js":     "//@trigger decider booking\n//@handles BookingMade BookingFlagged\n//@commands MakeBooking\nfunction initialState() { return {}; }\nfunction decide(command, state) { throw new Error('closed'); }\nfunction evolve(state, event) { return state; }\n",
+		"refund.hand.js": "function RequestRefundOutcome0(state, command) { return false; }\n",
 	})
 	failed := 0
 	for _, r := range results {

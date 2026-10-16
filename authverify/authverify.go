@@ -1,5 +1,5 @@
 // Package authverify lets a --cqrsRole=secondary node verify bearer tokens
-// it cannot verify itself — the fix for F-13.
+// it cannot verify itself.
 //
 // PocketBase verifies an auth token with the HMAC key
 // record.TokenKey() + collection.AuthToken.Secret, both of which live only

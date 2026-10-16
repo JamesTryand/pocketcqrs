@@ -5,40 +5,40 @@ import (
 	"testing"
 )
 
-// payDomain: logging an entry over 12 hours also flags it (a declared
-// condition, set fixing the reason); an expense is flagged by a
-// hand-written hook; releasing a pay run pays each person a hook says is
-// owed (a repeated event).
-func payDomain() Domain {
-	logged := Event{Name: "EntryLogged", Fields: []Field{{Name: "hours", Type: "number"}}}
-	flagged := Event{Name: "EntryFlagged", Fields: []Field{{Name: "reason", Type: "text"}}}
-	submitted := Event{Name: "ExpenseSubmitted", Fields: []Field{{Name: "amount", Type: "number"}}}
-	expenseFlagged := Event{Name: "ExpenseFlagged", Fields: []Field{{Name: "reason", Type: "text"}}}
-	released := Event{Name: "PayRunReleased", Fields: []Field{{Name: "period", Type: "text"}}}
-	paid := Event{Name: "PersonPaid", Fields: []Field{{Name: "personId", Type: "text"}, {Name: "amount", Type: "number"}}}
+// accountsDomain: a booking over 14 days is also flagged (a declared
+// condition, set fixing the reason); a refund is flagged by a hand-written
+// hook; closing a grant round awards each recipient a hook says has earned
+// one (a repeated event).
+func accountsDomain() Domain {
+	logged := Event{Name: "BookingMade", Fields: []Field{{Name: "days", Type: "number"}}}
+	flagged := Event{Name: "BookingFlagged", Fields: []Field{{Name: "reason", Type: "text"}}}
+	submitted := Event{Name: "RefundRequested", Fields: []Field{{Name: "amount", Type: "number"}}}
+	refundFlagged := Event{Name: "RefundFlagged", Fields: []Field{{Name: "reason", Type: "text"}}}
+	closed := Event{Name: "GrantRoundClosed", Fields: []Field{{Name: "period", Type: "text"}}}
+	awarded := Event{Name: "GrantAwarded", Fields: []Field{{Name: "recipientId", Type: "text"}, {Name: "amount", Type: "number"}}}
 	return Domain{
 		Aggregate: "ledger",
 		Commands: []Command{
-			{Name: "LogEntry", Fields: []Field{{Name: "hours", Type: "number"}}, Events: []Event{logged, flagged},
+			{Name: "MakeBooking", Fields: []Field{{Name: "days", Type: "number"}}, Events: []Event{logged, flagged},
 				Outcomes: []Outcome{
-					{Events: []string{"EntryLogged", "EntryFlagged"},
-						When: [][]RefusalCondition{{{Side: "command", Field: "hours", Op: "greaterThan", Operand: &RefusalOperand{Literal: 12.0}}}},
-						Set:  map[string]map[string]any{"EntryFlagged": {"reason": "long-day"}}},
-					{Events: []string{"EntryLogged"}},
+					{Events: []string{"BookingMade", "BookingFlagged"},
+						When: [][]RefusalCondition{{{Side: "command", Field: "days", Op: "greaterThan", Operand: &RefusalOperand{Literal: 14.0}}}},
+						Set:  map[string]map[string]any{"BookingFlagged": {"reason": "long-hire"}}},
+					{Events: []string{"BookingMade"}},
 				}},
-			{Name: "SubmitExpense", Fields: []Field{{Name: "amount", Type: "number"}}, Events: []Event{submitted, expenseFlagged},
+			{Name: "RequestRefund", Fields: []Field{{Name: "amount", Type: "number"}}, Events: []Event{submitted, refundFlagged},
 				Outcomes: []Outcome{
-					{Events: []string{"ExpenseSubmitted", "ExpenseFlagged"}, ByHand: true,
-						Set: map[string]map[string]any{"ExpenseFlagged": {"reason": "over-limit"}}},
-					{Events: []string{"ExpenseSubmitted"}},
+					{Events: []string{"RefundRequested", "RefundFlagged"}, ByHand: true,
+						Set: map[string]map[string]any{"RefundFlagged": {"reason": "over-threshold"}}},
+					{Events: []string{"RefundRequested"}},
 				}},
-			{Name: "ReleasePayRun", Fields: []Field{{Name: "period", Type: "text"}}, Events: []Event{released, paid},
-				Outcomes: []Outcome{{Events: []string{"PayRunReleased", "PersonPaid"}, Repeated: []string{"PersonPaid"}}}},
+			{Name: "CloseGrantRound", Fields: []Field{{Name: "period", Type: "text"}}, Events: []Event{closed, awarded},
+				Outcomes: []Outcome{{Events: []string{"GrantRoundClosed", "GrantAwarded"}, Repeated: []string{"GrantAwarded"}}}},
 		},
 	}
 }
 
-const payBehaviour = `package ledger
+const accountsBehaviour = `package ledger
 
 import (
 	"encoding/json"
@@ -48,14 +48,14 @@ import (
 )
 
 // the hand-written hooks the decider calls (ledger_hand.go in a real host)
-func SubmitExpenseOutcome0(s State, cmd decider.Command) bool {
+func RequestRefundOutcome0(s State, cmd decider.Command) bool {
 	var p struct{ Amount float64 }
 	_ = json.Unmarshal(cmd.Payload, &p)
 	return p.Amount > 500
 }
 
-func ReleasePayRunOutcome0PersonPaid(s State, cmd decider.Command) []map[string]any {
-	return []map[string]any{{"personId": "p1", "amount": 120}, {"personId": "p2", "amount": 80}}
+func CloseGrantRoundOutcome0GrantAwarded(s State, cmd decider.Command) []map[string]any {
+	return []map[string]any{{"recipientId": "r1", "amount": 120}, {"recipientId": "r2", "amount": 80}}
 }
 
 func types(t *testing.T, name, payload string) []string {
@@ -72,12 +72,12 @@ func types(t *testing.T, name, payload string) []string {
 
 func TestOutcomes(t *testing.T) {
 	for _, c := range []struct{ name, payload string; want []string }{
-		{"LogEntry", ` + "`" + `{"hours":8}` + "`" + `, []string{"EntryLogged{\"hours\":8}"}},
-		{"LogEntry", ` + "`" + `{"hours":13}` + "`" + `, []string{"EntryLogged{\"hours\":13}", "EntryFlagged{\"reason\":\"long-day\"}"}},
-		{"SubmitExpense", ` + "`" + `{"amount":100}` + "`" + `, []string{"ExpenseSubmitted{\"amount\":100}"}},
-		{"SubmitExpense", ` + "`" + `{"amount":900}` + "`" + `, []string{"ExpenseSubmitted{\"amount\":900}", "ExpenseFlagged{\"reason\":\"over-limit\"}"}},
-		{"ReleasePayRun", ` + "`" + `{"period":"2026-09"}` + "`" + `, []string{"PayRunReleased{\"period\":\"2026-09\"}",
-			"PersonPaid{\"amount\":120,\"personId\":\"p1\"}", "PersonPaid{\"amount\":80,\"personId\":\"p2\"}"}},
+		{"MakeBooking", ` + "`" + `{"days":7}` + "`" + `, []string{"BookingMade{\"days\":7}"}},
+		{"MakeBooking", ` + "`" + `{"days":15}` + "`" + `, []string{"BookingMade{\"days\":15}", "BookingFlagged{\"reason\":\"long-hire\"}"}},
+		{"RequestRefund", ` + "`" + `{"amount":100}` + "`" + `, []string{"RefundRequested{\"amount\":100}"}},
+		{"RequestRefund", ` + "`" + `{"amount":900}` + "`" + `, []string{"RefundRequested{\"amount\":900}", "RefundFlagged{\"reason\":\"over-threshold\"}"}},
+		{"CloseGrantRound", ` + "`" + `{"period":"2026-09"}` + "`" + `, []string{"GrantRoundClosed{\"period\":\"2026-09\"}",
+			"GrantAwarded{\"amount\":120,\"recipientId\":\"r1\"}", "GrantAwarded{\"amount\":80,\"recipientId\":\"r2\"}"}},
 	} {
 		got := types(t, c.name, c.payload)
 		if len(got) != len(c.want) {
@@ -96,13 +96,13 @@ func TestOutcomes(t *testing.T) {
 // a repeated event, compiled in their own module with the hooks beside them
 // and run. A hook missing would be a build error.
 func TestGoOutcomesRun(t *testing.T) {
-	runGeneratedGo(t, payDomain(), payBehaviour)
+	runGeneratedGo(t, accountsDomain(), accountsBehaviour)
 }
 
 // The Go import writes the hand file's skeleton, <aggregate>_hand.go.example,
 // with every hook the decider calls; nothing compiles it.
 func TestGoHandExampleIsWritten(t *testing.T) {
-	d := payDomain()
+	d := accountsDomain()
 	files, err := d.GenerateGo()
 	if err != nil {
 		t.Fatal(err)

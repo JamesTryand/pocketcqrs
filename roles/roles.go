@@ -1,11 +1,10 @@
 // Package roles provisions the roles PocketBase collection: the auth
-// collection Item 11's capability-based ops/dashboard access model checks,
-// alongside a genuine PocketBase superuser. See pocketbase-cqrs-faas's
-// FAULTS-AND-WORK.md Item 11 entry for the full design; this package is the
+// collection the capability-based ops/dashboard access model checks,
+// alongside a genuine PocketBase superuser. This package is the
 // "provision the collection" half, authverify.RequireCapability the
 // "consult it on a request" half.
 //
-// Deliberately not "poweruser": Item 11's accepted decision is a GENERAL
+// Deliberately not "poweruser": the capability model's accepted decision is a GENERAL
 // per-capability model, not a single fixed tier, and this collection is
 // meant to hold whatever role records a deployment needs -- poweruser is
 // just the first one, expressed as a set of capability grants, not as the
@@ -41,7 +40,7 @@ var once sync.Once
 // during bootstrap, the same timing pocketcqrs core's own
 // migrations.RegisterExamples documents.
 //
-// Unlike RegisterExamples, this is Item 11's own always-on feature, not
+// Unlike RegisterExamples, this is the capability model's own always-on feature, not
 // something --tutorial gates: the ops/dashboard capability model applies to
 // every deployment, so main.go calls this unconditionally.
 //
@@ -59,14 +58,14 @@ func RegisterCollection() {
 // themselves -- a poweruser session is a real person at a dashboard) plus a
 // capabilities JSON field holding the capability strings that record's
 // holder is granted (e.g. "ops.events.read"; see ops.go's capOps*
-// constants for the vocabulary Item 11 actually wires up).
+// constants for the vocabulary actually wired up).
 //
 // List/View/Create/Update/Delete rules are left nil (superuser-only, the
 // core.Collection zero value): editing who holds which capability is
 // exactly as sensitive as editing superusers, and PocketBase's own built-in
 // admin UI (a superuser is required to reach it at all) already gives an
 // operator a place to create a roles record and edit its capabilities
-// array -- Item 11 deliberately does not build bespoke dashboard UI for
+// array -- this deliberately does not build bespoke dashboard UI for
 // this, per the decision doc's "at least a migration path" alternative.
 func ensureCollection(app core.App) error {
 	if _, err := app.FindCollectionByNameOrId(CollectionName); err == nil {

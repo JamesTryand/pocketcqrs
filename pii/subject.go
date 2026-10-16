@@ -55,7 +55,7 @@ const KeyDestroyerName = "pii:key-destroyer"
 // instead of dispatching a command. DestroyKey is idempotent, so
 // at-least-once delivery is exactly right. Run it on the writer only.
 //
-// With an Outbox the key service is called off the engine's pass (R4):
+// With an Outbox the key service is called off the engine's pass:
 // Apply only records the erasure, and an outbox Worker running Destroy
 // (under KeyDestroyerName) destroys the key, a failure due again later with
 // a growing wait, never given up: an erasure has to happen. Without one,

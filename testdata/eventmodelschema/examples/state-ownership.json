@@ -1,97 +1,218 @@
 {
   "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
-  "eventModelingSchemaVersion": "3.15.0",
+  "eventModelingSchemaVersion": "4.0.0",
   "id": "state-ownership-example",
   "name": "State Ownership Example",
-  "description": "Ownership decided by the aggregate (3.15.0): an expense is changed or deleted only by the staff member it belongs to, which the expense's own state knows from its own events. No read model is consulted, so the first edit after logging is never refused while a projection catches up, and the check can't be stale.",
+  "description": "Ownership decided by the aggregate (3.15.0): a tool library's loan request is changed or withdrawn only by the member who made it, which the request's own state knows from its own events. No read model is consulted, so the first change after requesting is never refused while a read model catches up, and the check can't be stale. For contrast, approving a request is scoped (commandScope): the request's branch is resolved from its read-model row, and the approver must be a volunteer at that branch, where memberOfVia's actorField (4.0.0) names the branch-volunteers field compared with the command's actor.",
   "swimlanes": [
-    { "id": "expenses", "name": "Expenses", "kind": "team" }
+    { "id": "loans", "name": "Loans", "kind": "team" }
   ],
   "events": {
-    "expense-logged": {
-      "name": "Expense Logged",
-      "swimlaneId": "expenses",
-      "aggregate": "expense",
+    "loan-requested": {
+      "name": "Loan Requested",
+      "swimlaneId": "loans",
+      "aggregate": "loanRequest",
       "fields": [
-        { "name": "expenseId", "type": "string", "idAttribute": true },
-        { "name": "staffId", "type": "string" },
-        { "name": "value", "type": "decimal" }
+        { "name": "loanRequestId", "type": "string", "idAttribute": true },
+        { "name": "memberId", "type": "string" },
+        { "name": "toolId", "type": "string" },
+        { "name": "branchId", "type": "string" },
+        { "name": "loanDays", "type": "integer" }
       ]
     },
-    "expense-updated": {
-      "name": "Expense Updated",
-      "swimlaneId": "expenses",
-      "aggregate": "expense",
+    "loan-request-changed": {
+      "name": "Loan Request Changed",
+      "swimlaneId": "loans",
+      "aggregate": "loanRequest",
       "fields": [
-        { "name": "expenseId", "type": "string" },
-        { "name": "value", "type": "decimal" }
+        { "name": "loanRequestId", "type": "string" },
+        { "name": "loanDays", "type": "integer" }
+      ]
+    },
+    "volunteer-joined-branch": {
+      "name": "Volunteer Joined Branch",
+      "swimlaneId": "loans",
+      "aggregate": "branch",
+      "fields": [
+        { "name": "enrolmentId", "type": "string", "idAttribute": true },
+        { "name": "branchId", "type": "string" },
+        { "name": "volunteerId", "type": "string" }
+      ]
+    },
+    "loan-request-approved": {
+      "name": "Loan Request Approved",
+      "swimlaneId": "loans",
+      "aggregate": "loanRequest",
+      "fields": [
+        { "name": "loanRequestId", "type": "string" },
+        { "name": "approvedBy", "type": "string" }
       ]
     }
   },
   "commands": {
-    "log-expense": {
-      "name": "Log Expense",
-      "aggregate": "expense",
-      "fields": [{ "name": "value", "type": "decimal" }]
+    "request-loan": {
+      "name": "Request Loan",
+      "aggregate": "loanRequest",
+      "fields": [
+        { "name": "toolId", "type": "string" },
+        { "name": "branchId", "type": "string" },
+        { "name": "loanDays", "type": "integer" }
+      ]
     },
-    "update-expense": {
-      "name": "Update Expense",
-      "aggregate": "expense",
-      "fields": [{ "name": "value", "type": "decimal" }],
+    "change-loan-request": {
+      "name": "Change Loan Request",
+      "aggregate": "loanRequest",
+      "fields": [{ "name": "loanDays", "type": "integer" }],
       "requiredOwnership": {
-        "stateField": "staffId",
-        "message": "only this expense's own staff member may change it"
+        "stateField": "memberId",
+        "message": "only the member who made this loan request may change it"
+      }
+    },
+    "join-branch": {
+      "name": "Join Branch",
+      "aggregate": "branch",
+      "fields": [
+        { "name": "branchId", "type": "string" },
+        { "name": "volunteerId", "type": "string" }
+      ]
+    },
+    "approve-loan-request": {
+      "name": "Approve Loan Request",
+      "aggregate": "loanRequest",
+      "scope": {
+        "resolveVia": {
+          "readModelId": "loan-requests",
+          "keyField": "loanRequestId",
+          "selectField": "branchId"
+        },
+        "memberOfVia": {
+          "readModelId": "branch-volunteers",
+          "matchField": "branchId",
+          "actorField": "volunteerId"
+        }
       }
     }
   },
+  "readModels": {
+    "loan-requests": {
+      "name": "Loan Requests",
+      "question": "Which loan requests are there, by which member, at which branch?",
+      "builtFromEventIds": ["loan-requested", "loan-request-changed"],
+      "fields": [
+        { "name": "loanRequestId", "type": "string", "idAttribute": true },
+        { "name": "memberId", "type": "string" },
+        { "name": "toolId", "type": "string" },
+        { "name": "branchId", "type": "string" },
+        { "name": "loanDays", "type": "integer" }
+      ]
+    },
+    "branch-volunteers": {
+      "name": "Branch Volunteers",
+      "question": "Who volunteers at which branch?",
+      "builtFromEventIds": ["volunteer-joined-branch"],
+      "fields": [
+        { "name": "enrolmentId", "type": "string", "idAttribute": true },
+        { "name": "branchId", "type": "string" },
+        { "name": "volunteerId", "type": "string" }
+      ]
+    }
+  },
   "screens": {
-    "expenses-screen": { "name": "Expenses" }
+    "loans-screen": { "name": "Loans" },
+    "branch-desk-screen": { "name": "Branch Desk" }
   },
   "slices": [
     {
-      "id": "log-expense-slice",
-      "name": "Log Expense",
+      "id": "request-loan-slice",
+      "name": "Request Loan",
       "pattern": "stateChange",
-      "swimlaneId": "expenses",
+      "swimlaneId": "loans",
       "status": "created",
-      "screenId": "expenses-screen",
-      "commandId": "log-expense",
-      "eventIds": ["expense-logged"],
+      "screenId": "loans-screen",
+      "commandId": "request-loan",
+      "eventIds": ["loan-requested"],
       "scenarios": [
         {
-          "id": "log-an-expense", "name": "Log an expense", "kind": "stateChange",
-          "given": [], "when": { "commandId": "log-expense", "data": { "value": 12.5 }, "actor": "s1" },
-          "then": { "events": [{ "eventId": "expense-logged" }] }
+          "id": "request-a-loan", "name": "Request a loan", "kind": "stateChange",
+          "given": [], "when": { "commandId": "request-loan", "data": { "toolId": "t1", "branchId": "b1", "loanDays": 3 }, "actor": "m1" },
+          "then": { "events": [{ "eventId": "loan-requested" }] }
         }
       ]
     },
     {
-      "id": "update-expense-slice",
-      "name": "Update Expense",
+      "id": "change-loan-request-slice",
+      "name": "Change Loan Request",
       "pattern": "stateChange",
-      "swimlaneId": "expenses",
+      "swimlaneId": "loans",
       "status": "created",
-      "screenId": "expenses-screen",
-      "commandId": "update-expense",
-      "eventIds": ["expense-updated"],
+      "screenId": "loans-screen",
+      "commandId": "change-loan-request",
+      "eventIds": ["loan-request-changed"],
       "scenarios": [
         {
-          "id": "owner-updates", "name": "The expense's own staff member updates it", "kind": "stateChange",
-          "given": [{ "eventId": "expense-logged", "data": { "expenseId": "x1", "staffId": "s1", "value": 12.5 } }],
-          "when": { "commandId": "update-expense", "data": { "value": 14 }, "actor": "s1" },
-          "then": { "events": [{ "eventId": "expense-updated", "data": { "value": 14 } }] }
+          "id": "requester-changes", "name": "The member who made the loan request changes it", "kind": "stateChange",
+          "given": [{ "eventId": "loan-requested", "data": { "loanRequestId": "r1", "memberId": "m1", "toolId": "t1", "branchId": "b1", "loanDays": 3 } }],
+          "when": { "commandId": "change-loan-request", "data": { "loanDays": 5 }, "actor": "m1" },
+          "then": { "events": [{ "eventId": "loan-request-changed", "data": { "loanDays": 5 } }] }
         },
         {
-          "id": "someone-else-is-refused", "name": "Someone else's update is refused, by the expense itself", "kind": "error",
-          "given": [{ "eventId": "expense-logged", "data": { "expenseId": "x1", "staffId": "s1", "value": 12.5 } }],
-          "when": { "commandId": "update-expense", "data": { "value": 0 }, "actor": "s2" },
-          "then": { "error": { "message": "only this expense's own staff member may change it" } }
+          "id": "another-member-is-refused", "name": "Another member's change is refused, by the loan request itself", "kind": "error",
+          "given": [{ "eventId": "loan-requested", "data": { "loanRequestId": "r1", "memberId": "m1", "toolId": "t1", "branchId": "b1", "loanDays": 3 } }],
+          "when": { "commandId": "change-loan-request", "data": { "loanDays": 1 }, "actor": "m2" },
+          "then": { "error": { "message": "only the member who made this loan request may change it" } }
         },
         {
-          "id": "no-such-expense", "name": "An expense that doesn't exist is not anyone's: it doesn't exist", "kind": "error",
+          "id": "no-such-loan-request", "name": "A loan request that doesn't exist is not anyone's: it doesn't exist", "kind": "error",
           "given": [],
-          "when": { "commandId": "update-expense", "data": { "value": 14 }, "actor": "s2" },
-          "then": { "error": { "message": "expense does not exist" } }
+          "when": { "commandId": "change-loan-request", "data": { "loanDays": 5 }, "actor": "m2" },
+          "then": { "error": { "message": "loan request does not exist" } }
+        }
+      ]
+    },
+    {
+      "id": "join-branch-slice",
+      "name": "Join Branch",
+      "pattern": "stateChange",
+      "swimlaneId": "loans",
+      "status": "created",
+      "screenId": "branch-desk-screen",
+      "commandId": "join-branch",
+      "eventIds": ["volunteer-joined-branch"],
+      "scenarios": [
+        {
+          "id": "volunteer-joins-a-branch", "name": "A volunteer joins a branch", "kind": "stateChange",
+          "given": [], "when": { "commandId": "join-branch", "data": { "branchId": "b1", "volunteerId": "v1" }, "actor": "v1" },
+          "then": { "events": [{ "eventId": "volunteer-joined-branch" }] }
+        }
+      ]
+    },
+    {
+      "id": "approve-loan-request-slice",
+      "name": "Approve Loan Request",
+      "pattern": "stateChange",
+      "swimlaneId": "loans",
+      "status": "created",
+      "screenId": "branch-desk-screen",
+      "commandId": "approve-loan-request",
+      "eventIds": ["loan-request-approved"],
+      "scenarios": [
+        {
+          "id": "branch-volunteer-approves", "name": "A volunteer at the loan request's branch approves it", "kind": "stateChange",
+          "given": [
+            { "eventId": "loan-requested", "data": { "loanRequestId": "r1", "memberId": "m1", "toolId": "t1", "branchId": "b1", "loanDays": 3 } },
+            { "eventId": "volunteer-joined-branch", "data": { "enrolmentId": "b1:v1", "branchId": "b1", "volunteerId": "v1" } }
+          ],
+          "when": { "commandId": "approve-loan-request", "data": {}, "actor": "v1" },
+          "then": { "events": [{ "eventId": "loan-request-approved", "data": { "approvedBy": "v1" } }] }
+        },
+        {
+          "id": "volunteer-at-another-branch-is-refused", "name": "A volunteer at another branch is refused: they are not a member of the request's branch", "kind": "error",
+          "given": [
+            { "eventId": "loan-requested", "data": { "loanRequestId": "r1", "memberId": "m1", "toolId": "t1", "branchId": "b1", "loanDays": 3 } },
+            { "eventId": "volunteer-joined-branch", "data": { "enrolmentId": "b2:v2", "branchId": "b2", "volunteerId": "v2" } }
+          ],
+          "when": { "commandId": "approve-loan-request", "data": {}, "actor": "v2" },
+          "then": { "error": { "message": "only a volunteer at this loan request's branch may approve it" } }
         }
       ]
     }

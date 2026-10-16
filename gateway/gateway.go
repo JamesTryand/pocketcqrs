@@ -43,7 +43,7 @@ type Config struct {
 	Idempotency *idempotency.Store
 	// Forward, when set, proxies every command request to it instead of
 	// deciding locally — the shape a --cqrsRole=secondary node uses to
-	// reach the master (item 3). A plain net/http.Handler, deliberately:
+	// reach the master. A plain net/http.Handler, deliberately:
 	// any transport that can turn an *http.Request into a response written
 	// to an http.ResponseWriter satisfies it — httputil.NewSingleHostReverseProxy
 	// for the built-in HTTP default, or (in pocketcqrs-extensions) a NATS
@@ -53,7 +53,7 @@ type Config struct {
 	//
 	// When set, RegisterRoutes does not bind apis.RequireAuth regardless of
 	// AllowAnonymous: this node's own auth records are not authoritative
-	// (see F-12 — a secondary's _users/_superusers tables are independent,
+	// (a secondary's _users/_superusers tables are independent,
 	// divergent tables, not a replica of the master's), so checking a token
 	// against them here could wrongly reject a valid one. The forwarded
 	// request carries the caller's original Authorization header; the
@@ -66,7 +66,7 @@ type Config struct {
 	// is counted by the master that decides it. Nil records nothing.
 	Metrics CommandRecorder
 	// Batching, when set, routes commands through the durable intake queue
-	// + batching event writer (item 4) instead of deciding inline: the
+	// + batching event writer instead of deciding inline: the
 	// handler enqueues the command then blocks until its own command's
 	// batch commits, returning the same synchronous (events, error) result
 	// HandleWithMeta always has. No correlation id, no polling, no
@@ -108,7 +108,7 @@ type Config struct {
 	// before Idempotency-Key lookup — see the authorize package's own
 	// Authorizer for the shape a real deployment supplies (a policy table
 	// built from an emschema.Document's requiredRole/fieldGatedRole/
-	// requiredOwnership/scope declarations, platform/command-authorization,
+	// requiredOwnership/scope declarations, command authorization,
 	// ported from dotnetcqrs's own MapCqrsGateway `authorize` hook). Checked
 	// BEFORE the idempotency lookup, deliberately: an unauthorized attempt
 	// has no side effect (same reasoning a domain rejection already gets —
@@ -158,7 +158,7 @@ type Config struct {
 // 400, which a client reads as "the domain said no".
 //
 // If Config.Batching is set, a command is enqueued and the handler blocks
-// until its own batch commits (item 4) instead of deciding inline — every
+// until its own batch commits instead of deciding inline — every
 // status above still applies identically, since the batching path produces
 // the same (events, error) shape the direct path always has.
 //

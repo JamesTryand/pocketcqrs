@@ -63,7 +63,7 @@ func RequireSuperuser(v *Verifier) *hook.Handler[*core.RequestEvent] {
 // authverify is generic verification infrastructure and deliberately knows
 // nothing about the roles package or any other specific auth collection —
 // RequireCapability accepts a grant from ANY authenticated record carrying
-// this field, superuser or not, which is what makes it Item 11's general
+// this field, superuser or not, which is what makes it the capability model's general
 // model rather than a fixed poweruser check. (A future role/permission
 // field on a "users" collection, per the decision doc's Option 3, composes
 // here with zero code change.)
@@ -76,7 +76,7 @@ func hasCapability(rec *core.Record, capability string) bool {
 	return rec.IsSuperuser() || slices.Contains(rec.GetStringSlice(capabilitiesField), capability)
 }
 
-// RequireCapability is Item 11's general-purpose ops gate: it passes a
+// RequireCapability is the capability model's general-purpose ops gate: it passes a
 // genuine PocketBase superuser exactly as RequireSuperuser does, and
 // ADDITIONALLY passes any other authenticated record whose own
 // "capabilities" JSON field contains capability — regardless of which auth

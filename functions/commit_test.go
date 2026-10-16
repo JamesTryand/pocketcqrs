@@ -13,7 +13,7 @@ import (
 )
 
 // A JS projection commits each event's ops and its position in one data.db
-// transaction (R2): an event whose second op fails leaves no trace of its
+// transaction: an event whose second op fails leaves no trace of its
 // first, and its position stays where it was.
 func TestJSProjectionCommitsAnEventWhole(t *testing.T) {
 	app, err := tests.NewTestApp()

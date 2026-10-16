@@ -3,61 +3,61 @@
   "eventModelingSchemaVersion": "3.15.0",
   "id": "conditional-outcomes-example",
   "name": "Conditional Outcomes Example",
-  "description": "Conditional outcomes (3.12.0): one command emits one set of events or another, and the model says when. Logging more than 12 hours also flags the entry, by a declared rule. Submitting an expense also flags it when its converted amount is over the limit; converting is a calculation, so that condition is hand-written (`when: \"hand\"`).",
+  "description": "Conditional outcomes (3.12.0): one command emits one set of events or another, and the model says when. Booking equipment for more than 14 days also flags the booking for review, by a declared rule. Requesting a refund also flags it when its amount, converted to the home currency, is over the threshold; converting is a calculation, so that condition is hand-written (`when: \"hand\"`).",
   "swimlanes": [
-    { "id": "time", "name": "Time", "kind": "team" }
+    { "id": "hire", "name": "Hire", "kind": "team" }
   ],
   "events": {
-    "entry-logged": {
-      "name": "Entry Logged",
-      "swimlaneId": "time",
-      "aggregate": "entry",
+    "booking-made": {
+      "name": "Booking Made",
+      "swimlaneId": "hire",
+      "aggregate": "booking",
       "fields": [
-        { "name": "entryId", "type": "string" },
-        { "name": "hours", "type": "decimal" }
+        { "name": "bookingId", "type": "string" },
+        { "name": "days", "type": "decimal" }
       ]
     },
-    "entry-flagged": {
-      "name": "Entry Flagged",
-      "swimlaneId": "time",
-      "aggregate": "entry",
+    "booking-flagged": {
+      "name": "Booking Flagged",
+      "swimlaneId": "hire",
+      "aggregate": "booking",
       "fields": [
-        { "name": "entryId", "type": "string" },
+        { "name": "bookingId", "type": "string" },
         { "name": "reason", "type": "string" }
       ]
     },
-    "expense-submitted": {
-      "name": "Expense Submitted",
-      "swimlaneId": "time",
-      "aggregate": "expense",
+    "refund-requested": {
+      "name": "Refund Requested",
+      "swimlaneId": "hire",
+      "aggregate": "refund",
       "fields": [
-        { "name": "expenseId", "type": "string" },
+        { "name": "refundId", "type": "string" },
         { "name": "amount", "type": "decimal" },
         { "name": "currency", "type": "string" }
       ]
     },
-    "expense-flagged": {
-      "name": "Expense Flagged",
-      "swimlaneId": "time",
-      "aggregate": "expense",
+    "refund-flagged": {
+      "name": "Refund Flagged",
+      "swimlaneId": "hire",
+      "aggregate": "refund",
       "fields": [
-        { "name": "expenseId", "type": "string" },
+        { "name": "refundId", "type": "string" },
         { "name": "reason", "type": "string" }
       ]
     }
   },
   "commands": {
-    "log-entry": {
-      "name": "Log Entry",
-      "aggregate": "entry",
-      "fields": [{ "name": "hours", "type": "decimal" }],
+    "make-booking": {
+      "name": "Make Booking",
+      "aggregate": "booking",
+      "fields": [{ "name": "days", "type": "decimal" }],
       "refuseWhen": [
-        { "message": "hours must be positive", "all": [{ "command": "hours", "atMost": 0 }] }
+        { "message": "days must be positive", "all": [{ "command": "days", "atMost": 0 }] }
       ]
     },
-    "submit-expense": {
-      "name": "Submit Expense",
-      "aggregate": "expense",
+    "request-refund": {
+      "name": "Request Refund",
+      "aggregate": "refund",
       "fields": [
         { "name": "amount", "type": "decimal" },
         { "name": "currency", "type": "string" }
@@ -65,77 +65,77 @@
     }
   },
   "screens": {
-    "entries-screen": { "name": "Entries" },
-    "expenses-screen": { "name": "Expenses" }
+    "bookings-screen": { "name": "Bookings" },
+    "refunds-screen": { "name": "Refunds" }
   },
   "slices": [
     {
-      "id": "log-entry-slice",
-      "name": "Log Entry",
+      "id": "make-booking-slice",
+      "name": "Make Booking",
       "pattern": "stateChange",
-      "swimlaneId": "time",
+      "swimlaneId": "hire",
       "status": "created",
-      "screenId": "entries-screen",
-      "commandId": "log-entry",
-      "eventIds": ["entry-logged", "entry-flagged"],
+      "screenId": "bookings-screen",
+      "commandId": "make-booking",
+      "eventIds": ["booking-made", "booking-flagged"],
       "outcomes": [
         {
-          "eventIds": ["entry-logged", "entry-flagged"],
-          "description": "A long day is logged and flagged for a manager, in the same commit.",
-          "when": [{ "all": [{ "command": "hours", "greaterThan": 12 }] }],
-          "set": { "entry-flagged": { "reason": "long-day" } }
+          "eventIds": ["booking-made", "booking-flagged"],
+          "description": "A long hire is booked and flagged for review, in the same commit.",
+          "when": [{ "all": [{ "command": "days", "greaterThan": 14 }] }],
+          "set": { "booking-flagged": { "reason": "long-hire" } }
         },
-        { "eventIds": ["entry-logged"] }
+        { "eventIds": ["booking-made"] }
       ],
       "scenarios": [
         {
-          "id": "log-an-entry", "name": "An ordinary day is logged", "kind": "stateChange",
-          "given": [], "when": { "commandId": "log-entry", "data": { "hours": 8 } },
-          "then": { "events": [{ "eventId": "entry-logged", "data": { "hours": 8 } }] }
+          "id": "make-a-booking", "name": "An ordinary hire is booked", "kind": "stateChange",
+          "given": [], "when": { "commandId": "make-booking", "data": { "days": 7 } },
+          "then": { "events": [{ "eventId": "booking-made", "data": { "days": 7 } }] }
         },
         {
-          "id": "long-day-is-flagged", "name": "More than 12 hours is logged and flagged", "kind": "stateChange",
-          "given": [], "when": { "commandId": "log-entry", "data": { "hours": 13 } },
+          "id": "long-hire-is-flagged", "name": "More than 14 days is booked and flagged", "kind": "stateChange",
+          "given": [], "when": { "commandId": "make-booking", "data": { "days": 15 } },
           "then": {
             "events": [
-              { "eventId": "entry-logged", "data": { "hours": 13 } },
-              { "eventId": "entry-flagged", "data": { "reason": "long-day" } }
+              { "eventId": "booking-made", "data": { "days": 15 } },
+              { "eventId": "booking-flagged", "data": { "reason": "long-hire" } }
             ]
           }
         },
         {
           "id": "refused-before-outcomes", "name": "Refusals come before outcomes", "kind": "error",
-          "given": [], "when": { "commandId": "log-entry", "data": { "hours": -1 } },
-          "then": { "error": { "message": "hours must be positive" } }
+          "given": [], "when": { "commandId": "make-booking", "data": { "days": -1 } },
+          "then": { "error": { "message": "days must be positive" } }
         }
       ]
     },
     {
-      "id": "submit-expense-slice",
-      "name": "Submit Expense",
+      "id": "request-refund-slice",
+      "name": "Request Refund",
       "pattern": "stateChange",
-      "swimlaneId": "time",
+      "swimlaneId": "hire",
       "status": "created",
-      "screenId": "expenses-screen",
-      "commandId": "submit-expense",
-      "eventIds": ["expense-submitted", "expense-flagged"],
+      "screenId": "refunds-screen",
+      "commandId": "request-refund",
+      "eventIds": ["refund-requested", "refund-flagged"],
       "outcomes": [
         {
-          "eventIds": ["expense-submitted", "expense-flagged"],
-          "description": "Over the limit once converted to the home currency: a calculation, so the condition is hand-written.",
+          "eventIds": ["refund-requested", "refund-flagged"],
+          "description": "Over the threshold once converted to the home currency: a calculation, so the condition is hand-written.",
           "when": "hand",
-          "set": { "expense-flagged": { "reason": "over-limit" } }
+          "set": { "refund-flagged": { "reason": "over-threshold" } }
         },
-        { "eventIds": ["expense-submitted"] }
+        { "eventIds": ["refund-requested"] }
       ],
       "scenarios": [
         {
-          "id": "expense-over-limit", "name": "An expense over the limit is submitted and flagged", "kind": "stateChange",
-          "given": [], "when": { "commandId": "submit-expense", "data": { "amount": 900, "currency": "USD" } },
+          "id": "refund-over-threshold", "name": "A refund over the threshold is requested and flagged", "kind": "stateChange",
+          "given": [], "when": { "commandId": "request-refund", "data": { "amount": 900, "currency": "USD" } },
           "then": {
             "events": [
-              { "eventId": "expense-submitted", "data": { "amount": 900 } },
-              { "eventId": "expense-flagged", "data": { "reason": "over-limit" } }
+              { "eventId": "refund-requested", "data": { "amount": 900 } },
+              { "eventId": "refund-flagged", "data": { "reason": "over-threshold" } }
             ]
           }
         }

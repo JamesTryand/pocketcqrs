@@ -13,7 +13,7 @@ import (
 )
 
 // Register binds the global middleware that gives a secondary's own local
-// routes a working re.Auth (F-13's fix, end-user half).
+// routes a working re.Auth (the fix, end-user half).
 //
 // Ordering, established from PocketBase's source rather than assumed:
 // PocketBase's default middlewares carry negative priorities

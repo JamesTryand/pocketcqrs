@@ -13,9 +13,6 @@
 //     mis-wired host fails at append instead of writing plaintext.
 //   - Erasure is terminal per subject: a returning person is a new subject
 //     with a new id (see DataSubject).
-//
-// The design record is the notebook's platform/eventmodeling-codegen
-// findings.md ("Write-path design", "Read-side design", "Milestone G").
 package pii
 
 import (

@@ -9,7 +9,7 @@ import (
 )
 
 // DecidedCommand is one command's already-decided-but-not-yet-appended
-// outcome, ready to be committed as part of a batch (item 4's batching
+// outcome, ready to be committed as part of a batch (command batching's
 // event writer). NewEvents may be nil/empty -- a command that decided
 // successfully with no resulting events is a valid outcome, not an error.
 type DecidedCommand struct {

@@ -29,7 +29,7 @@ func (s *positionStore) SaveCheckpoint(_ context.Context, name string, position 
 	return nil
 }
 
-// committer applies an event and records its position together (R2): the
+// committer applies an event and records its position together: the
 // engine calls Commit, never Apply and then SaveCheckpoint.
 type committer struct {
 	recorder

@@ -17,7 +17,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 )
 
-// Item 11's read-only observability scope: the ops/dashboard routes a
+// the capability model's read-only observability scope: the ops/dashboard routes a
 // "roles" capability grant admits WITHOUT a full superuser token, wired up
 // alongside the RequireSuperuser gate every mutating route below keeps.
 // One capability string per route deliberately, not one shared "ops.read"

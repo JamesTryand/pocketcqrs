@@ -125,7 +125,7 @@ func TestEnsureCollectionIsCreateOnly(t *testing.T) {
 // out-of-the-box internal stuff" property, proven rather than asserted: a
 // users record -- even one an app has freely extended with its own fields
 // -- carries no "capabilities" field, so authverify.RequireCapability (the
-// gate the 5 Item 11 ops routes use) sees it as an ordinary, ungranted
+// gate the 5 capability-gated ops routes use) sees it as an ordinary, ungranted
 // record. Self-signup being open on this collection must never translate
 // into any ops/dashboard access.
 func TestUsersRecordCannotSatisfyCapabilityGate(t *testing.T) {

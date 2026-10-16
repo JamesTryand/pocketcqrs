@@ -9,7 +9,7 @@
 // is a pure, synchronous, no-I/O function, and this component's whole job is
 // an I/O call reactors.Reactor has no way to make.
 //
-// Apply only records the work, in an outbox (package outbox, R4): the
+// Apply only records the work, in an outbox (package outbox): the
 // checkpoint advances at once, and one slow or failing integration never
 // holds up the log. The outbox Worker (Consumer.Worker) does the work when
 // it is due: build the request, call out, turn the response into follow-up
@@ -77,9 +77,9 @@ func (e *RetryableError) Unwrap() error { return e.Err }
 // Gateway dispatches one follow-up command to a pocketcqrs deployment.
 // Satisfied by the value NewGatewayClient returns (which wraps the real
 // HTTP client this repo keeps under internal/gatewayclient); an external
-// module consuming this package supplies its own implementation instead —
-// see NEEDS.md's "extcaller cannot be consumed as an external Go module
-// dependency" for why this is an interface rather than a concrete type.
+// module consuming this package supplies its own implementation instead,
+// which is why this is an interface rather than a concrete type: the real
+// client lives under internal/, which an external module cannot import.
 type Gateway interface {
 	Dispatch(ctx context.Context, cmd Command) error
 }
@@ -102,8 +102,7 @@ type FollowUp struct {
 //
 // Deliberately plain Go functions, not a declarative mapping DSL (URL
 // templates, field-path response extraction, etc.): no real third-party
-// integration exists yet to design such a thing against (NEEDS.md defers
-// exactly this), and a config format invented against zero real callers is
+// integration exists yet to design such a thing against, and a config format invented against zero real callers is
 // the wrong kind of abstraction to build speculatively. A Rule is assembled
 // in Go by whoever wires up main.go for a given deployment.
 type Rule struct {

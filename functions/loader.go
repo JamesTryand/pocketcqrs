@@ -510,7 +510,7 @@ func parseTriggers(src string) (triggers, error) {
 			last.key = fields[1]
 		case "rule":
 			// //@rule <collection> <public|authenticated|rule-expression> —
-			// Item 9's per-collection override of --cqrsSchemaDefaultRule.
+			// the per-collection override of --cqrsSchemaDefaultRule.
 			// Named by collection rather than paired positionally like
 			// //@key, since a value may itself contain spaces (a raw rule
 			// expression) and a file may declare //@rule before or after

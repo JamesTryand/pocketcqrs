@@ -1,5 +1,5 @@
 // Package litefswatch wakes a secondary when LiteFS has applied a
-// transaction to its replica of the log (R7).
+// transaction to its replica of the log.
 //
 // A secondary's events.db is a LiteFS replica: the master's appends reach it
 // in another process, so nothing in this one says "new events". LiteFS's

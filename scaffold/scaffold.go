@@ -104,8 +104,8 @@ type Command struct {
 	Outcomes []Outcome `json:"outcomes,omitempty"`
 	// CanBeginAgain marks a Once command that may begin the stream again
 	// after an endsStream event (an assign after an unassign). Without it,
-	// an end is final (D28): the decider refuses to begin an ended stream,
-	// so a deleted entry's id can never be logged again.
+	// an end is final: the decider refuses to begin an ended stream,
+	// so a deleted record's id can never be created again.
 	CanBeginAgain bool `json:"canBeginAgain,omitempty"`
 }
 
@@ -126,7 +126,7 @@ type Event struct {
 	// EndsStream marks an event that closes this aggregate's stream: folded,
 	// the generated decider resets Exists to false instead of true, so a
 	// later create-shaped command on the same stream is legal again (an
-	// assign/unassign/reassign lifecycle). Finding 3.
+	// assign/unassign/reassign lifecycle).
 	EndsStream bool `json:"endsStream,omitempty"`
 }
 
@@ -137,7 +137,7 @@ type Field struct {
 	Type string `json:"type"`
 	// Derivation makes a read-model field a fold over named events instead
 	// of a same-named payload copy. nil on every command/event field — only
-	// a ReadModel's own Fields entries use it. Finding 3.
+	// a ReadModel's own Fields entries use it.
 	Derivation *FieldDerivation `json:"derivation,omitempty"`
 	// Subfields describes the shape of one nested row when Derivation.Kind
 	// is groupBy — one entry per column, each an ordinary Field that may
@@ -147,7 +147,7 @@ type Field struct {
 	// this project's own flatter style already puts every kind's payload on
 	// FieldDerivation as sibling optional fields, so Subfields sits next to
 	// it on Field instead of forcing a fifth place a mapper would have to
-	// know to look. Finding 4 / schema 2.3.0.
+	// know to look. Schema 2.3.0.
 	Subfields []Field `json:"subfields,omitempty"`
 	// PII marks personal data (schema field.pii), encrypted under the key of
 	// the data subject whose id is in the sibling field PIISubject. The Go
@@ -232,12 +232,11 @@ type ReadModel struct {
 	On []string `json:"on,omitempty"`
 	// Scopes declares, per non-column query param, how it resolves through
 	// another read model (a semi-join) rather than a plain column filter.
-	// Finding 3.
 	Scopes []ReadModelScope `json:"scopes,omitempty"`
 	// Filters declares a single-field WHERE-range query filter against one
 	// of this read model's OWN columns (Field, already sanitized), with
 	// named presets rather than a raw date range — sibling to Scopes.
-	// Schema 2.4.0 / F-20's dateRange follow-up.
+	// Schema 2.4.0.
 	Filters []ReadModelFilter `json:"filters,omitempty"`
 	// RequiredRole names the role(s) allowed to read this collection at
 	// all, resolved from emschema.ReadModel.RequiredRole (schema 2.7.0).
@@ -344,7 +343,7 @@ type Reactor struct {
 	IDPrefix string `json:"idPrefix,omitempty"`
 	// PerEvent keys the target by the triggering EVENT's id instead of its
 	// stream's (IDPrefix + event id): a create per trigger event, so two
-	// events on one source stream create two targets (R3). A redelivery of
+	// events on one source stream create two targets. A redelivery of
 	// the same event still targets the same id, and hits "already exists".
 	PerEvent bool `json:"perEvent,omitempty"`
 }
@@ -877,9 +876,9 @@ func (d Domain) decider() string {
 		// endsStream events (an unassign, a removal) reset exists instead of
 		// setting it -- otherwise the generic fold only ever sets state and
 		// never retracts it, permanently blocking a later create-shaped
-		// command on the same stream once it has ever fired once (Finding 3).
+		// command on the same stream once it has ever fired once.
 		// Where a create may not begin again, the end also sets ended, which
-		// that create refuses (D28).
+		// that create refuses.
 		existsAfter := "true"
 		if d.eventEndsStream(name) {
 			existsAfter = "false"
@@ -977,7 +976,7 @@ func (d Domain) projectionBody(rm ReadModel) string {
 
 	derived, order := collectDerivedActions(rm.Fields, rm.Key)
 	if len(derived) == 0 {
-		// kept byte-for-byte unchanged from before Finding 3, so a read
+		// kept byte-for-byte unchanged from before derivations existed, so a read
 		// model with no derived fields regenerates identically.
 		fmt.Fprintf(&b, "// One row per %s stream, keyed by the aggregate id.\n", d.Aggregate)
 		b.WriteString("//\n")
@@ -998,7 +997,7 @@ func (d Domain) projectionBody(rm ReadModel) string {
 		return b.String()
 	}
 
-	// Finding 3: at least one field is a fold over named events (a toggle, a
+	// At least one field is a fold over named events (a toggle, a
 	// count or a sum) rather than a same-named payload copy. Those trigger
 	// events are pulled OUT of the generic merge entirely and routed to
 	// their own op instead — an event that feeds a derived field is treated
@@ -1073,7 +1072,7 @@ func (d Domain) projectionBody(rm ReadModel) string {
 // Toggle events are always on the read model's own stream (the eventmodel-
 // schema fieldDerivation shape), so they key off event.aggregateId; count
 // and sum trigger events are usually on a DIFFERENT stream (an assignment
-// rolling up onto its project), so they key off the payload field
+// rolling up onto its team), so they key off the payload field
 // rowKeyField names instead — mirroring derivedAction.call()'s Go rendering.
 //
 // A groupBy-owned subfield renders as its OWN op kind, groupByBump, rather

@@ -4,18 +4,18 @@ import "testing"
 
 // An event a toggle derives from still merges its own fields onto its row,
 // as dotnetcqrs seeds it (SeedOn: builtFromEventIds and toggle/byEvent
-// events). Flagging stamps the reason; clearing stamps who cleared it. The
-// timesheets flagged-entries view lost both.
+// events). Flagging stamps the reason; clearing stamps who cleared it. A
+// flagged-tickets view lost both.
 const toggleSeedDoc = `{"eventModelingSchemaVersion":"3.17.0","id":"t","name":"T",
 	"swimlanes":[{"id":"s","name":"S","kind":"team"}],
 	"events":{
-		"flagged":{"name":"Flagged","swimlaneId":"s","aggregate":"entry","fields":[{"name":"entryId","type":"string","idAttribute":true},{"name":"reason","type":"string"}]},
-		"cleared":{"name":"Cleared","swimlaneId":"s","aggregate":"entry","fields":[{"name":"entryId","type":"string","idAttribute":true},{"name":"clearedBy","type":"string"}]}},
+		"flagged":{"name":"Flagged","swimlaneId":"s","aggregate":"ticket","fields":[{"name":"ticketId","type":"string","idAttribute":true},{"name":"reason","type":"string"}]},
+		"cleared":{"name":"Cleared","swimlaneId":"s","aggregate":"ticket","fields":[{"name":"ticketId","type":"string","idAttribute":true},{"name":"clearedBy","type":"string"}]}},
 	"commands":{
-		"flag":{"name":"Flag","aggregate":"entry","fields":[{"name":"entryId","type":"string","idAttribute":true},{"name":"reason","type":"string"}]},
-		"clear":{"name":"Clear","aggregate":"entry","fields":[{"name":"entryId","type":"string","idAttribute":true},{"name":"clearedBy","type":"string"}]}},
+		"flag":{"name":"Flag","aggregate":"ticket","fields":[{"name":"ticketId","type":"string","idAttribute":true},{"name":"reason","type":"string"}]},
+		"clear":{"name":"Clear","aggregate":"ticket","fields":[{"name":"ticketId","type":"string","idAttribute":true},{"name":"clearedBy","type":"string"}]}},
 	"readModels":{"flags":{"name":"Flags","builtFromEventIds":["flagged","cleared"],
-		"fields":[{"name":"entryId","type":"string","idAttribute":true},{"name":"reason","type":"string"},{"name":"clearedBy","type":"string"},
+		"fields":[{"name":"ticketId","type":"string","idAttribute":true},{"name":"reason","type":"string"},{"name":"clearedBy","type":"string"},
 			{"name":"isCleared","type":"boolean","derivation":{"kind":"toggle","onEventIds":["cleared"],"offEventIds":["flagged"]}}]}},
 	"screens":{"sc":{"name":"Sc"}},
 	"slices":[
@@ -23,13 +23,13 @@ const toggleSeedDoc = `{"eventModelingSchemaVersion":"3.17.0","id":"t","name":"T
 		{"id":"c","name":"C","pattern":"stateChange","swimlaneId":"s","status":"planned","screenId":"sc","commandId":"clear","eventIds":["cleared"],"scenarios":[]},
 		{"id":"v","name":"V","pattern":"stateView","swimlaneId":"s","status":"planned","screenId":"sc","readModelId":"flags","scenarios":[
 			{"id":"open","name":"open","kind":"stateView",
-			 "given":[{"eventId":"flagged","data":{"entryId":"e1","reason":"late"}}],
+			 "given":[{"eventId":"flagged","data":{"ticketId":"e1","reason":"late"}}],
 			 "when":{"readModelId":"flags"},
-			 "then":{"result":{"flags":[{"entryId":"e1","reason":"late","isCleared":false}]}}},
+			 "then":{"result":{"flags":[{"ticketId":"e1","reason":"late","isCleared":false}]}}},
 			{"id":"closed","name":"closed","kind":"stateView",
-			 "given":[{"eventId":"flagged","data":{"entryId":"e1","reason":"late"}},{"eventId":"cleared","data":{"entryId":"e1","clearedBy":"m1"}}],
+			 "given":[{"eventId":"flagged","data":{"ticketId":"e1","reason":"late"}},{"eventId":"cleared","data":{"ticketId":"e1","clearedBy":"sup1"}}],
 			 "when":{"readModelId":"flags"},
-			 "then":{"result":{"flags":[{"entryId":"e1","reason":"late","clearedBy":"m1","isCleared":true}]}}}]}]}`
+			 "then":{"result":{"flags":[{"ticketId":"e1","reason":"late","clearedBy":"sup1","isCleared":true}]}}}]}]}`
 
 func TestToggleEventsStillMerge(t *testing.T) {
 	results := verifyDoc(t, toggleSeedDoc)

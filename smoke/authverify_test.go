@@ -12,17 +12,17 @@ import (
 	"time"
 )
 
-// TestSecondaryVerifiesAuthAgainstMaster is the end-to-end proof for F-13's
+// TestSecondaryVerifiesAuthAgainstMaster is the end-to-end proof for the
 // fix, from BOTH previously-broken directions in one flow:
 //
-//   - local-read direction: logging in via the secondary (forwarded, F-12)
+//   - local-read direction: logging in via the secondary (forwarded)
 //     yields a master-minted token, which used to make every authenticated
 //     LOCAL read on the secondary fail — the exact regression that broke
 //     TestSecondaryForwardsCommandsToMaster when --cqrsForwardAuth first
 //     shipped. With --cqrsVerifyAuth the secondary verifies it against the
 //     master instead.
-//   - write-forwarding direction (the 2026-08-18 mirror image, found by
-//     project/rotaboard): a token obtained by logging into the SECONDARY,
+//   - write-forwarding direction (the 2026-08-18 mirror image, found by an
+//     application built on pocketcqrs): a token obtained by logging into the SECONDARY,
 //     used for a command forwarded to master, used to get 401 there. Now
 //     login forwards (implied --cqrsForwardAuth), so the token IS
 //     master-minted and the forwarded write lands.
@@ -32,7 +32,7 @@ func TestSecondaryVerifiesAuthAgainstMaster(t *testing.T) {
 	// getting a harness back already proves forwarded login works
 	secondary := startSecondary(t, master, "--cqrsMasterAddr", master.BackendURL, "--cqrsVerifyAuth")
 
-	// the exact read F-13 broke: superuser-gated, served locally from the
+	// the exact read that used to break: superuser-gated, served locally from the
 	// replicated events.db, gate now remote-verifying (fresh, shape C)
 	var feed struct {
 		Events []struct{ AggregateID string } `json:"events"`

@@ -10,12 +10,12 @@ import (
 )
 
 // TestSchemaImportRefusalExitsNonZero and TestSchemaImportRefusalWritesNoPbData
-// prove F-9 and F-10's fix against a real built binary and a real process
+// prove the exit-code and bootstrap fixes against a real built binary and a real process
 // exit code -- neither is observable from an in-process cmd.Execute() call
 // (schema_cmd_test.go's unit tests), since both bugs were specifically about
 // what happens OUTSIDE the command's own RunE: PocketBase's bootstrap
-// running before it (F-10), and pb.Execute() discarding RootCmd.Execute()'s
-// return value on the way back out (F-9). Run from a fresh, empty working
+// running before it, and pb.Execute() discarding RootCmd.Execute()'s
+// return value on the way back out. Run from a fresh, empty working
 // directory each time so a stray pb_data/ has nowhere to hide.
 func TestSchemaImportRefusalExitsNonZero(t *testing.T) {
 	bin := build(t, "github.com/jamestryand/pocketcqrs", filepath.Join(t.TempDir(), "pocketcqrs"))
@@ -56,7 +56,7 @@ func TestSchemaImportRefusalWritesNoPbData(t *testing.T) {
 	}
 	for _, e := range entries {
 		if e.Name() == "pb_data" {
-			t.Fatalf("a refused import created %s, a bootstrap side effect it should never have (F-10)",
+			t.Fatalf("a refused import created %s, a bootstrap side effect it should never have",
 				filepath.Join(dir, "pb_data"))
 		}
 	}
@@ -64,7 +64,7 @@ func TestSchemaImportRefusalWritesNoPbData(t *testing.T) {
 
 // `schema verify` gets the same short-circuit: a failing scenario is a
 // non-zero process exit (the check a build runs), and nothing bootstraps a
-// pb_data/. A hand file whose hook never flags fails the over-limit
+// pb_data/. A hand file whose hook never flags fails the over-threshold
 // scenario of upstream's conditional-outcomes.json.
 func TestSchemaVerifyFailureExitsNonZeroWithNoPbData(t *testing.T) {
 	bin := build(t, "github.com/jamestryand/pocketcqrs", filepath.Join(t.TempDir(), "pocketcqrs"))
@@ -77,8 +77,8 @@ func TestSchemaVerifyFailureExitsNonZeroWithNoPbData(t *testing.T) {
 	if out, err := exec.Command(bin, "schema", "import", doc, "--skip-scenarios", "--out", functions).CombinedOutput(); err != nil {
 		t.Fatalf("import: %v\n%s", err, out)
 	}
-	hand := "function SubmitExpenseOutcome0(state, command) { return false; }\n"
-	if err := os.WriteFile(filepath.Join(functions, "expense.hand.js"), []byte(hand), 0o644); err != nil {
+	hand := "function RequestRefundOutcome0(state, command) { return false; }\n"
+	if err := os.WriteFile(filepath.Join(functions, "refund.hand.js"), []byte(hand), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,6 +89,6 @@ func TestSchemaVerifyFailureExitsNonZeroWithNoPbData(t *testing.T) {
 		t.Fatalf("a failing scenario exited %v; output:\n%s", err, out)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "pb_data")); err == nil {
-		t.Fatal("verify bootstrapped a pb_data/ (F-10)")
+		t.Fatal("verify bootstrapped a pb_data/")
 	}
 }

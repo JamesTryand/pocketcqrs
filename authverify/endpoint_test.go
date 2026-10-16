@@ -26,7 +26,7 @@ func openTestApp(t *testing.T) *tests.TestApp {
 // newSuperuser creates a fresh superuser on app and mints a real auth
 // token for it. Fresh rather than a fixture one, so a second test app
 // (cloned from the same fixture) does NOT have the record — the exact
-// shape F-13 is about: the collection exists on every node, the row only
+// shape this is about: the collection exists on every node, the row only
 // on the master.
 func newSuperuser(t *testing.T, app core.App, email string) (*core.Record, string) {
 	t.Helper()

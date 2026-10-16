@@ -1,6 +1,6 @@
 // Package batching accumulates decided-but-uncommitted commands into
 // batches and commits each batch's events in one SQLite transaction,
-// instead of one transaction per command (item 4). This raises the write
+// instead of one transaction per command. This raises the write
 // throughput ceiling under load by amortizing SQLite's fixed
 // per-transaction cost across many commands -- something a bounded
 // concurrency cap alone cannot do.
@@ -62,7 +62,7 @@ type Writer struct {
 }
 
 // ErrQueueFull is returned by Enqueue when MaxDepth is set and already
-// reached (F-5's admission control).
+// reached (admission control).
 type ErrQueueFull struct {
 	Depth int
 }

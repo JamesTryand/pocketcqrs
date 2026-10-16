@@ -16,8 +16,8 @@ import (
 // projection really builds its rows (dotnetcqrs's host check).
 //
 // Like `schema import` it is a pure file transformation with no running
-// platform, so main() runs it before PocketBase bootstraps (F-10), and a
-// failing scenario is a non-zero exit (F-9): this is the check a build runs.
+// platform, so main() runs it before PocketBase bootstraps, and a
+// failing scenario is a non-zero exit: this is the check a build runs.
 // HAND (a hook only the host can decide) is not a failure.
 func newSchemaVerifyCommand() *cobra.Command {
 	v := &cobra.Command{

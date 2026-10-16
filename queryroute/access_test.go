@@ -15,18 +15,18 @@ import (
 	"github.com/jamestryand/pocketcqrs/queryroute"
 )
 
-// timeEntries is read-access.json's read model on the Go target: managers
-// read every entry, staff their own, and a project manager also those on
-// the projects they manage (a granting scope through projectManagers).
-var timeEntries = queryroute.Spec{
-	Collection:   "timeEntries",
-	Key:          "entryId",
-	Columns:      []string{"entryId", "staffId", "projectId"},
-	RequiredRole: []string{"manager"},
-	SelfSubject:  "staffId",
+// tickets is read-access.json's read model on the Go target: supervisors
+// read every ticket, agents their own, and a team lead also those of the
+// teams they lead (a granting scope through teamLeads).
+var tickets = queryroute.Spec{
+	Collection:   "tickets",
+	Key:          "ticketId",
+	Columns:      []string{"ticketId", "agentId", "teamId"},
+	RequiredRole: []string{"supervisor"},
+	SelfSubject:  "agentId",
 	SelfParam:    "mine",
 	Grants: []queryroute.Grant{{
-		Collection: "projectManagers", MatchField: "staffId", SelectField: "projectId", LocalField: "projectId"}},
+		Collection: "teamLeads", MatchField: "agentId", SelectField: "teamId", LocalField: "teamId"}},
 }
 
 func accessFixture(t *testing.T, spec queryroute.Spec) (*httptest.Server, *tests.TestApp, map[string]string) {
@@ -37,9 +37,9 @@ func accessFixture(t *testing.T, spec queryroute.Spec) (*httptest.Server, *tests
 	}
 	t.Cleanup(app.Cleanup)
 	open := ""
-	for _, name := range []string{"projectManagers", "timeEntries"} {
+	for _, name := range []string{"teamLeads", "tickets"} {
 		col := core.NewBaseCollection(name)
-		col.Fields.Add(&core.TextField{Name: "entryId"}, &core.TextField{Name: "staffId"}, &core.TextField{Name: "projectId"})
+		col.Fields.Add(&core.TextField{Name: "ticketId"}, &core.TextField{Name: "agentId"}, &core.TextField{Name: "teamId"})
 		col.ListRule, col.ViewRule = &open, &open // left public by a migration
 		if err := app.Save(col); err != nil {
 			t.Fatal(err)
@@ -49,32 +49,32 @@ func accessFixture(t *testing.T, spec queryroute.Spec) (*httptest.Server, *tests
 		col, _ := app.FindCollectionByNameOrId(collection)
 		for _, r := range rows {
 			rec := core.NewRecord(col)
-			rec.Set("entryId", r[0])
-			rec.Set("staffId", r[1])
-			rec.Set("projectId", r[2])
+			rec.Set("ticketId", r[0])
+			rec.Set("agentId", r[1])
+			rec.Set("teamId", r[2])
 			if err := app.Save(rec); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	insert("projectManagers", [3]string{"a1", "s9", "p1"}, [3]string{"a2", "s1", "p3"})
-	insert("timeEntries", [3]string{"e1", "s1", "p1"}, [3]string{"e2", "s2", "p1"}, [3]string{"e3", "s3", "p2"}, [3]string{"e4", "", "p2"})
+	insert("teamLeads", [3]string{"l1", "a9", "g1"}, [3]string{"l2", "a1", "g3"})
+	insert("tickets", [3]string{"t1", "a1", "g1"}, [3]string{"t2", "a2", "g1"}, [3]string{"t3", "a3", "g2"}, [3]string{"t4", "", "g2"})
 
 	people := core.NewAuthCollection("people")
-	people.Fields.Add(&core.TextField{Name: "role"}, &core.TextField{Name: "staffId"})
+	people.Fields.Add(&core.TextField{Name: "role"}, &core.TextField{Name: "agentId"})
 	if err := app.Save(people); err != nil {
 		t.Fatal(err)
 	}
 	tokens := map[string]string{}
-	for _, u := range []struct{ name, role, staffID string }{
-		{"manager", "manager", "m1"}, {"s1", "staff", "s1"}, {"s2", "staff", "s2"},
-		{"s9", "staff", "s9"}, {"nobody", "staff", ""},
+	for _, u := range []struct{ name, role, agentID string }{
+		{"supervisor", "supervisor", "sup1"}, {"a1", "agent", "a1"}, {"a2", "agent", "a2"},
+		{"a9", "agent", "a9"}, {"nobody", "agent", ""},
 	} {
 		rec := core.NewRecord(people)
 		rec.SetEmail(u.name + "@people.test")
 		rec.SetPassword("1234567890")
 		rec.Set("role", u.role)
-		rec.Set("staffId", u.staffID)
+		rec.Set("agentId", u.agentID)
 		if err := app.Save(rec); err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func accessFixture(t *testing.T, spec queryroute.Spec) (*httptest.Server, *tests
 	}
 	cfg := queryroute.Config{
 		ResolveOwnRole: func(a *core.Record) string { return a.GetString("role") },
-		SubjectOf:      func(a *core.Record) string { return a.GetString("staffId") },
+		SubjectOf:      func(a *core.Record) string { return a.GetString("agentId") },
 	}
 	if err := queryroute.Register(&core.ServeEvent{App: app, Router: router}, spec, cfg); err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func keysOf(t *testing.T, srv *httptest.Server, token, path string) (int, string
 	_ = json.NewDecoder(resp.Body).Decode(&p)
 	var keys []string
 	for _, it := range p.Items {
-		if k, ok := it["entryId"].(string); ok {
+		if k, ok := it["ticketId"].(string); ok {
 			keys = append(keys, k)
 		}
 	}
@@ -128,32 +128,32 @@ func keysOf(t *testing.T, srv *httptest.Server, token, path string) (int, string
 
 // The whole access rule of schema 3.8.0 on the Go target's route: the role
 // reads every row; anyone else their own rows and those a granting scope
-// admits for them (one projectManagers row must match both: s1 manages p3,
-// which has no entries); the param narrows anyone to their own rows; and
+// admits for them (one teamLeads row must match both: a1 leads g3,
+// which has no tickets); the param narrows anyone to their own rows; and
 // the record API is locked so the route is the only way to read.
 func TestDeclaredAccessOnTheReadRoute(t *testing.T) {
-	srv, _, tokens := accessFixture(t, timeEntries)
-	path := queryroute.PathPrefix + "timeEntries"
+	srv, _, tokens := accessFixture(t, tickets)
+	path := queryroute.PathPrefix + "tickets"
 	for _, c := range []struct {
 		who, query string
 		status     int
 		want       string
 	}{
-		{"manager", "", 200, "e1,e2,e3,e4"},
-		{"s1", "", 200, "e1"},
-		{"s2", "", 200, "e2"},
-		{"s9", "", 200, "e1,e2"},
+		{"supervisor", "", 200, "t1,t2,t3,t4"},
+		{"a1", "", 200, "t1"},
+		{"a2", "", 200, "t2"},
+		{"a9", "", 200, "t1,t2"},
 		{"nobody", "", 403, ""},
-		{"s9", "?mine=1", 200, ""},
-		{"manager", "?mine=1", 200, ""},
-		{"s1", "?mine=1", 200, "e1"},
+		{"a9", "?mine=1", 200, ""},
+		{"supervisor", "?mine=1", 200, ""},
+		{"a1", "?mine=1", 200, "t1"},
 	} {
 		status, got := keysOf(t, srv, tokens[c.who], path+c.query)
 		if status != c.status || got != c.want {
 			t.Errorf("%s%s: got %d %q, want %d %q", c.who, c.query, status, got, c.status, c.want)
 		}
 	}
-	if status, got := keysOf(t, srv, tokens["s2"], "/api/collections/timeEntries/records"); got != "" || status == 200 && got != "" {
+	if status, got := keysOf(t, srv, tokens["a2"], "/api/collections/tickets/records"); got != "" || status == 200 && got != "" {
 		t.Errorf("the record API must be locked when access is declared: %d %q", status, got)
 	}
 }
@@ -167,14 +167,14 @@ func TestSubjectRulesNeedTheSubjectHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(app.Cleanup)
-	col := core.NewBaseCollection("timeEntries")
-	col.Fields.Add(&core.TextField{Name: "entryId"}, &core.TextField{Name: "staffId"}, &core.TextField{Name: "projectId"})
+	col := core.NewBaseCollection("tickets")
+	col.Fields.Add(&core.TextField{Name: "ticketId"}, &core.TextField{Name: "agentId"}, &core.TextField{Name: "teamId"})
 	if err := app.Save(col); err != nil {
 		t.Fatal(err)
 	}
 	router, _ := apis.NewRouter(app)
 	cfg := queryroute.Config{ResolveOwnRole: func(*core.Record) string { return "" }}
-	if err := queryroute.Register(&core.ServeEvent{App: app, Router: router}, timeEntries, cfg); err == nil {
+	if err := queryroute.Register(&core.ServeEvent{App: app, Router: router}, tickets, cfg); err == nil {
 		t.Fatal("registered a route with self/grant access and no SubjectOf hook")
 	}
 }

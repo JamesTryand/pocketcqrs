@@ -17,10 +17,10 @@ import (
 
 // startSecondary boots a second, independent pocketcqrs process against its
 // own data dir, pointed at master's events.db directly via --cqrsEventsPath
-// — the single-writer/multi-reader shape (item 2), same-host plain-file
+// — the single-writer/multi-reader shape, same-host plain-file
 // case. It reuses master's already-built binary rather than building a
 // second copy. extra is appended to the serve args, e.g. "--cqrsMasterAddr",
-// master.BackendURL to also wire forwarding (item 3).
+// master.BackendURL to also wire forwarding.
 func startSecondary(t *testing.T, master *harness, extra ...string) *harness {
 	t.Helper()
 	return startSecondaryAt(t, master, filepath.Join(master.DataDir, "events.db"), extra...)
@@ -55,7 +55,7 @@ func startSecondaryWith(t *testing.T, master *harness, eventsPath string, functi
 	dataDir := filepath.Join(dir, "pb_data")
 
 	// each node needs its OWN local superuser: data.db is never shared or
-	// replicated, only events.db is (F-12) -- the secondary's _superusers
+	// replicated, only events.db is -- the secondary's _superusers
 	// table is a completely independent, unrelated table to the master's.
 	seed := exec.Command(master.Bin, "superuser", "upsert", superuserEmail, superuserPassword, "--dir", dataDir)
 	if out, err := seed.CombinedOutput(); err != nil {
@@ -74,7 +74,7 @@ func startSecondaryWith(t *testing.T, master *harness, eventsPath string, functi
 	return h
 }
 
-// TestSecondaryPollsMasterEventsReadOnly is the end-to-end proof for item 2:
+// TestSecondaryPollsMasterEventsReadOnly is the end-to-end proof for read-only replication:
 // two real, separate OS processes, sharing nothing but master's events.db
 // file on disk (no Litestream VFS -- this is the plain-file degenerate case
 // --cqrsVFS supports, which is exactly what a same-machine or NFS-mounted
@@ -107,8 +107,8 @@ func TestSecondaryPollsMasterEventsReadOnly(t *testing.T) {
 		return false
 	})
 
-	// the secondary's OWN local consumers.Engine (NewEngineWithCheckpoints,
-	// item 1/F-11) folded that event into its OWN local tasks collection --
+	// the secondary's OWN local consumers.Engine (NewEngineWithCheckpoints)
+	// folded that event into its OWN local tasks collection --
 	// proving the checkpoint split actually works across processes, not just
 	// in the isolated unit test.
 	eventually(t, "the secondary's local tasks collection to have t1", func() bool {
@@ -125,7 +125,7 @@ func TestSecondaryPollsMasterEventsReadOnly(t *testing.T) {
 	// commands are refused outright -- this secondary has no --cqrsMasterAddr
 	// configured, a deliberate choice (a pure reporting replica should never
 	// accept write traffic even via forwarding -- see TestSecondaryForwardsCommandsToMaster
-	// for the case where forwarding IS configured, item 3)
+	// for the case where forwarding IS configured)
 	status, body := secondary.api(http.MethodPost, "/api/cqrs/task/t2/CreateTask",
 		jsonBody(map[string]string{"title": "should not apply"}), nil)
 	if status != http.StatusServiceUnavailable {
@@ -147,7 +147,7 @@ func TestSecondaryPollsMasterEventsReadOnly(t *testing.T) {
 	}
 }
 
-// TestSecondaryForwardsCommandsToMaster is the end-to-end proof for item 3:
+// TestSecondaryForwardsCommandsToMaster is the end-to-end proof for command forwarding:
 // a command sent to the SECONDARY actually gets applied, via forwarding, on
 // the master -- a real two-process HTTP reverse proxy hop, not a mock.
 func TestSecondaryForwardsCommandsToMaster(t *testing.T) {
@@ -155,7 +155,7 @@ func TestSecondaryForwardsCommandsToMaster(t *testing.T) {
 	secondary := startSecondary(t, master, "--cqrsMasterAddr", master.BackendURL)
 
 	// the request carries the MASTER's token, not the secondary's: the two
-	// nodes' auth records are unrelated (F-12), and Forward skips local auth
+	// nodes' auth records are unrelated, and Forward skips local auth
 	// entirely on the secondary -- the destination is the one that
 	// authenticates, exactly as gateway.Config.Forward's doc comment says.
 	resp := secondary.do(http.MethodPost, secondary.BackendURL+"/api/cqrs/task/t3/CreateTask",
@@ -201,9 +201,9 @@ func TestSecondaryForwardsCommandsToMaster(t *testing.T) {
 	})
 }
 
-// TestSecondaryForwardingUnaffectedByMasterBatching confirms item 3's
+// TestSecondaryForwardingUnaffectedByMasterBatching confirms command forwarding's
 // forwarding path is completely unaware of whether the master it forwards
-// to has command batching (item 4) turned on -- the secondary just proxies
+// to has command batching turned on -- the secondary just proxies
 // the raw HTTP request either way, and gets back whatever the master's
 // gateway produces, synchronous batching path included.
 func TestSecondaryForwardingUnaffectedByMasterBatching(t *testing.T) {
@@ -235,7 +235,7 @@ func TestSecondaryForwardingUnaffectedByMasterBatching(t *testing.T) {
 }
 
 // TestSecondaryForwardsAuthCollectionWritesToMaster is the end-to-end proof
-// for item 5's remainder (F-12): PocketBase's own native auth traffic --
+// for auth-collection forwarding: PocketBase's own native auth traffic --
 // not just CQRS commands -- gets routed to the master, since a secondary's
 // _superusers table is a genuinely different table, not a stale replica of
 // the master's.

@@ -11,8 +11,8 @@ import (
 // newSchemaImportCommand must return an error when the document is refused,
 // so main()'s short-circuit (which calls Execute() directly and turns a
 // non-nil error into os.Exit(1)) actually has something to act on. This is
-// the unit-level half of F-9's fix; smoke/schema_import_test.go proves the
-// real process exit code and the absence of a pb_data/ side effect (F-10),
+// the unit-level half of the fix; smoke/schema_import_test.go proves the
+// real process exit code and the absence of a pb_data/ side effect,
 // neither of which this in-process test can observe.
 func TestSchemaImportReturnsErrorOnRefusal(t *testing.T) {
 	dir := t.TempDir()
@@ -77,7 +77,7 @@ func TestSchemaImportReturnsNilOnSuccess(t *testing.T) {
 // main()-level short-circuit safe. Assert it directly, not just via
 // inspection: a future edit adding app-dependent behavior to this command
 // without also removing it from the short-circuit would silently reintroduce
-// F-10 (bootstrap runs, RunE doesn't) or a nil-pointer panic (RunE runs
+// a stray bootstrap (bootstrap runs, RunE doesn't) or a nil-pointer panic (RunE runs
 // without the app it now needs). Global flags the app's own RootCmd would
 // have registered (--dir, --dev) are correctly unrecognized here, not
 // silently accepted and ignored -- this command was never wired to act on
@@ -102,9 +102,8 @@ const widgetDoc = `{
 
 // TestSchemaImportDefaultLangIsJS: --lang go is additive. With no --lang
 // flag at all, import must still write .js files exactly as before the
-// flag existed — backward compatibility is a stated design decision
-// (task_plan.md's "--lang go|js on pocketcqrs schema import (default js,
-// backward compatible)"), not an incidental default.
+// flag existed — backward compatibility (default js) is a stated design
+// decision, not an incidental default.
 func TestSchemaImportDefaultLangIsJS(t *testing.T) {
 	dir := t.TempDir()
 	doc := filepath.Join(dir, "widget.json")
@@ -310,7 +309,7 @@ func TestSchemaImportRejectsAppOnlyFlags(t *testing.T) {
 
 // Each aggregate is its own Go package, so a --lang go import writes each
 // into its own directory, <out>/<package>/: two packages in one directory
-// don't compile (the timesheets import wrote fourteen there).
+// don't compile (a many-aggregate import once wrote all of them there).
 func TestSchemaImportGoWritesAPackagePerAggregate(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "out")
 	cmd := newSchemaImportCommand()
@@ -321,7 +320,7 @@ func TestSchemaImportGoWritesAPackagePerAggregate(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
-	for pkg, file := range map[string]string{"entry": "entry.go", "expense": "expense.go"} {
+	for pkg, file := range map[string]string{"booking": "booking.go", "refund": "refund.go"} {
 		src, err := os.ReadFile(filepath.Join(outDir, pkg, file))
 		if err != nil {
 			t.Fatalf("%s: %v", pkg, err)

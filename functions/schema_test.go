@@ -374,7 +374,7 @@ func TestExistingCollectionRuleFollowsTheDeclaration(t *testing.T) {
 	}
 
 	// the model gains an access rule
-	role := `@request.auth.role = "manager"`
+	role := `@request.auth.role = "supervisor"`
 	spec.RuleOverride = &role
 	if err := ReconcileSchemas(app, specs, "public"); err != nil {
 		t.Fatal(err)

@@ -8,13 +8,13 @@ import (
 )
 
 // matchDocument is dateRangeDocument with one match filter (schema 3.1.0)
-// added over staffId. A match filter is checked but not generated yet, so a
+// added over agentId. A match filter is checked but not generated yet, so a
 // well-formed one imports and is reported lossy, by name.
 func matchDocument(f ReadModelFilter) *Document {
 	doc := dateRangeDocument()
-	rm := doc.ReadModels["time-entries"]
+	rm := doc.ReadModels["tickets"]
 	rm.Filters = append(rm.Filters, f)
-	doc.ReadModels["time-entries"] = rm
+	doc.ReadModels["tickets"] = rm
 	return doc
 }
 
@@ -22,13 +22,13 @@ func intp(n int) *int { return &n }
 
 func TestMatchFilterIsCarriedToScaffold(t *testing.T) {
 	mapped, err := Map(matchDocument(ReadModelFilter{
-		Param: "staff", Field: "staffId", Kind: FilterMatch, Mode: MatchModePrefix,
+		Param: "agent", Field: "agentId", Kind: FilterMatch, Mode: MatchModePrefix,
 	}), Options{})
 	if err != nil {
 		t.Fatalf("a well-formed match filter must import: %v", err)
 	}
 	for _, l := range mapped.Report.Lossy {
-		if strings.Contains(l, `"staff"`) {
+		if strings.Contains(l, `"agent"`) {
 			t.Fatalf("a match filter is generated now, not lossy: %s", l)
 		}
 	}
@@ -49,20 +49,20 @@ func TestMatchFilterIsCarriedToScaffold(t *testing.T) {
 
 func piiMatchDocument(filters ...ReadModelFilter) *Document {
 	doc := matchDocument(filters[0])
-	rm := doc.ReadModels["time-entries"]
+	rm := doc.ReadModels["tickets"]
 	rm.Filters = append(rm.Filters, filters[1:]...)
-	rm.Fields[1].PII, rm.Fields[1].PIISubject = true, "entryId"
-	doc.ReadModels["time-entries"] = rm
-	ev := doc.Events["time-logged"]
-	ev.Fields[1].PII, ev.Fields[1].PIISubject = true, "entryId"
-	doc.Events["time-logged"] = ev
+	rm.Fields[1].PII, rm.Fields[1].PIISubject = true, "ticketId"
+	doc.ReadModels["tickets"] = rm
+	ev := doc.Events["ticket-opened"]
+	ev.Fields[1].PII, ev.Fields[1].PIISubject = true, "ticketId"
+	doc.Events["ticket-opened"] = ev
 	return doc
 }
 
 func TestPIIMatchWarningsAndTheSharedPrefixRule(t *testing.T) {
 	mapped, err := Map(piiMatchDocument(
-		ReadModelFilter{Param: "s", Field: "staffId", Kind: FilterMatch, Mode: MatchModePrefix, MinPrefixLength: intp(3)},
-		ReadModelFilter{Param: "c", Field: "staffId", Kind: FilterMatch, Mode: MatchModeContains},
+		ReadModelFilter{Param: "s", Field: "agentId", Kind: FilterMatch, Mode: MatchModePrefix, MinPrefixLength: intp(3)},
+		ReadModelFilter{Param: "c", Field: "agentId", Kind: FilterMatch, Mode: MatchModeContains},
 	), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -72,8 +72,8 @@ func TestPIIMatchWarningsAndTheSharedPrefixRule(t *testing.T) {
 		t.Fatalf("pii prefix and pii contains must each say what they cost: %v", mapped.Report.Warnings)
 	}
 	_, err = Map(piiMatchDocument(
-		ReadModelFilter{Param: "a", Field: "staffId", Kind: FilterMatch, Mode: MatchModePrefix, MinPrefixLength: intp(3)},
-		ReadModelFilter{Param: "b", Field: "staffId", Kind: FilterMatch, Mode: MatchModePrefix, MinPrefixLength: intp(4)},
+		ReadModelFilter{Param: "a", Field: "agentId", Kind: FilterMatch, Mode: MatchModePrefix, MinPrefixLength: intp(3)},
+		ReadModelFilter{Param: "b", Field: "agentId", Kind: FilterMatch, Mode: MatchModePrefix, MinPrefixLength: intp(4)},
 	), Options{})
 	if err == nil || !strings.Contains(err.Error(), "share one hashed prefix index") {
 		t.Fatalf("two hashed prefix filters on one index must agree on minPrefixLength: %v", err)
@@ -82,10 +82,10 @@ func TestPIIMatchWarningsAndTheSharedPrefixRule(t *testing.T) {
 
 func TestVerifyAppliesAMatchFilter(t *testing.T) {
 	rows := map[string]map[string]any{
-		"e1": {"staffId": "Alice"}, "e2": {"staffId": "alan"}, "e3": {"staffId": "Bob"},
+		"t1": {"agentId": "Alice"}, "t2": {"agentId": "alan"}, "t3": {"agentId": "Bob"},
 	}
 	for mode, want := range map[string]int{MatchModeExact: 0, MatchModePrefix: 2, MatchModeContains: 2} {
-		got, err := applyMatch(ReadModelFilter{Field: "staffId", Mode: mode}, rows, "AL")
+		got, err := applyMatch(ReadModelFilter{Field: "agentId", Mode: mode}, rows, "AL")
 		if err != nil || len(got) != want {
 			t.Errorf("%s: want %d rows, got %d %v", mode, want, len(got), err)
 		}
@@ -102,24 +102,24 @@ func TestMatchFilterRulesRejected(t *testing.T) {
 		want   string
 	}{
 		{"unknown field", ReadModelFilter{Param: "q", Field: "nope", Kind: FilterMatch, Mode: MatchModeExact}, false, "nope"},
-		{"bad mode", ReadModelFilter{Param: "q", Field: "staffId", Kind: FilterMatch, Mode: "phonetic"}, false, "phonetic"},
-		{"bad normalize", ReadModelFilter{Param: "q", Field: "staffId", Kind: FilterMatch, Mode: MatchModeExact, Normalize: "soundex"}, false, "soundex"},
-		{"minPrefixLength off prefix", ReadModelFilter{Param: "q", Field: "staffId", Kind: FilterMatch, Mode: MatchModeExact, MinPrefixLength: intp(3)}, false, "minPrefixLength"},
-		{"not text", ReadModelFilter{Param: "q", Field: "taskDate", Kind: FilterMatch, Mode: MatchModeExact}, false, "not a text field"},
-		{"pii prefix without minPrefixLength", ReadModelFilter{Param: "q", Field: "staffId", Kind: FilterMatch, Mode: MatchModePrefix}, true, "minPrefixLength"},
+		{"bad mode", ReadModelFilter{Param: "q", Field: "agentId", Kind: FilterMatch, Mode: "phonetic"}, false, "phonetic"},
+		{"bad normalize", ReadModelFilter{Param: "q", Field: "agentId", Kind: FilterMatch, Mode: MatchModeExact, Normalize: "soundex"}, false, "soundex"},
+		{"minPrefixLength off prefix", ReadModelFilter{Param: "q", Field: "agentId", Kind: FilterMatch, Mode: MatchModeExact, MinPrefixLength: intp(3)}, false, "minPrefixLength"},
+		{"not text", ReadModelFilter{Param: "q", Field: "openedOn", Kind: FilterMatch, Mode: MatchModeExact}, false, "not a text field"},
+		{"pii prefix without minPrefixLength", ReadModelFilter{Param: "q", Field: "agentId", Kind: FilterMatch, Mode: MatchModePrefix}, true, "minPrefixLength"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			doc := matchDocument(c.filter)
 			if c.pii {
-				rm := doc.ReadModels["time-entries"]
+				rm := doc.ReadModels["tickets"]
 				rm.Fields[1].PII = true
-				rm.Fields[1].PIISubject = "entryId"
-				doc.ReadModels["time-entries"] = rm
-				ev := doc.Events["time-logged"]
+				rm.Fields[1].PIISubject = "ticketId"
+				doc.ReadModels["tickets"] = rm
+				ev := doc.Events["ticket-opened"]
 				ev.Fields[1].PII = true
-				ev.Fields[1].PIISubject = "entryId"
-				doc.Events["time-logged"] = ev
+				ev.Fields[1].PIISubject = "ticketId"
+				doc.Events["ticket-opened"] = ev
 			}
 			_, err := Map(doc, Options{})
 			if err == nil {

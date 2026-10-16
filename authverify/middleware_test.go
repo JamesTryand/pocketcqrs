@@ -11,7 +11,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 )
 
-// twoNodes stands up the F-13 topology in miniature: a master with a
+// twoNodes stands up the master/secondary topology in miniature: a master with a
 // superuser record and the verify endpoint, and a secondary cloned from
 // the same fixture — same collections, NOT that record — running the
 // verifying middleware, a route gated the way PocketBase routes are
@@ -69,7 +69,7 @@ func get(t *testing.T, rawURL, token string) *http.Response {
 func TestMiddlewareAuthenticatesAMasterMintedTokenLocally(t *testing.T) {
 	_, sec, _, token, _, _ := twoNodes(t, 5*time.Minute, 0)
 
-	// the exact F-13 failure: this route's gate needs re.Auth, the token is
+	// the exact failure: this route's gate needs re.Auth, the token is
 	// master-minted, and this node's data.db has neither the secret nor the
 	// record — before this package, an unconditional 401
 	if resp := get(t, sec+"/f13-protected", token); resp.StatusCode != http.StatusOK {

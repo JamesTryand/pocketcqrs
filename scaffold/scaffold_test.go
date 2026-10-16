@@ -242,7 +242,7 @@ func TestEventFieldsAreNotInheritedFromTheCommand(t *testing.T) {
 	}
 }
 
-// TestGroupByValidate covers F-20/schema 2.3.0's groupBy derivation: a
+// TestGroupByValidate covers schema 2.3.0's groupBy derivation: a
 // missing groupByField, a missing/empty subfields list, and a toggle
 // subfield (rejected — see FieldDerivation.GroupByField's own doc comment
 // and mapping.go's groupBySubfields, whose reasoning this mirrors as a
@@ -252,18 +252,18 @@ func TestEventFieldsAreNotInheritedFromTheCommand(t *testing.T) {
 func TestGroupByValidate(t *testing.T) {
 	base := func(dv *FieldDerivation, subfields []Field) Domain {
 		return Domain{
-			Aggregate: "payrollPeriod",
-			Commands:  []Command{{Name: "LogTime", Events: []Event{{Name: "TimeLogged", NoFields: true}}}},
+			Aggregate: "salesPeriod",
+			Commands:  []Command{{Name: "RecordSale", Events: []Event{{Name: "SaleRecorded", NoFields: true}}}},
 			ReadModels: []ReadModel{{
-				Collection: "payrollPeriods", Key: "periodId",
-				Fields: []Field{{Name: "staffTotals", Type: "json", Derivation: dv, Subfields: subfields}},
+				Collection: "salesPeriods", Key: "periodId",
+				Fields: []Field{{Name: "memberTotals", Type: "json", Derivation: dv, Subfields: subfields}},
 			}},
 		}
 	}
 	validSubfields := []Field{
-		{Name: "staffId", Type: "text"},
-		{Name: "entriesLogged", Type: "number", Derivation: &FieldDerivation{
-			Kind: DerivationCount, IncrementOnEventIDs: []string{"TimeLogged"},
+		{Name: "memberId", Type: "text"},
+		{Name: "salesRecorded", Type: "number", Derivation: &FieldDerivation{
+			Kind: DerivationCount, IncrementOnEventIDs: []string{"SaleRecorded"},
 		}},
 	}
 
@@ -274,11 +274,11 @@ func TestGroupByValidate(t *testing.T) {
 		want      string
 	}{
 		{"missing groupByField", &FieldDerivation{Kind: DerivationGroupBy}, validSubfields,
-			`field "staffTotals" is a groupBy derivation but is missing groupByField`},
-		{"missing subfields", &FieldDerivation{Kind: DerivationGroupBy, GroupByField: "staffId"}, nil,
-			`field "staffTotals" is a groupBy derivation but declares no subfields`},
-		{"toggle subfield", &FieldDerivation{Kind: DerivationGroupBy, GroupByField: "staffId"}, []Field{
-			{Name: "staffId", Type: "text"},
+			`field "memberTotals" is a groupBy derivation but is missing groupByField`},
+		{"missing subfields", &FieldDerivation{Kind: DerivationGroupBy, GroupByField: "memberId"}, nil,
+			`field "memberTotals" is a groupBy derivation but declares no subfields`},
+		{"toggle subfield", &FieldDerivation{Kind: DerivationGroupBy, GroupByField: "memberId"}, []Field{
+			{Name: "memberId", Type: "text"},
 			{Name: "ssoEnabled", Type: "bool", Derivation: &FieldDerivation{
 				Kind: DerivationToggle, OnEventIDs: []string{"A"}, OffEventIDs: []string{"B"},
 			}},
@@ -295,7 +295,7 @@ func TestGroupByValidate(t *testing.T) {
 		})
 	}
 
-	valid := base(&FieldDerivation{Kind: DerivationGroupBy, GroupByField: "staffId"}, validSubfields)
+	valid := base(&FieldDerivation{Kind: DerivationGroupBy, GroupByField: "memberId"}, validSubfields)
 	if err := valid.Validate(); err != nil {
 		t.Errorf("a well-formed groupBy field should be valid: %v", err)
 	}

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// R3: a PerEvent reactor keys its target by the triggering event's id, in
+// A PerEvent reactor keys its target by the triggering event's id, in
 // both generators; otherwise by the source stream's id, as before.
 func TestReactorTargetIDs(t *testing.T) {
 	d := Domain{

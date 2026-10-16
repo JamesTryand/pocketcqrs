@@ -3,22 +3,22 @@
   "eventModelingSchemaVersion": "3.16.0",
   "id": "rows-per-list-item-example",
   "name": "Rows Per List Item Example",
-  "description": "Rows per list item (3.16.0): an invoice's lines, each carrying its project, are shown to each project's manager as that project's part of the invoice: one row per invoice and project, holding the project's lines, their subtotal and the invoice's status and number. The rows are built from the invoice's own events (rowsPerListItem); the subtotal is the sum of a subfield over the row's lines, given only once every line carries it (sumOfItems); the status is a literal per event (byEvent). A line with no project, such as the currency conversion, is in no row.",
+  "description": "Rows per list item (3.16.0): a delivery run's parcels, each carrying the depot it goes through, are shown to each depot's supervisor as that depot's load on the run: one row per delivery and depot, holding the depot's parcels, their total weight and the delivery's status and run number. The rows are built from the delivery's own events (rowsPerListItem); the total weight is the sum of a subfield over the row's parcels, given only once every parcel carries it (sumOfItems); the status is a literal per event (byEvent). An item with no depot, such as the van's roll cages, is in no row.",
   "swimlanes": [
     {
-      "id": "billing",
-      "name": "Billing",
+      "id": "dispatch",
+      "name": "Dispatch",
       "kind": "team"
     }
   ],
   "events": {
-    "invoice-drafted": {
-      "name": "Invoice Drafted",
-      "swimlaneId": "billing",
-      "aggregate": "invoice",
+    "delivery-planned": {
+      "name": "Delivery Planned",
+      "swimlaneId": "dispatch",
+      "aggregate": "delivery",
       "fields": [
         {
-          "name": "invoiceId",
+          "name": "deliveryId",
           "type": "string",
           "idAttribute": true
         },
@@ -27,27 +27,27 @@
           "type": "string"
         },
         {
-          "name": "lines",
+          "name": "parcels",
           "type": "custom",
           "cardinality": "list",
-          "description": "Each line in pounds, before conversion: no convertedAmount yet.",
+          "description": "Each parcel with its declared weight, before weighing: no weighedWeightKg yet.",
           "subfields": [
             {
-              "name": "entryId",
+              "name": "parcelId",
               "type": "string"
             },
             {
-              "name": "projectId",
+              "name": "depotId",
               "type": "string",
               "optional": true
             },
             {
-              "name": "localAmount",
+              "name": "declaredWeightKg",
               "type": "decimal",
               "optional": true
             },
             {
-              "name": "convertedAmount",
+              "name": "weighedWeightKg",
               "type": "decimal",
               "optional": true
             },
@@ -60,46 +60,46 @@
         }
       ]
     },
-    "invoice-issued": {
-      "name": "Invoice Issued",
-      "swimlaneId": "billing",
-      "aggregate": "invoice",
+    "delivery-dispatched": {
+      "name": "Delivery Dispatched",
+      "swimlaneId": "dispatch",
+      "aggregate": "delivery",
       "fields": [
         {
-          "name": "invoiceId",
+          "name": "deliveryId",
           "type": "string",
           "idAttribute": true
         },
         {
-          "name": "invoiceNumber",
+          "name": "runNumber",
           "type": "string"
         },
         {
-          "name": "invoiceCurrency",
+          "name": "vehicleId",
           "type": "string"
         },
         {
-          "name": "lines",
+          "name": "parcels",
           "type": "custom",
           "cardinality": "list",
-          "description": "Each line converted into the invoice currency; the conversion margin is a line with no project.",
+          "description": "Each parcel weighed at loading; the van's roll cages are an item with no depot.",
           "subfields": [
             {
-              "name": "entryId",
+              "name": "parcelId",
               "type": "string"
             },
             {
-              "name": "projectId",
+              "name": "depotId",
               "type": "string",
               "optional": true
             },
             {
-              "name": "localAmount",
+              "name": "declaredWeightKg",
               "type": "decimal",
               "optional": true
             },
             {
-              "name": "convertedAmount",
+              "name": "weighedWeightKg",
               "type": "decimal",
               "optional": true
             },
@@ -112,13 +112,13 @@
         }
       ]
     },
-    "invoice-discarded": {
-      "name": "Invoice Discarded",
-      "swimlaneId": "billing",
-      "aggregate": "invoice",
+    "delivery-cancelled": {
+      "name": "Delivery Cancelled",
+      "swimlaneId": "dispatch",
+      "aggregate": "delivery",
       "fields": [
         {
-          "name": "invoiceId",
+          "name": "deliveryId",
           "type": "string",
           "idAttribute": true
         }
@@ -126,9 +126,9 @@
     }
   },
   "commands": {
-    "draft-invoice": {
-      "name": "Draft Invoice",
-      "aggregate": "invoice",
+    "plan-delivery": {
+      "name": "Plan Delivery",
+      "aggregate": "delivery",
       "fields": [
         {
           "name": "customerId",
@@ -136,51 +136,51 @@
         }
       ]
     },
-    "issue-invoice": {
-      "name": "Issue Invoice",
-      "aggregate": "invoice",
+    "dispatch-delivery": {
+      "name": "Dispatch Delivery",
+      "aggregate": "delivery",
       "fields": [
         {
-          "name": "invoiceCurrency",
+          "name": "vehicleId",
           "type": "string"
         }
       ]
     },
-    "discard-invoice": {
-      "name": "Discard Invoice",
-      "aggregate": "invoice",
+    "cancel-delivery": {
+      "name": "Cancel Delivery",
+      "aggregate": "delivery",
       "fields": []
     }
   },
   "readModels": {
-    "invoice-parts": {
-      "name": "Invoice Parts",
-      "question": "What is each project's part of each invoice: its lines, their subtotal, and the invoice's status and number?",
+    "depot-loads": {
+      "name": "Depot Loads",
+      "question": "What is each depot's load on each delivery: its parcels, their total weight, and the delivery's status and run number?",
       "builtFromEventIds": [
-        "invoice-drafted",
-        "invoice-issued",
-        "invoice-discarded"
+        "delivery-planned",
+        "delivery-dispatched",
+        "delivery-cancelled"
       ],
       "removedByEventIds": [
-        "invoice-discarded"
+        "delivery-cancelled"
       ],
       "rowsPerListItem": {
-        "listField": "lines",
-        "groupBy": "projectId"
+        "listField": "parcels",
+        "groupBy": "depotId"
       },
       "fields": [
         {
-          "name": "partId",
+          "name": "loadId",
           "type": "string",
           "idAttribute": true,
-          "description": "<invoice stream>|<projectId>"
+          "description": "<delivery stream>|<depotId>"
         },
         {
-          "name": "invoiceId",
+          "name": "deliveryId",
           "type": "string"
         },
         {
-          "name": "projectId",
+          "name": "depotId",
           "type": "string"
         },
         {
@@ -188,11 +188,11 @@
           "type": "string"
         },
         {
-          "name": "invoiceNumber",
+          "name": "runNumber",
           "type": "string"
         },
         {
-          "name": "invoiceCurrency",
+          "name": "vehicleId",
           "type": "string"
         },
         {
@@ -201,33 +201,33 @@
           "derivation": {
             "kind": "byEvent",
             "values": {
-              "invoice-drafted": "draft",
-              "invoice-issued": "issued"
+              "delivery-planned": "planned",
+              "delivery-dispatched": "dispatched"
             }
           }
         },
         {
-          "name": "lines",
+          "name": "parcels",
           "type": "custom",
           "cardinality": "list",
-          "description": "The project's own lines.",
+          "description": "The depot's own parcels.",
           "subfields": [
             {
-              "name": "entryId",
+              "name": "parcelId",
               "type": "string"
             },
             {
-              "name": "projectId",
+              "name": "depotId",
               "type": "string",
               "optional": true
             },
             {
-              "name": "localAmount",
+              "name": "declaredWeightKg",
               "type": "decimal",
               "optional": true
             },
             {
-              "name": "convertedAmount",
+              "name": "weighedWeightKg",
               "type": "decimal",
               "optional": true
             },
@@ -239,250 +239,250 @@
           ]
         },
         {
-          "name": "subtotal",
+          "name": "totalWeightKg",
           "type": "decimal",
           "derivation": {
             "kind": "sumOfItems",
-            "subfield": "convertedAmount"
+            "subfield": "weighedWeightKg"
           },
-          "description": "The project's lines in the invoice currency, once every one of them is converted."
+          "description": "The depot's parcels by weighed weight, once every one of them is weighed."
         }
       ]
     }
   },
   "screens": {
-    "billing-screen": {
-      "name": "Billing"
+    "dispatch-screen": {
+      "name": "Dispatch"
     }
   },
   "slices": [
     {
-      "id": "draft-invoice-slice",
-      "name": "Draft Invoice",
+      "id": "plan-delivery-slice",
+      "name": "Plan Delivery",
       "pattern": "stateChange",
-      "swimlaneId": "billing",
+      "swimlaneId": "dispatch",
       "status": "created",
-      "screenId": "billing-screen",
-      "commandId": "draft-invoice",
+      "screenId": "dispatch-screen",
+      "commandId": "plan-delivery",
       "eventIds": [
-        "invoice-drafted"
+        "delivery-planned"
       ],
       "scenarios": []
     },
     {
-      "id": "issue-invoice-slice",
-      "name": "Issue Invoice",
+      "id": "dispatch-delivery-slice",
+      "name": "Dispatch Delivery",
       "pattern": "stateChange",
-      "swimlaneId": "billing",
+      "swimlaneId": "dispatch",
       "status": "created",
-      "screenId": "billing-screen",
-      "commandId": "issue-invoice",
+      "screenId": "dispatch-screen",
+      "commandId": "dispatch-delivery",
       "eventIds": [
-        "invoice-issued"
+        "delivery-dispatched"
       ],
       "scenarios": []
     },
     {
-      "id": "discard-invoice-slice",
-      "name": "Discard Invoice",
+      "id": "cancel-delivery-slice",
+      "name": "Cancel Delivery",
       "pattern": "stateChange",
-      "swimlaneId": "billing",
+      "swimlaneId": "dispatch",
       "status": "created",
-      "screenId": "billing-screen",
-      "commandId": "discard-invoice",
+      "screenId": "dispatch-screen",
+      "commandId": "cancel-delivery",
       "eventIds": [
-        "invoice-discarded"
+        "delivery-cancelled"
       ],
       "scenarios": []
     },
     {
-      "id": "view-invoice-parts-slice",
-      "name": "View Invoice Parts",
+      "id": "view-depot-loads-slice",
+      "name": "View Depot Loads",
       "pattern": "stateView",
-      "swimlaneId": "billing",
+      "swimlaneId": "dispatch",
       "status": "created",
-      "screenId": "billing-screen",
-      "readModelId": "invoice-parts",
+      "screenId": "dispatch-screen",
+      "readModelId": "depot-loads",
       "scenarios": [
         {
-          "id": "issued-invoice-has-a-part-per-project",
+          "id": "dispatched-delivery-has-a-load-per-depot",
           "kind": "stateView",
-          "name": "An issued USD invoice has a part per project: p1's two lines of 306.00 are 612.00, p2's one is 136.00; the conversion margin of 22.44 has no project and is in neither",
+          "name": "A dispatched delivery has a load per depot: d1's two parcels of 13.00 kg are 26.00 kg, d2's one is 6.00 kg; the roll cages of 40.50 kg have no depot and are in neither",
           "given": [
             {
-              "eventId": "invoice-drafted",
+              "eventId": "delivery-planned",
               "data": {
-                "invoiceId": "inv-1",
+                "deliveryId": "del-1",
                 "customerId": "c1",
-                "lines": [
+                "parcels": [
                   {
-                    "entryId": "t1",
-                    "projectId": "p1",
-                    "localAmount": 225
+                    "parcelId": "pc1",
+                    "depotId": "d1",
+                    "declaredWeightKg": 12
                   },
                   {
-                    "entryId": "t2",
-                    "projectId": "p1",
-                    "localAmount": 225
+                    "parcelId": "pc2",
+                    "depotId": "d1",
+                    "declaredWeightKg": 12
                   },
                   {
-                    "entryId": "t3",
-                    "projectId": "p2",
-                    "localAmount": 100
+                    "parcelId": "pc3",
+                    "depotId": "d2",
+                    "declaredWeightKg": 5
                   }
                 ]
               }
             },
             {
-              "eventId": "invoice-issued",
+              "eventId": "delivery-dispatched",
               "data": {
-                "invoiceId": "inv-1",
-                "invoiceNumber": "SI-7",
-                "invoiceCurrency": "USD",
-                "lines": [
+                "deliveryId": "del-1",
+                "runNumber": "RUN-7",
+                "vehicleId": "van-3",
+                "parcels": [
                   {
-                    "entryId": "t1",
-                    "projectId": "p1",
-                    "localAmount": 225,
-                    "convertedAmount": 306
+                    "parcelId": "pc1",
+                    "depotId": "d1",
+                    "declaredWeightKg": 12,
+                    "weighedWeightKg": 13
                   },
                   {
-                    "entryId": "t2",
-                    "projectId": "p1",
-                    "localAmount": 225,
-                    "convertedAmount": 306
+                    "parcelId": "pc2",
+                    "depotId": "d1",
+                    "declaredWeightKg": 12,
+                    "weighedWeightKg": 13
                   },
                   {
-                    "entryId": "t3",
-                    "projectId": "p2",
-                    "localAmount": 100,
-                    "convertedAmount": 136
+                    "parcelId": "pc3",
+                    "depotId": "d2",
+                    "declaredWeightKg": 5,
+                    "weighedWeightKg": 6
                   },
                   {
-                    "entryId": "currency-conversion",
-                    "convertedAmount": 22.44,
-                    "description": "Currency conversion"
+                    "parcelId": "roll-cages",
+                    "weighedWeightKg": 40.5,
+                    "description": "Roll cages"
                   }
                 ]
               }
             }
           ],
           "when": {
-            "readModelId": "invoice-parts"
+            "readModelId": "depot-loads"
           },
           "then": {
             "result": {
               "entries": [
                 {
-                  "invoiceId": "inv-1",
-                  "projectId": "p1",
+                  "deliveryId": "del-1",
+                  "depotId": "d1",
                   "customerId": "c1",
-                  "invoiceNumber": "SI-7",
-                  "status": "issued",
-                  "subtotal": 612
+                  "runNumber": "RUN-7",
+                  "status": "dispatched",
+                  "totalWeightKg": 26
                 },
                 {
-                  "invoiceId": "inv-1",
-                  "projectId": "p2",
+                  "deliveryId": "del-1",
+                  "depotId": "d2",
                   "customerId": "c1",
-                  "invoiceNumber": "SI-7",
-                  "status": "issued",
-                  "subtotal": 136
+                  "runNumber": "RUN-7",
+                  "status": "dispatched",
+                  "totalWeightKg": 6
                 }
               ]
             }
           }
         },
         {
-          "id": "a-drafts-parts-have-no-subtotal",
+          "id": "a-planned-deliverys-loads-have-no-total-weight",
           "kind": "stateView",
-          "name": "A draft's parts have their lines but no subtotal: the lines are in pounds, not yet converted",
+          "name": "A planned delivery's loads have their parcels but no total weight: the parcels carry only declared weights, not yet weighed",
           "given": [
             {
-              "eventId": "invoice-drafted",
+              "eventId": "delivery-planned",
               "data": {
-                "invoiceId": "inv-1",
+                "deliveryId": "del-1",
                 "customerId": "c1",
-                "lines": [
+                "parcels": [
                   {
-                    "entryId": "t1",
-                    "projectId": "p1",
-                    "localAmount": 225
+                    "parcelId": "pc1",
+                    "depotId": "d1",
+                    "declaredWeightKg": 12
                   },
                   {
-                    "entryId": "t2",
-                    "projectId": "p1",
-                    "localAmount": 225
+                    "parcelId": "pc2",
+                    "depotId": "d1",
+                    "declaredWeightKg": 12
                   },
                   {
-                    "entryId": "t3",
-                    "projectId": "p2",
-                    "localAmount": 100
+                    "parcelId": "pc3",
+                    "depotId": "d2",
+                    "declaredWeightKg": 5
                   }
                 ]
               }
             }
           ],
           "when": {
-            "readModelId": "invoice-parts"
+            "readModelId": "depot-loads"
           },
           "then": {
             "result": {
               "entries": [
                 {
-                  "invoiceId": "inv-1",
-                  "projectId": "p1",
-                  "status": "draft",
-                  "subtotal": null
+                  "deliveryId": "del-1",
+                  "depotId": "d1",
+                  "status": "planned",
+                  "totalWeightKg": null
                 },
                 {
-                  "invoiceId": "inv-1",
-                  "projectId": "p2",
-                  "status": "draft",
-                  "subtotal": null
+                  "deliveryId": "del-1",
+                  "depotId": "d2",
+                  "status": "planned",
+                  "totalWeightKg": null
                 }
               ]
             }
           }
         },
         {
-          "id": "a-discarded-drafts-parts-leave",
+          "id": "a-cancelled-deliverys-loads-leave",
           "kind": "stateView",
-          "name": "A discarded draft's parts leave",
+          "name": "A cancelled delivery's loads leave",
           "given": [
             {
-              "eventId": "invoice-drafted",
+              "eventId": "delivery-planned",
               "data": {
-                "invoiceId": "inv-1",
+                "deliveryId": "del-1",
                 "customerId": "c1",
-                "lines": [
+                "parcels": [
                   {
-                    "entryId": "t1",
-                    "projectId": "p1",
-                    "localAmount": 225
+                    "parcelId": "pc1",
+                    "depotId": "d1",
+                    "declaredWeightKg": 12
                   },
                   {
-                    "entryId": "t2",
-                    "projectId": "p1",
-                    "localAmount": 225
+                    "parcelId": "pc2",
+                    "depotId": "d1",
+                    "declaredWeightKg": 12
                   },
                   {
-                    "entryId": "t3",
-                    "projectId": "p2",
-                    "localAmount": 100
+                    "parcelId": "pc3",
+                    "depotId": "d2",
+                    "declaredWeightKg": 5
                   }
                 ]
               }
             },
             {
-              "eventId": "invoice-discarded",
+              "eventId": "delivery-cancelled",
               "data": {
-                "invoiceId": "inv-1"
+                "deliveryId": "del-1"
               }
             }
           ],
           "when": {
-            "readModelId": "invoice-parts"
+            "readModelId": "depot-loads"
           },
           "then": {
             "result": {

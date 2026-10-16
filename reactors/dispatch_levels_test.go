@@ -10,7 +10,7 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 )
 
-// The two arms have to stay apart, and the reason is the whole of F-2.
+// The two arms have to stay apart, and the reason is the whole of the dispatch gate.
 //
 // A domain rejection is the AT-LEAST-ONCE IDEMPOTENCY PATH working: a
 // redelivered reaction hits the target's own "already exists" rule and is

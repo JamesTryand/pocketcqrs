@@ -8,7 +8,7 @@ import (
 	"github.com/pocketbase/pocketbase/tests"
 )
 
-// TestEnsureCollectionShape pins the shape Item 11's design relies on:
+// TestEnsureCollectionShape pins the shape the capability model's design relies on:
 // password auth stays ON (unlike pocketcqrs-extensions' service_accounts,
 // these records log in themselves), the capabilities field exists and is
 // NOT hidden (authverify.RequireCapability's remote-verify path reads it

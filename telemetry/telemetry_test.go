@@ -29,7 +29,7 @@ func servingNode(t *testing.T, status ...consumers.Status) *opsport.Health {
 	t.Helper()
 	h := opsport.New("node-3", started)
 	h.SetIdentity(nodeidentity.Identity{
-		NodeID: nodeID, Kind: nodeidentity.Persistent, Instance: "timesheets", Host: "node-3",
+		NodeID: nodeID, Kind: nodeidentity.Persistent, Instance: "orders", Host: "node-3",
 		Stack: nodeidentity.Stack, Role: "writer", StartedAt: started,
 	})
 	if err := h.BeginCatchUp(func() []consumers.Status { return status }, time.Minute, nil); err != nil {
@@ -393,7 +393,7 @@ func TestItWaitsForAnIdentityBecauseTheKeyIsTheNodeID(t *testing.T) {
 	if n := len(f.all()); n != 0 {
 		t.Fatalf("published %d snapshots before there was an identity", n)
 	}
-	h.SetIdentity(nodeidentity.Identity{NodeID: nodeID, Kind: nodeidentity.Persistent, Instance: "timesheets",
+	h.SetIdentity(nodeidentity.Identity{NodeID: nodeID, Kind: nodeidentity.Persistent, Instance: "orders",
 		Host: "node-3", Stack: nodeidentity.Stack, Role: "writer", StartedAt: started})
 
 	waitFor(t, "a snapshot once identity resolved", func() bool { return len(f.all()) > 0 })

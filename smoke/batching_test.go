@@ -8,7 +8,7 @@ import (
 )
 
 // TestBatchingNormalRequestUnchangedContract confirms the whole point of
-// item 4's design: with --cqrsCommandBatching on, a command still returns
+// batching's design: with --cqrsCommandBatching on, a command still returns
 // 200 with its events synchronously, over a real HTTP round trip -- no
 // client-visible change from the non-batching default.
 //

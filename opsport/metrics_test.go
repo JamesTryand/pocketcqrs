@@ -124,7 +124,7 @@ func TestOnceServingTheIdentityReadinessAndEveryConsumerAreReported(t *testing.T
 
 	body := m.Render(context.Background(), n.health)
 
-	expectValue(t, body, `cqrs_node_info{node_id="0192b5c4-7e1a-7c3e-9f00-5b2d8a1c4e77",instance="timesheets",host="node-3",role="writer",stack="pocketcqrs",contract_version="1.0"}`, "1")
+	expectValue(t, body, `cqrs_node_info{node_id="0192b5c4-7e1a-7c3e-9f00-5b2d8a1c4e77",instance="orders",host="node-3",role="writer",stack="pocketcqrs",contract_version="1.0"}`, "1")
 	expectValue(t, body, `cqrs_readiness_status{status="ready"}`, "1")
 	expectValue(t, body, "cqrs_events_appended_total", "1")
 	expectValue(t, body, "cqrs_deadletter_depth", "2")

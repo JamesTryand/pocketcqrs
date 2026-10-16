@@ -16,34 +16,33 @@ import (
 	"github.com/pocketbase/pocketbase/tools/types"
 )
 
-// accessDomain is read-access.json's shape: time entries a manager reads in
-// full, a staff member reads their own of, and a project manager also reads
-// on the projects they manage (a scope through project managers that
-// grants access).
+// accessDomain is read-access.json's shape: tickets a supervisor reads in
+// full, an agent reads their own of, and a team lead also reads for the
+// teams they lead (a scope through team leads that grants access).
 func accessDomain() Domain {
 	return Domain{
-		Aggregate:    "entry",
+		Aggregate:    "ticket",
 		RoleField:    "role",
-		SubjectField: "staffId",
-		Commands: []Command{{Name: "LogEntry", Once: true,
-			Events: []Event{{Name: "EntryLogged", Fields: []Field{{Name: "staffId", Type: "text"}, {Name: "projectId", Type: "text"}}}}}},
+		SubjectField: "agentId",
+		Commands: []Command{{Name: "OpenTicket", Once: true,
+			Events: []Event{{Name: "TicketOpened", Fields: []Field{{Name: "agentId", Type: "text"}, {Name: "teamId", Type: "text"}}}}}},
 		ReadModels: []ReadModel{
 			{
-				Collection:   "timeEntries",
-				Key:          "entryId",
-				Fields:       []Field{{Name: "staffId", Type: "text"}, {Name: "projectId", Type: "text"}},
-				On:           []string{"EntryLogged"},
-				RequiredRole: []string{"manager"},
-				SelfAccess:   &SelfAccess{SubjectField: "staffId", Param: "mine"},
-				Scopes: []ReadModelScope{{Param: "pmStaffId", GrantsAccess: true, Via: ReadModelScopeVia{
-					Collection: "projectManagers", MatchParamTo: "staffId", SelectField: "projectId", FilterLocalField: "projectId"}}},
+				Collection:   "tickets",
+				Key:          "ticketId",
+				Fields:       []Field{{Name: "agentId", Type: "text"}, {Name: "teamId", Type: "text"}},
+				On:           []string{"TicketOpened"},
+				RequiredRole: []string{"supervisor"},
+				SelfAccess:   &SelfAccess{SubjectField: "agentId", Param: "mine"},
+				Scopes: []ReadModelScope{{Param: "leadAgentId", GrantsAccess: true, Via: ReadModelScopeVia{
+					Collection: "teamLeads", MatchParamTo: "agentId", SelectField: "teamId", FilterLocalField: "teamId"}}},
 			},
 			{
-				Collection:   "projectManagers",
+				Collection:   "teamLeads",
 				Key:          "assignmentId",
-				Fields:       []Field{{Name: "staffId", Type: "text"}, {Name: "projectId", Type: "text"}},
-				On:           []string{"EntryLogged"},
-				RequiredRole: []string{"manager"},
+				Fields:       []Field{{Name: "agentId", Type: "text"}, {Name: "teamId", Type: "text"}},
+				On:           []string{"TicketOpened"},
+				RequiredRole: []string{"supervisor"},
 			},
 		},
 	}
@@ -76,13 +75,13 @@ func TestGeneratedReadRulesRunInPocketBase(t *testing.T) {
 	t.Cleanup(app.Cleanup)
 
 	people := core.NewAuthCollection("people")
-	people.Fields.Add(&core.TextField{Name: "role"}, &core.TextField{Name: "staffId"})
+	people.Fields.Add(&core.TextField{Name: "role"}, &core.TextField{Name: "agentId"})
 	if err := app.Save(people); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"projectManagers", "timeEntries"} {
+	for _, name := range []string{"teamLeads", "tickets"} {
 		col := core.NewBaseCollection(name)
-		col.Fields.Add(&core.TextField{Name: "key"}, &core.TextField{Name: "staffId"}, &core.TextField{Name: "projectId"})
+		col.Fields.Add(&core.TextField{Name: "key"}, &core.TextField{Name: "agentId"}, &core.TextField{Name: "teamId"})
 		col.ListRule = types.Pointer(rules[name])
 		col.ViewRule = types.Pointer(rules[name])
 		if err := app.Save(col); err != nil {
@@ -94,27 +93,27 @@ func TestGeneratedReadRulesRunInPocketBase(t *testing.T) {
 		for _, r := range rows {
 			rec := core.NewRecord(col)
 			rec.Set("key", r[0])
-			rec.Set("staffId", r[1])
-			rec.Set("projectId", r[2])
+			rec.Set("agentId", r[1])
+			rec.Set("teamId", r[2])
 			if err := app.Save(rec); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	// s9 manages p1; s1 manages p3, which has no entries
-	insert("projectManagers", [3]string{"a1", "s9", "p1"}, [3]string{"a2", "s1", "p3"})
-	insert("timeEntries", [3]string{"e1", "s1", "p1"}, [3]string{"e2", "s2", "p1"}, [3]string{"e3", "s3", "p2"}, [3]string{"e4", "", "p2"})
+	// a9 leads g1; a1 leads g3, which has no tickets
+	insert("teamLeads", [3]string{"l1", "a9", "g1"}, [3]string{"l2", "a1", "g3"})
+	insert("tickets", [3]string{"t1", "a1", "g1"}, [3]string{"t2", "a2", "g1"}, [3]string{"t3", "a3", "g2"}, [3]string{"t4", "", "g2"})
 
 	tokens := map[string]string{}
-	for _, u := range []struct{ name, role, staffID string }{
-		{"manager", "manager", "m1"}, {"s1", "staff", "s1"}, {"s2", "staff", "s2"},
-		{"s9", "staff", "s9"}, {"nobody", "staff", ""},
+	for _, u := range []struct{ name, role, agentID string }{
+		{"supervisor", "supervisor", "sup1"}, {"a1", "agent", "a1"}, {"a2", "agent", "a2"},
+		{"a9", "agent", "a9"}, {"nobody", "agent", ""},
 	} {
 		rec := core.NewRecord(people)
 		rec.SetEmail(u.name + "@example.com")
 		rec.SetPassword("secret-password")
 		rec.Set("role", u.role)
-		rec.Set("staffId", u.staffID)
+		rec.Set("agentId", u.agentID)
 		if err := app.Save(rec); err != nil {
 			t.Fatal(err)
 		}
@@ -136,7 +135,7 @@ func TestGeneratedReadRulesRunInPocketBase(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	list := func(caller string) []string {
-		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/collections/timeEntries/records?perPage=100", nil)
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/collections/tickets/records?perPage=100", nil)
 		if caller != "" {
 			req.Header.Set("Authorization", tokens[caller])
 		}
@@ -163,15 +162,15 @@ func TestGeneratedReadRulesRunInPocketBase(t *testing.T) {
 	}
 
 	for caller, want := range map[string]string{
-		"manager": "e1,e2,e3,e4", // the role reads every row
-		"s1":      "e1",          // own rows; managing p3 admits nothing (the join is per row)
-		"s2":      "e2",          // own rows
-		"s9":      "e1,e2",       // no own rows; manages p1
-		"nobody":  "",            // no subject id: matches nothing, not the subject-less row
-		"":        "",            // signed out
+		"supervisor": "t1,t2,t3,t4", // the role reads every row
+		"a1":         "t1",          // own rows; leading g3 admits nothing (the join is per row)
+		"a2":         "t2",          // own rows
+		"a9":         "t1,t2",       // no own rows; leads g1
+		"nobody":     "",            // no subject id: matches nothing, not the subject-less row
+		"":           "",            // signed out
 	} {
 		if got := strings.Join(list(caller), ","); got != want {
-			t.Errorf("%q reads %q, want %q (rule: %s)", caller, got, want, rules["timeEntries"])
+			t.Errorf("%q reads %q, want %q (rule: %s)", caller, got, want, rules["tickets"])
 		}
 	}
 }

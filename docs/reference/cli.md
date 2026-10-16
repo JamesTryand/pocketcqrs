@@ -20,7 +20,7 @@ PocketCQRS flags (persistent, on every command):
 | `--cqrsRoleField` | `role` | the auth-record field holding a caller's role, which read models' access rules read (`@request.auth.role`). The `users` collection refuses it on self-registration and on a user's own update: only a superuser, or a command handled server-side, sets it. Match `schema import --roleField` |
 | `--cqrsSubjectField` | *(none: the record's `id`)* | the auth-record field holding a caller's data-subject id (`selfAccess`, `grantsAccess`). Locked on `users` the same way. Match `schema import --subjectField` |
 | `--cqrsSchemaDefaultRule` | *(none, = `public`)* | default `ListRule`/`ViewRule` for newly created `//@schema` collections: `public`, `authenticated`, or a raw PocketBase rule expression. A [`//@rule <collection> <value>`](directives.md#rule-collection-value) directive overrides this per collection. Writes stay write-guarded either way. Existing collections follow the declared rule on every boot and reload |
-| `--cqrsSelfAddr` | `127.0.0.1:8090` | this node's own `--http` listen address, used only for the Microsoft/Entra sign-in callback's internal exchange call (Item 12, see below). Must match `--http` (or wherever this node actually listens) for that flow to work — an explicit, operator-supplied value, deliberately not derived from the incoming request |
+| `--cqrsSelfAddr` | `127.0.0.1:8090` | this node's own `--http` listen address, used only for the Microsoft/Entra sign-in callback's internal exchange call (see below). Must match `--http` (or wherever this node actually listens) for that flow to work — an explicit, operator-supplied value, deliberately not derived from the incoming request |
 
 Outbound HTTP is off unless asked for, and asking for it takes two flags —
 enabling it with no `--cqrsOutboundHost` refuses every call and warns at boot.
@@ -394,7 +394,7 @@ authenticated record evaluate against the verdict's serialization, which
 omits them; protected-file tokens are not covered; rate-limit state stays
 per node.
 
-### Capability-based access below superuser (Item 11)
+### Capability-based access below superuser
 
 Five read-only ops routes accept more than a superuser token:
 `GET /api/cqrs/events`, `/streams`, `/deadletters`, `/admin/mode`, and
@@ -448,7 +448,7 @@ itself is not capability-aware yet — a role session can reach these five
 routes directly, but the dashboard's own nav/panels are not filtered per
 role (tracked as follow-up work, not part of this build).
 
-### The `users` collection (Item 12, end-user identity)
+### The `users` collection (end-user identity)
 
 `pocketcqrs` also always provisions a plain, ordinary `users` auth
 collection — deliberately unrelated to everything above. `roles` and

@@ -51,7 +51,7 @@ type GojaRuntime struct {
 	registry *decider.Registry
 	outbound OutboundDoer
 	// effects is where an effect function's work waits to run off the
-	// engine's pass (R4); nil runs it inline.
+	// engine's pass; nil runs it inline.
 	effects *outbox.Store
 
 	mu      sync.RWMutex
@@ -109,7 +109,7 @@ func (r *GojaRuntime) SetReader(reader Reader) { r.reader = reader }
 // deliveries. Without it, failures are only logged.
 func (r *GojaRuntime) SetStore(store *events.Store) { r.store = store }
 
-// SetOutbox has effect functions run from box, off the engine's pass (R4):
+// SetOutbox has effect functions run from box, off the engine's pass:
 // a delivery only records the work, and an outbox Worker running RunQueued
 // (under EffectConsumer) runs the function. Without one they run inline.
 func (r *GojaRuntime) SetOutbox(box *outbox.Store) { r.effects = box }

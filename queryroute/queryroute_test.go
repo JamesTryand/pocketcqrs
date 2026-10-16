@@ -104,7 +104,7 @@ func setup(t *testing.T, mutate func(app core.App, m *kms.Memory), client func(*
 		}
 		tokens[label] = tok
 	}
-	mk("staff", "support", "")
+	mk("agent", "support", "")
 	mk("alice", "", "c1")
 	mk("nobody", "", "")
 	su, _ := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
@@ -177,13 +177,13 @@ func items(t *testing.T, body string) map[string]map[string]any {
 
 func TestRoleSeesEveryRowRevealedAndErasedIsMarked(t *testing.T) {
 	f := setup(t, nil, nil)
-	status, body := f.get(t, "staff", "/api/cqrs/rm/customers")
+	status, body := f.get(t, "agent", "/api/cqrs/rm/customers")
 	if status != 200 {
 		t.Fatalf("%d %s", status, body)
 	}
 	rows := items(t, body)
 	if len(rows) != 3 || rows["c1"]["email"] != "alice@example.com" || rows["c2"]["email"] != "bob@example.com" {
-		t.Fatalf("staff sees every row, revealed: %s", body)
+		t.Fatalf("agent sees every row, revealed: %s", body)
 	}
 	if red, ok := rows["c3"]["email"].(map[string]any); !ok || red["$redacted"] != true {
 		t.Fatalf(`an erased value is {"$redacted":true}, not null or plaintext: %s`, body)
@@ -225,11 +225,11 @@ func TestNoRoleNoSubjectIsForbiddenAndAnonymousIsRefused(t *testing.T) {
 func TestPersonalDataCannotBeFilteredOrSortedOn(t *testing.T) {
 	f := setup(t, nil, nil)
 	for _, q := range []string{"?email=alice@example.com", "?sort=email", "?sort=-email", "?nope=1", "?perPage=0"} {
-		if status, body := f.get(t, "staff", "/api/cqrs/rm/customers"+q); status != 400 {
+		if status, body := f.get(t, "agent", "/api/cqrs/rm/customers"+q); status != 400 {
 			t.Errorf("%s: want 400, got %d %s", q, status, body)
 		}
 	}
-	status, body := f.get(t, "staff", "/api/cqrs/rm/customers?name=Bob&sort=-name")
+	status, body := f.get(t, "agent", "/api/cqrs/rm/customers?name=Bob&sort=-name")
 	if rows := items(t, body); status != 200 || len(rows) != 1 || rows["c2"] == nil {
 		t.Fatalf("plain columns filter normally: %d %s", status, body)
 	}
@@ -244,7 +244,7 @@ func TestRegisteringLocksPocketBasesOwnRecordAPI(t *testing.T) {
 	if status, body := f.get(t, "root", "/api/collections/customers/records"); status != 200 {
 		t.Fatalf("the record API itself is there, for superusers: %d %s", status, body)
 	}
-	for _, who := range []string{"staff", "alice"} {
+	for _, who := range []string{"agent", "alice"} {
 		status, body := f.get(t, who, "/api/collections/customers/records")
 		if status != http.StatusForbidden || strings.Contains(body, "customerId") {
 			t.Fatalf("%s: the record API must refuse (403), got %d %s", who, status, body)
@@ -260,7 +260,7 @@ func TestPlaintextInAPIIColumnFailsClosed(t *testing.T) {
 		rec.Set("email", "leaked@example.com")
 		_ = app.Save(rec)
 	}, nil)
-	status, body := f.get(t, "staff", "/api/cqrs/rm/customers")
+	status, body := f.get(t, "agent", "/api/cqrs/rm/customers")
 	if status != 500 || strings.Contains(body, "leaked") {
 		t.Fatalf("plaintext in a pii column must never be served: %d %s", status, body)
 	}
@@ -268,7 +268,7 @@ func TestPlaintextInAPIIColumnFailsClosed(t *testing.T) {
 
 func TestKeyServiceDownIs503(t *testing.T) {
 	f := setup(t, nil, func(m *kms.Memory) kms.Client { return downKMS{m} })
-	status, body := f.get(t, "staff", "/api/cqrs/rm/customers")
+	status, body := f.get(t, "agent", "/api/cqrs/rm/customers")
 	if status != 503 || strings.Contains(body, "alice") {
 		t.Fatalf("want 503 with nothing revealed, got %d %s", status, body)
 	}

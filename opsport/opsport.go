@@ -1,6 +1,5 @@
 // Package opsport is the ops port of the cross-stack health/telemetry
-// contract (platform/cqrs-runtime-contract/contracts/health-telemetry.md,
-// 1.0, sections 2-7), identical to dotnetcqrs's OpsServer: /healthz, /readyz
+// contract (health/telemetry 1.0, sections 2-7), identical to dotnetcqrs's OpsServer: /healthz, /readyz
 // and /metrics, on a port of their own, never the traffic port.
 //
 // It binds first, before configuration is validated or PocketBase

@@ -135,7 +135,7 @@ function project(event) { return { upsert: { key: event.data.customerRef, fields
 	}
 }
 
-// TestIncrementOpAccumulatesLive is Finding 3's count derivation against a
+// TestIncrementOpAccumulatesLive is the count derivation against a
 // real app: two increments and one decrement, delivered as three separate
 // Apply calls (the live shape — each event its own call, not one fixture
 // batch), must net to 1 on the real saved record, and a fresh row starts
@@ -148,15 +148,15 @@ func TestIncrementOpAccumulatesLive(t *testing.T) {
 	defer app.Cleanup()
 
 	rt := NewGojaRuntime(nil)
-	spec, err := LoadProjectionFile(rt, app, writeTempFn(t, "projects.js", `//@trigger projection projects on StaffAssignedToProject StaffUnassignedFromProject
-//@schema projects projectId:text staffCount:number
-//@key projectId
+	spec, err := LoadProjectionFile(rt, app, writeTempFn(t, "teams.js", `//@trigger projection teams on MemberAssignedToTeam MemberUnassignedFromTeam
+//@schema teams teamId:text memberCount:number
+//@key teamId
 function project(event) {
 	switch (event.type) {
-	case 'StaffAssignedToProject':
-		return { increment: { key: event.data.projectId, field: 'staffCount', delta: 1 } };
-	case 'StaffUnassignedFromProject':
-		return { increment: { key: event.data.projectId, field: 'staffCount', delta: -1 } };
+	case 'MemberAssignedToTeam':
+		return { increment: { key: event.data.teamId, field: 'memberCount', delta: 1 } };
+	case 'MemberUnassignedFromTeam':
+		return { increment: { key: event.data.teamId, field: 'memberCount', delta: -1 } };
 	}
 }
 `))
@@ -168,25 +168,25 @@ function project(event) {
 	}
 
 	for _, ev := range []events.Event{
-		{Position: 1, Type: "StaffAssignedToProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
-		{Position: 2, Type: "StaffAssignedToProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
-		{Position: 3, Type: "StaffUnassignedFromProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
+		{Position: 1, Type: "MemberAssignedToTeam", Data: json.RawMessage(`{"teamId":"g1"}`)},
+		{Position: 2, Type: "MemberAssignedToTeam", Data: json.RawMessage(`{"teamId":"g1"}`)},
+		{Position: 3, Type: "MemberUnassignedFromTeam", Data: json.RawMessage(`{"teamId":"g1"}`)},
 	} {
 		if err := spec.Consumer().Apply(context.Background(), ev); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	rec, err := app.FindFirstRecordByData("projects", "projectId", "p1")
+	rec, err := app.FindFirstRecordByData("teams", "teamId", "g1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.GetInt("staffCount") != 1 {
-		t.Fatalf("unexpected row: staffCount=%d", rec.GetInt("staffCount"))
+	if rec.GetInt("memberCount") != 1 {
+		t.Fatalf("unexpected row: memberCount=%d", rec.GetInt("memberCount"))
 	}
 }
 
-// TestGroupByBumpOpAccumulatesLive is Finding 4's groupBy derivation
+// TestGroupByBumpOpAccumulatesLive is the groupBy derivation
 // (schema 2.3.0) against a real app: two contributing events for the SAME
 // group key must accumulate onto ONE nested entry, and a different group
 // key must land in a SEPARATE entry within the same row's own list — each
@@ -200,17 +200,17 @@ func TestGroupByBumpOpAccumulatesLive(t *testing.T) {
 	defer app.Cleanup()
 
 	rt := NewGojaRuntime(nil)
-	spec, err := LoadProjectionFile(rt, app, writeTempFn(t, "payrollPeriods.js", `//@trigger projection payrollPeriods on TimeLogged
-//@schema payrollPeriods periodId:text staffTotals:json
+	spec, err := LoadProjectionFile(rt, app, writeTempFn(t, "salesPeriods.js", `//@trigger projection salesPeriods on SaleRecorded
+//@schema salesPeriods periodId:text memberTotals:json
 //@key periodId
 function project(event) {
 	return { groupByBump: {
 		key: event.data.periodId,
-		field: 'staffTotals',
-		groupField: 'staffId',
-		groupValue: event.data.staffId,
-		subfield: 'outOfHoursHours',
-		delta: event.data.hours,
+		field: 'memberTotals',
+		groupField: 'memberId',
+		groupValue: event.data.memberId,
+		subfield: 'unitsSold',
+		delta: event.data.units,
 	} };
 }
 `))
@@ -222,34 +222,34 @@ function project(event) {
 	}
 
 	for _, ev := range []events.Event{
-		{Position: 1, Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s1","hours":3}`)},
-		{Position: 2, Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s1","hours":2}`)},
-		{Position: 3, Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s2","hours":4}`)},
+		{Position: 1, Type: "SaleRecorded", Data: json.RawMessage(`{"periodId":"pp1","memberId":"m1","units":3}`)},
+		{Position: 2, Type: "SaleRecorded", Data: json.RawMessage(`{"periodId":"pp1","memberId":"m1","units":2}`)},
+		{Position: 3, Type: "SaleRecorded", Data: json.RawMessage(`{"periodId":"pp1","memberId":"m2","units":4}`)},
 	} {
 		if err := spec.Consumer().Apply(context.Background(), ev); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	rec, err := app.FindFirstRecordByData("payrollPeriods", "periodId", "pp1")
+	rec, err := app.FindFirstRecordByData("salesPeriods", "periodId", "pp1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var rows []map[string]any
-	if err := rec.UnmarshalJSONField("staffTotals", &rows); err != nil {
+	if err := rec.UnmarshalJSONField("memberTotals", &rows); err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 2 {
-		t.Fatalf("expected 2 staffTotals entries, got %d: %v", len(rows), rows)
+		t.Fatalf("expected 2 memberTotals entries, got %d: %v", len(rows), rows)
 	}
-	byStaff := map[string]float64{}
+	byMember := map[string]float64{}
 	for _, r := range rows {
-		byStaff[fmt.Sprint(r["staffId"])], _ = toFloat(r["outOfHoursHours"])
+		byMember[fmt.Sprint(r["memberId"])], _ = toFloat(r["unitsSold"])
 	}
-	if byStaff["s1"] != 5 {
-		t.Errorf("expected s1 outOfHoursHours=5 (3+2 accumulated), got %v", byStaff["s1"])
+	if byMember["m1"] != 5 {
+		t.Errorf("expected m1 unitsSold=5 (3+2 accumulated), got %v", byMember["m1"])
 	}
-	if byStaff["s2"] != 4 {
-		t.Errorf("expected s2 outOfHoursHours=4 (its own entry), got %v", byStaff["s2"])
+	if byMember["m2"] != 4 {
+		t.Errorf("expected m2 unitsSold=4 (its own entry), got %v", byMember["m2"])
 	}
 }

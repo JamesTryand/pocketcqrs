@@ -13,23 +13,23 @@ import (
 	"github.com/jamestryand/pocketcqrs/events"
 )
 
-// expenseJS is a decider whose outcome is chosen by a hand-written hook
+// refundJS is a decider whose outcome is chosen by a hand-written hook
 // (schema 3.12.0 when: "hand"), the way the generator writes it.
-const expenseJS = `//@trigger decider expense
-//@hand expense.hand.js
-//@hooks SubmitExpenseOutcome0
-//@handles ExpenseSubmitted ExpenseFlagged
-//@commands SubmitExpense
+const refundJS = `//@trigger decider refund
+//@hand refund.hand.js
+//@hooks RequestRefundOutcome0
+//@handles RefundRequested RefundFlagged
+//@commands RequestRefund
 
 function initialState() { return { exists: false }; }
 function decide(command, state) {
   switch (command.name) {
-    case 'SubmitExpense':
-      if (SubmitExpenseOutcome0(state, command)) {
-        return [{ type: 'ExpenseSubmitted', data: { amount: command.payload.amount } },
-                { type: 'ExpenseFlagged', data: { reason: 'over-limit' } }];
+    case 'RequestRefund':
+      if (RequestRefundOutcome0(state, command)) {
+        return [{ type: 'RefundRequested', data: { amount: command.payload.amount } },
+                { type: 'RefundFlagged', data: { reason: 'over-threshold' } }];
       }
-      return [{ type: 'ExpenseSubmitted', data: { amount: command.payload.amount } }];
+      return [{ type: 'RefundRequested', data: { amount: command.payload.amount } }];
   }
   throw new Error('unknown command: ' + command.name);
 }
@@ -51,8 +51,8 @@ func writeFiles(t *testing.T, files map[string]string) string {
 // same program: they decide the outcome, in the decider's own VM.
 func TestHandHooksLoadAndDecide(t *testing.T) {
 	dir := writeFiles(t, map[string]string{
-		"expense.js":      expenseJS,
-		"expense.hand.js": "function SubmitExpenseOutcome0(state, command) { return command.payload.amount > 500; }\n",
+		"refund.js":      refundJS,
+		"refund.hand.js": "function RequestRefundOutcome0(state, command) { return command.payload.amount > 500; }\n",
 	})
 	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {
@@ -71,14 +71,14 @@ func TestHandHooksLoadAndDecide(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := decider.NewRegistry(store)
-	registry.RegisterUntyped("expense", spec.UntypedDecider())
+	registry.RegisterUntyped("refund", spec.UntypedDecider())
 	for id, want := range map[string]int{"small": 1, "large": 2} {
 		amount := 100
 		if id == "large" {
 			amount = 900
 		}
-		got, err := registry.HandleWithMeta(context.Background(), "expense", id,
-			decider.Command{Name: "SubmitExpense", Payload: json.RawMessage(`{"amount":` + strconv.Itoa(amount) + `}`)}, nil)
+		got, err := registry.HandleWithMeta(context.Background(), "refund", id,
+			decider.Command{Name: "RequestRefund", Payload: json.RawMessage(`{"amount":` + strconv.Itoa(amount) + `}`)}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -91,9 +91,9 @@ func TestHandHooksLoadAndDecide(t *testing.T) {
 // A decider whose hand file is missing does not load, and says which hooks
 // it needs.
 func TestHandFileMissingRefusesTheDecider(t *testing.T) {
-	dir := writeFiles(t, map[string]string{"expense.js": expenseJS})
+	dir := writeFiles(t, map[string]string{"refund.js": refundJS})
 	_, err := LoadDir(NewGojaRuntime(func(string, ...any) {}), nil, dir)
-	if err == nil || !strings.Contains(err.Error(), "SubmitExpenseOutcome0") {
+	if err == nil || !strings.Contains(err.Error(), "RequestRefundOutcome0") {
 		t.Fatalf("want a refusal naming the hook, got %v", err)
 	}
 }
@@ -102,8 +102,8 @@ func TestHandFileMissingRefusesTheDecider(t *testing.T) {
 // check, not the first command that reaches it.
 func TestUndefinedHookFailsValidation(t *testing.T) {
 	dir := writeFiles(t, map[string]string{
-		"expense.js":      expenseJS,
-		"expense.hand.js": "function somethingElse() {}\n",
+		"refund.js":      refundJS,
+		"refund.hand.js": "function somethingElse() {}\n",
 	})
 	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {
@@ -114,7 +114,7 @@ func TestUndefinedHookFailsValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateDeciderSpec(store, loaded.Deciders[0]); err == nil || !strings.Contains(err.Error(), "SubmitExpenseOutcome0") {
+	if err := ValidateDeciderSpec(store, loaded.Deciders[0]); err == nil || !strings.Contains(err.Error(), "RequestRefundOutcome0") {
 		t.Fatalf("want a validation error naming the hook, got %v", err)
 	}
 }
@@ -122,8 +122,8 @@ func TestUndefinedHookFailsValidation(t *testing.T) {
 // A hook runs in the decider's purified VM: no clock, as for decide itself.
 func TestHookHasNoClock(t *testing.T) {
 	dir := writeFiles(t, map[string]string{
-		"expense.js":      expenseJS,
-		"expense.hand.js": "function SubmitExpenseOutcome0(state, command) { return new Date().getDay() === 1; }\n",
+		"refund.js":      refundJS,
+		"refund.hand.js": "function RequestRefundOutcome0(state, command) { return new Date().getDay() === 1; }\n",
 	})
 	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {
@@ -135,9 +135,9 @@ func TestHookHasNoClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := decider.NewRegistry(store)
-	registry.RegisterUntyped("expense", loaded.Deciders[0].UntypedDecider())
-	_, err = registry.HandleWithMeta(context.Background(), "expense", "x",
-		decider.Command{Name: "SubmitExpense", Payload: json.RawMessage(`{"amount":1}`)}, nil)
+	registry.RegisterUntyped("refund", loaded.Deciders[0].UntypedDecider())
+	_, err = registry.HandleWithMeta(context.Background(), "refund", "x",
+		decider.Command{Name: "RequestRefund", Payload: json.RawMessage(`{"amount":1}`)}, nil)
 	if err == nil || !strings.Contains(err.Error(), "TypeError") {
 		t.Fatalf("a hook reading the clock must fail, got %v", err)
 	}

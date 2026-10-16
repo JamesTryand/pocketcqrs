@@ -30,13 +30,13 @@ var ruleDirective = regexp.MustCompile(`(?m)^//@rule (\S+) (.+)$`)
 
 // verifySubjectField stands in for the record id as the caller's subject
 // when the import reads it from there (--subjectField empty): a scenario's
-// subject ids ("staff-1") are not valid PocketBase record ids.
+// subject ids ("member-1") are not valid PocketBase record ids.
 const verifySubjectField = "verifySubject"
 
 // visibleTo keeps the rows of collection that caller may read, by running
 // the read rule the generator emitted (its //@rule) in a scratch PocketBase
 // app: the rule that will actually be enforced, @collection joins and all,
-// not a second implementation of it (decision 9, 2026-10-15). The
+// not a second implementation of it. The
 // collections a granting scope reads through are built from the same
 // `given` events and loaded beside it.
 func (v *verifier) visibleTo(caller ScenarioCaller, collection string, rows map[string]map[string]any,

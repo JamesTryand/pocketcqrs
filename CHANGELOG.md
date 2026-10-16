@@ -15,13 +15,13 @@ All notable changes to PocketCQRS. Format loosely follows
   (`--cqrsRoleField`, default `role`) and the subject field (`--cqrsSubjectField`), keeping the app's
   own rule. A superuser, or a command handled server-side, still sets them.
 
-- **A command's authorization declarations combine (S2).** `authorize.Authorizer` returned on the
+- **A command's authorization declarations combine.** `authorize.Authorizer` returned on the
   first declaration it met, so a role that satisfied `requiredRole` skipped `requiredOwnership` and
   `scope`, and a `fieldGatedRole` whose condition didn't apply allowed the command before `scope`
   was checked. Every declaration must now hold, as the schema says and dotnetcqrs does since
   `6649745`. A bypass role skips only its own declaration.
 
-- **Erasure is closed by default (E1).** With no `gateway.Config.Authorize` hook every command is
+- **Erasure is closed by default.** With no `gateway.Config.Authorize` hook every command is
   allowed, so any signed-in user (or anyone, with `AllowAnonymous`) could send
   `dataSubject/{id}/EraseSubject` for any subject and destroy their key, irreversibly. The gateway
   now refuses every `dataSubject` command with `403`, recording nothing, until a hook is wired; then
@@ -30,7 +30,14 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ### Changed
 
-- **A JS projection reads only its own collections (P1); a reactor reads nothing (P2).** **Breaking**
+- **Schema 4.0.0: a command scope names its member field.** The scope check compared the actor
+  against a membership field every membership read model was assumed to have. Schema 4.0.0 requires
+  `scope.memberOfVia.actorField`, the field of the membership read model compared with the actor;
+  lint refuses a scope without it, and `authorize.Authorizer` compares through it. Its resolver hook
+  is renamed `ResolveOwnSubjectID` (was `ResolveOwnStaffID`). **Breaking** for a document with a scope and no `actorField`, and for a
+  host that set the old resolver. The vendored schema and its examples are upstream's 4.0.0
+  (`6f0be44`), `emschema.SchemaVersion` is `4.0.0`, and an export declares it.
+- **A JS projection reads only its own collections; a reactor reads nothing.** **Breaking**
   for code that did otherwise. A projection's `pb.findRecord`/`pb.query` of a collection it doesn't
   declare with `//@schema` now throws, so the projection blocks at that event: another read model is
   a fold at whatever point it had reached, so a rebuild could come out different. Subscribe to the
@@ -51,7 +58,7 @@ All notable changes to PocketCQRS. Format loosely follows
   [docs/schema.md](docs/schema.md), "What it can't apply is refused". **Breaking for documents**
   that use any schema feature from 3.2.0 on: they were imported without it before, and are refused
   now.
-- **An `error` scenario passes only on its own refusal (T2).** Any refusal used to pass, so a
+- **An `error` scenario passes only on its own refusal.** Any refusal used to pass, so a
   refusal the model declares and the code lacks was reported as working. The decider's message must
   equal `then.error.message`. A command scenario's `when.actor` and `when.at` (schema 3.10.0) are now
   read and passed to the decider as `command.actor` and `command.now`, instead of fixed values.
@@ -60,20 +67,20 @@ All notable changes to PocketCQRS. Format loosely follows
   returned to callers, and what an error scenario has to match. Now it is `order already exists`. A
   runtime error keeps its class name (`TypeError: ...`): that is the decider failing, not a rule
   refusing.
-- **A stream that ended is ended for good (D28).** An `endsStream` event reset `exists`, so the
+- **A stream that ended is ended for good.** An `endsStream` event reset `exists`, so the
   create's own "already exists" check passed again and a create restarted the stream: a deleted
-  entry could be logged again under its old id. Now the end also sets `ended`, and a `once`
+  record could be created again under its old id. Now the end also sets `ended`, and a `once`
   command refuses an ended stream (`<aggregate> has ended and cannot begin again`), in both the JS
   and Go generators. An end is not final only where a scenario shows a create beginning the
   stream again after it (an assign after an unassign); the importer then sets the command's new
   `canBeginAgain`. An aggregate with no final end generates exactly as before. Same rule as
   dotnetcqrs. Regenerate a decider to pick it up; existing generated files are not rewritten.
-- **Consumer registration order is documented as when, not a guarantee (R6).** Each consumer reads
+- **Consumer registration order is documented as when, not a guarantee.** Each consumer reads
   to the head as it is when its turn comes, so one registered later can be ahead of an earlier one.
   `main.go` said JS projections "may read Go-maintained collections" (which rule 4 forbids) and the
   search index's rotation claimed to need the order; it doesn't, since it switches over only once
   the rebuild has caught up. An engine test now pins the claim, as in dotnetcqrs.
-- **Generated reactors send their command to the right stream (R3).** An automation acting on its
+- **Generated reactors send their command to the right stream.** An automation acting on its
   trigger's own aggregate sent the command to `<prefix>-<id>`, a stream that never exists, so it was
   refused: the worked example's auto-ship never shipped an order. It now targets the trigger's own
   stream. A create on another aggregate was keyed by the source stream, so the second trigger event
@@ -104,7 +111,7 @@ All notable changes to PocketCQRS. Format loosely follows
   The dashboard's Consumers page has a **Rebuild** button on each projection's row, which makes the
   same request.
 - **A `//@schema` collection's read rule follows its declaration on every boot and reload.** It was
-  set only when the collection was created (Item 9's additive-only stance), so an access rule added
+  set only when the collection was created (the additive-only reconcile), so an access rule added
   to the model never reached an existing collection, which stayed as open as it was first made. Now
   reconcile sets `ListRule`/`ViewRule` to the `//@rule` (or `--cqrsSchemaDefaultRule`) every time,
   and logs a change. A rule set by hand in PocketBase's admin UI is put back to the declared one.
@@ -124,10 +131,10 @@ All notable changes to PocketCQRS. Format loosely follows
   declared alternative. Events tagged with an aggregate that no slice produces are now folded by
   its decider (`Domain.Folds`). Upstream's `conditional-outcomes.json` and `repeated-outcomes.json`
   import and verify (HAND where a hook decides).
-- **A `sumOfItems` column is json** (James's call), so its null before every item carries the subfield
+- **A `sumOfItems` column is json**, so its null before every item carries the subfield
   stays null; a PocketBase number field read it back as 0, which the Go check reported against
   upstream's `rows-per-list-item.json`. A Go host's migration declares the column json too.
-- **Erasure requests, and an opt-in module that governs them (decision 3), ported from dotnetcqrs
+- **Erasure requests, and an opt-in module that governs them, ported from dotnetcqrs
   with the same names.** The core `dataSubject` aggregate gains `RequestErasure` (`ErasureRequested`:
   who asked, why, when), beside `EraseSubject`; a request erases nothing, and with only `pii` nothing
   acts on one. New package `retention` governs requests: `HoldErasure` (↔ review), `ApproveErasure`,
@@ -138,21 +145,21 @@ All notable changes to PocketCQRS. Format loosely follows
   core's (`pii.Wire` now keeps a `dataSubject` decider already registered, so the order doesn't
   matter). Reasons are short codes (200 characters at most). Roles are the host's to declare in its
   `Authorize` hook; an administrator's queue is an ordinary read model (`examples/erasurequeue`).
-- **A secondary wakes when LiteFS applies the master's transactions (R7).** `--cqrsLiteFSEvents`
+- **A secondary wakes when LiteFS applies the master's transactions.** `--cqrsLiteFSEvents`
   follows LiteFS's `/events` stream (package `litefswatch`) and nudges the engine (new
   `Engine.Nudge`) on each transaction applied to the log, after it is readable; the 1 s tick stays as
   the guarantee. A dropped stream is subscribed to again, 1 s doubling to 30 s.
-- **Effect functions run off the engine's pass (R4).** On the master the server records each effect
+- **Effect functions run off the engine's pass.** On the master the server records each effect
   function's work in `outbox.db` and its outbox worker runs it (the current code after a reload:
   `adminapi.State.RunQueuedEffect`); one attempt and a dead letter on a throw, as before.
   `GojaRuntime.SetOutbox`/`RunQueued`; a runtime with no outbox runs effects inline.
-- **The KMS key destroyer can work from an outbox (R4).** `pii.WireOptions.Outbox`: the destroyer
+- **The KMS key destroyer can work from an outbox.** `pii.WireOptions.Outbox`: the destroyer
   records each erasure and `Wire` runs a worker that destroys the key, retrying a failing facade by
   due time (1 s doubling to an hour), never giving up. `pii.RegisterCacheEvictor` takes the outbox
   (breaking: a new parameter) and seeds the evictor before the earliest erasure still waiting, so the
   evictor's guarantee (every erasure before it has its key destroyed) holds. Two workers on one
   outbox file are each woken by an enqueue.
-- **An outbox for work that calls out of the process (R4).** New package `outbox`: work recorded in
+- **An outbox for work that calls out of the process.** New package `outbox`: work recorded in
   its own SQLite file, keyed by what asked for it (a redelivery records it once), and a `Worker` that
   takes each entry when due and hands it to its consumer's `Handler`, which says done or when to try
   again. The worker waits for the next due entry or a nudge from an enqueue, never a fixed pause.
@@ -162,7 +169,7 @@ All notable changes to PocketCQRS. Format loosely follows
   gateway on the next try), 503 or 504, is due again after `RetryPolicy.Backoff`; it used to sleep
   between attempts inside the engine's pass and dead-letter every conflict. `extcaller.RetryableError`
   marks a retryable dispatch for a `Gateway` of your own. `cmd/extcaller` gains `-outbox`.
-- **One transaction per projected event (R2).** A projection's row ops for an event and its position
+- **One transaction per projected event.** A projection's row ops for an event and its position
   now commit together in one PocketBase transaction in `data.db` (table `_cqrsPositions`), so a crash
   or a failing op can't leave an event half applied, or applied without its position (and applied
   again). New `consumers.Committer` (the engine calls `Commit` in place of `Apply` then
@@ -175,19 +182,19 @@ All notable changes to PocketCQRS. Format loosely follows
   the new `verifyharness` package in a scratch module and run once: deciders through the registry
   (nothing appended; personal data sealed and revealed by an in-memory key service), projections
   against a PocketBase test app per view scenario. The answers are compared by the same code as the
-  JS check. `--pocketcqrs` names the checkout to build against. The timesheets model: 300 pass, 1
-  known failure, 27 HAND, the same as the JS check and dotnetcqrs.
+  JS check. `--pocketcqrs` names the checkout to build against. On a large model (fourteen aggregates): 300
+  pass, 1 known failure, 27 HAND, the same as the JS check and dotnetcqrs.
 - **Generated Go date fields are `events.Date` (breaking for hand-written code that used `time.Time`).**
   It reads a calendar date, an RFC 3339 date-time or PocketBase's layout, and writes a calendar date
   back as one. `time.Time` read RFC 3339 only, so the generated Go couldn't fold a model's own
-  `2026-09-15` (found by the Go check: 148 of timesheets' scenarios failed on it).
+  `2026-09-15` (found by the Go check: 148 of a large model's scenarios failed on it).
 - **Verify reads a row's date as PocketBase serves it:** `2026-09-15 00:00:00.000Z` matches the
   model's `2026-09-15` (midnight, as dotnetcqrs's harness matches) or the same instant in RFC 3339.
   View rows only.
 - **`pii.RevealAll`** opens every personal-data envelope in a decoded JSON value.
 - **Fixed (layout change): `schema import --lang go` writes each aggregate to `<out>/<package>/`.** It
   wrote every aggregate's package into one directory, which doesn't compile once there are two
-  (the timesheets model has fourteen). A single-aggregate import moves down one directory too.
+  (a large model had fourteen). A single-aggregate import moves down one directory too.
 - **`schema verify`, standalone, and against a host's functions.** Runs a document's scenarios
   with nothing written and exits non-zero when one fails (HAND is not a failure); like `import`, it
   never boots PocketBase. `--functions <dir>` runs them against a host's own deciders, hand files
@@ -196,18 +203,18 @@ All notable changes to PocketCQRS. Format loosely follows
   `emschema.VerifyWith` and `VerifyOptions.Host` are the API.
 - **Verify reads a row's unset bool column as false,** as PocketBase serves it and as dotnetcqrs's
   harness compares it. Event payloads stay strict, and so do other types (unset text is not "").
-  With this the timesheets model verifies as it does on dotnetcqrs: 300 pass, 1 known failure (the
-  hand-queried payroll preview), 27 HAND.
+  With this a large model verifies as it does on dotnetcqrs: 300 pass, 1 known failure (a
+  hand-queried preview), 27 HAND.
 - **Fixed: verify binds a self-access param a scenario sends without a caller.** Such a scenario
   reads as a role holder, and the value it sends names the subject, as dotnetcqrs's harness does;
   it admitted nothing. A named caller's own id still wins over the value sent.
 - **Fixed: a toggle's events merge their own fields too.** An event a toggle derives from was a
-  derivation trigger only, so flagging an entry set `cleared` but never the reason it carried. Its
+  derivation trigger only, so flagging a record set `cleared` but never the reason it carried. Its
   fields now land on its row as well, in both projections, as dotnetcqrs seeds them. Count, sum and
   groupBy drivers, which are another stream's, still don't merge.
 - **Fixed: an automation whose scenarios show its target stream both fresh and already there is an
   upsert,** as dotnetcqrs maps it, not the stream's create. Two automations recording on one ledger
-  were both its create, and the import stopped ("a stream has one beginning"); the timesheets model
+  were both its create, and the import stopped ("a stream has one beginning"); a large model
   hit it.
 - **Hand-written projections (schema 3.17.0 `projection: "hand"`).** The import writes no projection
   for such a read model, only `<collection>.js.example` / `<collection>.go.example` to start from;
@@ -216,7 +223,7 @@ All notable changes to PocketCQRS. Format loosely follows
 - **Fixed: the Go import now writes `<aggregate>_hand.go.example`.** The outcomes release said it did;
   the skeleton was built but never emitted.
 - **A row per group of a list (schema 3.16.0 `rowsPerListItem`, `sumOfItems`).** A read model can
-  keep a row per group of a stream's list items (an invoice's part per project), keyed
+  keep a row per group of a stream's list items (a delivery's load per depot), keyed
   `<stream>|<group>`, with a subtotal summed over the row's items once every item carries it. A new
   host op, `itemRows`, plans the rows from the stream's state, which the host keeps in a
   superusers-only companion collection `<collection>_streams`; the dry run plans them the same way,
@@ -436,7 +443,7 @@ what it reports), a month of codegen catch-up with dotnetcqrs, and an importable
 - **`--cqrsRequireExistingEventLog`** (master, opt-in): refuse to start when `events.db` does not
   already exist, instead of silently creating an empty log — the failure mode when a master starts
   before its LiteFS mount. Default behaviour unchanged. See `docs/reference/cli.md`.
-- **`adminapi` package** (Item 10): the catalog/ops/admin HTTP routes are now importable, via
+- **`adminapi` package**: the catalog/ops/admin HTTP routes are now importable, via
   `adminapi.RegisterRoutes`, for embedders reconstructing their own `main.go`.
 - **`events export` / `events import [--dry-run]`**: slice an aggregate set's events out of one
   `events.db` into a pack and merge it into another, with collision refusal before any write.
@@ -497,22 +504,22 @@ now generate Go instead of just JS.
 
 ### Added
 
-- **`users` collection** (Item 12, part 1): a shipped, app-extensible end-user auth primitive,
+- **`users` collection** (part 1): a shipped, app-extensible end-user auth primitive,
   deliberately separate from `roles`/`_superusers` (ops/dashboard access) and
   pocketcqrs-extensions' `service_accounts` (non-human integration credentials). Carries no
   `capabilities` field, so a self-registered user can never satisfy `RequireCapability` or
   `RequireSuperuser` no matter what an app adds to the collection. Registered unconditionally in
   `main.go`, same posture as `roles`; `ensureCollection` is create-only so an app's own migration
   can extend the shape afterward without a later boot reasserting it.
-- **Microsoft/Entra sign-in for `users`** (Item 12, completing it): a login/callback route pair
+- **Microsoft/Entra sign-in for `users`** (completing it): a login/callback route pair
   plus a session-cookie bridge. The callback exchanges the code via a loopback call to PocketBase's
   own `auth-with-oauth2` endpoint at a new `--cqrsSelfAddr`, rather than reimplementing the
   exchange — that endpoint is already on `authforward`'s forwarding suffix list, so a
-  `--cqrsRole=secondary` running `--cqrsForwardAuth` gets F-12's split-brain protection for free.
+  `--cqrsRole=secondary` running `--cqrsForwardAuth` gets the split-brain protection for free.
   `--cqrsSelfAddr` is operator-set, not header-derived, since a header-derived outbound call target
   would be an SSRF primitive; the public `redirect_uri` sent to Microsoft stays header-derived
   because Microsoft's own allowlist is the real control there.
-- **Capability-based access below superuser for read-only ops routes** (Item 11, first slice):
+- **Capability-based access below superuser for read-only ops routes** (first slice):
   a `roles` auth collection with a `capabilities` JSON field, and
   `authverify.RequireCapability` — collection-agnostic, so a future role/permission field on a
   different collection composes with no gate change. Scoped to five read-only routes (events,
@@ -521,7 +528,7 @@ now generate Go instead of just JS.
   `authverify.RequireSuperuser` in the process, making it remote-verify-aware on a secondary like
   every other ops route already was. Not yet built: the dashboard's own nav/panels are not
   capability-aware, and role editing outside PocketBase's admin UI remains open.
-- **Configurable default read-rule for `//@schema` collections** (Item 9): `createCollection`
+- **Configurable default read-rule for `//@schema` collections**: `createCollection`
   always created a public-read collection with no way to ask for anything else. Adds a
   deployment-wide `--cqrsSchemaDefaultRule` flag and a per-collection `//@rule <collection>
   <value>` directive that overrides it. Writes stay write-guarded regardless; an already-existing
@@ -534,20 +541,20 @@ now generate Go instead of just JS.
   emitted as string literals rather than same-package Go constants, since `On` may legitimately
   name another aggregate's events. `--docs` and scenario-check output are explicit about what
   `--lang go` doesn't yet cover instead of silently doing nothing.
-- **`--cqrsExternalCallerCollection` flag** (F-18): `gateway.Config.ExternalCallerCollection`
+- **`--cqrsExternalCallerCollection` flag**: `gateway.Config.ExternalCallerCollection`
   shipped as a Go field in v0.8.0, but no stock binary could actually set it — found while wiring
   up pocketcqrs-extensions' service-account CLI. Mirrors `--cqrsAllowAnonymous`'s pattern: empty
   default, zero behavior change when unset.
 
 ### Fixed
 
-- **A JSON-typed field read via `FindRecord`/`Query` reached JS unparsed** (F-15), silently
+- **A JSON-typed field read via `FindRecord`/`Query` reached JS unparsed**, silently
   corrupting a read-modify-write projection's own column on its second write cycle.
-- **`command.now` was stamped with a space instead of a `T`** (F-16), breaking downstream
+- **`command.now` was stamped with a space instead of a `T`**, breaking downstream
   date-time consumers; fixed at all four sites that produce the value, including both dry-run
   paths, so previews stay faithful to real behavior.
 - **A failing consumer aborted the whole `RunOnce` pass**, starving every consumer registered
-  after it (F-17) — contradicting the function's own doc comment. The loop now continues past a
+  after it — contradicting the function's own doc comment. The loop now continues past a
   failing consumer and aggregates failures via `errors.Join`.
 
 ## v0.8.0 — provenance, external-caller identity, and a CLI command that now tells you it failed
@@ -573,8 +580,8 @@ command, and a longstanding CLI bug that hid failure behind a `0` exit code is f
 
 ### Fixed
 
-- **`schema import` now exits non-zero on refusal and no longer bootstraps a stray `pb_data/`**
-  (F-9/F-10). Root cause: PocketBase's own `Execute()` discards `RootCmd.Execute()`'s return
+- **`schema import` now exits non-zero on refusal and no longer bootstraps a stray `pb_data/`**.
+  Root cause: PocketBase's own `Execute()` discards `RootCmd.Execute()`'s return
   value, so a `RunE` error printed but never reached a non-zero exit; and bootstrap always ran
   before any subcommand's `RunE`, with no per-command opt-out. `schema import` is now
   short-circuited in `main()` before `pocketbase.New()`/`app.Start()` ever run, the same way

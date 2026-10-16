@@ -254,64 +254,64 @@ func TestGeneratedGoDomainCompiles(t *testing.T) {
 	}
 }
 
-// finding3Domain exercises every Finding 3 shape in one aggregate: an
+// derivationDomain exercises every derivation shape in one aggregate: an
 // endsStream event resetting Exists, a toggle derivation, a count
 // derivation with an explicit rowKeyField (cross-stream events, the
-// staffCount case), a sum derivation, and a scoped read model with no
-// derivation at all (the flagged-entries case) -- proposal Examples 1-4.
-func finding3Domain() Domain {
+// memberCount case), a sum derivation, and a scoped read model with no
+// derivation at all (the escalated-tickets case).
+func derivationDomain() Domain {
 	return Domain{
-		Aggregate: "staff",
+		Aggregate: "member",
 		Commands: []Command{
-			{Name: "CreateStaff", Once: true,
+			{Name: "CreateMember", Once: true,
 				Fields: []Field{{Name: "name", Type: "text"}},
-				Events: []Event{{Name: "StaffCreated", Fields: []Field{{Name: "name", Type: "text"}}}}},
+				Events: []Event{{Name: "MemberCreated", Fields: []Field{{Name: "name", Type: "text"}}}}},
 			{Name: "EnableSso", RequiresExisting: true,
-				Events: []Event{{Name: "StaffSsoEnabled", NoFields: true}}},
+				Events: []Event{{Name: "MemberSsoEnabled", NoFields: true}}},
 			{Name: "DisableSso", RequiresExisting: true,
-				Events: []Event{{Name: "StaffSsoDisabled", NoFields: true}}},
-			{Name: "RemoveStaff", RequiresExisting: true,
-				Events: []Event{{Name: "StaffRemoved", NoFields: true, EndsStream: true}}},
+				Events: []Event{{Name: "MemberSsoDisabled", NoFields: true}}},
+			{Name: "RemoveMember", RequiresExisting: true,
+				Events: []Event{{Name: "MemberRemoved", NoFields: true, EndsStream: true}}},
 		},
 		ReadModels: []ReadModel{
 			{
-				Collection: "staffRoster",
-				Key:        "staffId",
-				// removing a staff member takes their row away (schema 3.9.0)
-				RemovedBy: []string{"StaffRemoved"},
+				Collection: "memberDirectory",
+				Key:        "memberId",
+				// removing a member takes their row away (schema 3.9.0)
+				RemovedBy: []string{"MemberRemoved"},
 				Fields: []Field{
 					{Name: "name", Type: "text"},
 					{Name: "ssoEnabled", Type: "bool", Derivation: &FieldDerivation{
-						Kind: DerivationToggle, OnEventIDs: []string{"StaffSsoEnabled"}, OffEventIDs: []string{"StaffSsoDisabled"},
+						Kind: DerivationToggle, OnEventIDs: []string{"MemberSsoEnabled"}, OffEventIDs: []string{"MemberSsoDisabled"},
 					}},
 				},
-				On: []string{"StaffCreated", "StaffSsoEnabled", "StaffSsoDisabled", "StaffRemoved"},
+				On: []string{"MemberCreated", "MemberSsoEnabled", "MemberSsoDisabled", "MemberRemoved"},
 			},
 			{
-				Collection: "projects",
-				Key:        "projectId",
+				Collection: "teams",
+				Key:        "teamId",
 				Fields: []Field{
-					{Name: "staffCount", Type: "number", Derivation: &FieldDerivation{
-						Kind: DerivationCount, IncrementOnEventIDs: []string{"StaffAssignedToProject"},
-						DecrementOnEventIDs: []string{"StaffUnassignedFromProject"}, RowKeyField: "projectId",
+					{Name: "memberCount", Type: "number", Derivation: &FieldDerivation{
+						Kind: DerivationCount, IncrementOnEventIDs: []string{"MemberAssignedToTeam"},
+						DecrementOnEventIDs: []string{"MemberUnassignedFromTeam"}, RowKeyField: "teamId",
 					}},
-					{Name: "totalHours", Type: "number", Derivation: &FieldDerivation{
-						Kind: DerivationSum, AddOnEventIDs: []string{"TimeLogged"}, SubtractOnEventIDs: []string{"TimeReversed"},
-						AmountField: "hours", RowKeyField: "projectId",
+					{Name: "totalUnits", Type: "number", Derivation: &FieldDerivation{
+						Kind: DerivationSum, AddOnEventIDs: []string{"SaleRecorded"}, SubtractOnEventIDs: []string{"SaleReversed"},
+						AmountField: "units", RowKeyField: "teamId",
 					}},
 				},
-				On: []string{"StaffAssignedToProject", "StaffUnassignedFromProject", "TimeLogged", "TimeReversed"},
+				On: []string{"MemberAssignedToTeam", "MemberUnassignedFromTeam", "SaleRecorded", "SaleReversed"},
 			},
 			{
-				Collection: "flaggedEntries",
-				Key:        "entryId",
-				Fields:     []Field{{Name: "projectId", Type: "text"}},
-				On:         []string{"EntryFlagged"},
+				Collection: "escalatedTickets",
+				Key:        "ticketId",
+				Fields:     []Field{{Name: "teamId", Type: "text"}},
+				On:         []string{"TicketEscalated"},
 				Scopes: []ReadModelScope{{
-					Param: "pmStaffId",
+					Param: "leadMemberId",
 					Via: ReadModelScopeVia{
-						Collection: "projectManagers", MatchParamTo: "staffId",
-						SelectField: "projectId", FilterLocalField: "projectId",
+						Collection: "teamLeads", MatchParamTo: "memberId",
+						SelectField: "teamId", FilterLocalField: "teamId",
 					},
 				}},
 			},
@@ -320,139 +320,139 @@ func finding3Domain() Domain {
 }
 
 // A removal (schema 3.9.0) routes to remove ahead of the derived and
-// merge cases, in both generators; TestFinding3DomainCompiles builds it.
+// merge cases, in both generators; TestDerivationDomainCompiles builds it.
 func TestRemovalIsGenerated(t *testing.T) {
-	goFiles, err := finding3Domain().GenerateGo()
+	goFiles, err := derivationDomain().GenerateGo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var roster string
+	var directory string
 	for _, f := range goFiles {
-		if strings.Contains(f.Source, "type StaffRosterProjection struct") {
-			roster = f.Source
+		if strings.Contains(f.Source, "type MemberDirectoryProjection struct") {
+			directory = f.Source
 		}
 	}
 	for _, want := range []string{
-		"case \"StaffRemoved\":\n\t\treturn p.remove(ctx, ev.AggregateID)",
-		"func (p *StaffRosterProjection) remove(ctx context.Context, rowKey string) error {",
+		"case \"MemberRemoved\":\n\t\treturn p.remove(ctx, ev.AggregateID)",
+		"func (p *MemberDirectoryProjection) remove(ctx context.Context, rowKey string) error {",
 	} {
-		if !strings.Contains(roster, want) {
-			t.Errorf("Go roster projection lacks %q:\n%s", want, roster)
+		if !strings.Contains(directory, want) {
+			t.Errorf("Go directory projection lacks %q:\n%s", want, directory)
 		}
 	}
-	js, err := finding3Domain().Generate()
+	js, err := derivationDomain().Generate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(js[1].Source, "if (['StaffRemoved'].includes(event.type)) { return [{ delete: event.aggregateId }]; }") {
-		t.Errorf("JS roster projection lacks the removal:\n%s", js[1].Source)
+	if !strings.Contains(js[1].Source, "if (['MemberRemoved'].includes(event.type)) { return [{ delete: event.aggregateId }]; }") {
+		t.Errorf("JS directory projection lacks the removal:\n%s", js[1].Source)
 	}
 }
 
-// TestFinding3EndsStreamResetsExists: an endsStream event must emit
+// TestDerivationEndsStreamResetsExists: an endsStream event must emit
 // `s.Exists = false` in Evolve, not the unconditional `true` every other
 // event gets.
-func TestFinding3EndsStreamResetsExists(t *testing.T) {
-	files, err := finding3Domain().GenerateGo()
+func TestDerivationEndsStreamResetsExists(t *testing.T) {
+	files, err := derivationDomain().GenerateGo()
 	if err != nil {
 		t.Fatal(err)
 	}
 	dec := files[0].Source
-	if !strings.Contains(dec, "case StaffRemoved:\n\t\t\t\ts.Exists = false\n\t\t\t\ts.Ended = true") {
-		t.Errorf("expected StaffRemoved to reset Exists to false and set Ended (D28):\n%s", dec)
+	if !strings.Contains(dec, "case MemberRemoved:\n\t\t\t\ts.Exists = false\n\t\t\t\ts.Ended = true") {
+		t.Errorf("expected MemberRemoved to reset Exists to false and set Ended:\n%s", dec)
 	}
 	if !strings.Contains(dec, "\tEnded  bool\n") ||
-		!strings.Contains(dec, "if s.Ended {\n\t\t\t\t\treturn nil, fmt.Errorf(\"staff has ended and cannot begin again\")") {
-		t.Errorf("expected an Ended flag that CreateStaff refuses (D28):\n%s", dec)
+		!strings.Contains(dec, "if s.Ended {\n\t\t\t\t\treturn nil, fmt.Errorf(\"member has ended and cannot begin again\")") {
+		t.Errorf("expected an Ended flag that CreateMember refuses:\n%s", dec)
 	}
-	if !strings.Contains(dec, "case StaffCreated:") || strings.Contains(dec, "case StaffCreated:\n\t\t\t\ts.Exists = false") {
+	if !strings.Contains(dec, "case MemberCreated:") || strings.Contains(dec, "case MemberCreated:\n\t\t\t\ts.Exists = false") {
 		t.Errorf("a non-endsStream event must still set Exists true:\n%s", dec)
 	}
 }
 
-// TestFinding3ProjectionDerivations: the projection for a toggle + a
+// TestDerivationProjectionDerivations: the projection for a toggle + a
 // cross-stream count + a sum must route each trigger event to its own
 // dedicated helper, not the generic merge, and getOrCreate must seed every
 // derived field's initial value on a brand new row.
-func TestFinding3ProjectionDerivations(t *testing.T) {
-	files, err := finding3Domain().GenerateGo()
+func TestDerivationProjectionDerivations(t *testing.T) {
+	files, err := derivationDomain().GenerateGo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	roster := files[1].Source // staffRoster
+	directory := files[1].Source // memberDirectory
 	for _, want := range []string{
-		`case "StaffSsoEnabled":`,
+		`case "MemberSsoEnabled":`,
 		`return p.setToggle(ctx, ev.AggregateID, "ssoEnabled", true)`,
-		`case "StaffSsoDisabled":`,
+		`case "MemberSsoDisabled":`,
 		`return p.setToggle(ctx, ev.AggregateID, "ssoEnabled", false)`,
-		`case "StaffCreated":`,
+		`case "MemberCreated":`,
 		"return p.applyMerge(ctx, ev)",
 		`rec.Set("ssoEnabled", false)`, // Initial default seeded on create
 	} {
-		if !strings.Contains(roster, want) {
-			t.Errorf("staffRoster projection missing %q:\n%s", want, roster)
+		if !strings.Contains(directory, want) {
+			t.Errorf("memberDirectory projection missing %q:\n%s", want, directory)
 		}
 	}
 
-	projects := files[2].Source // projects
+	teams := files[2].Source // teams
 	for _, want := range []string{
-		`case "StaffAssignedToProject":`,
-		`return p.bumpCount(ctx, ev, "staffCount", "projectId", 1)`,
-		`case "StaffUnassignedFromProject":`,
-		`return p.bumpCount(ctx, ev, "staffCount", "projectId", -1)`,
-		`case "TimeLogged":`,
-		`return p.bumpSum(ctx, ev, "totalHours", "hours", "projectId", 1)`,
-		`case "TimeReversed":`,
-		`return p.bumpSum(ctx, ev, "totalHours", "hours", "projectId", -1)`,
-		`rec.Set("staffCount", 0)`,
-		`rec.Set("totalHours", 0.0)`,
+		`case "MemberAssignedToTeam":`,
+		`return p.bumpCount(ctx, ev, "memberCount", "teamId", 1)`,
+		`case "MemberUnassignedFromTeam":`,
+		`return p.bumpCount(ctx, ev, "memberCount", "teamId", -1)`,
+		`case "SaleRecorded":`,
+		`return p.bumpSum(ctx, ev, "totalUnits", "units", "teamId", 1)`,
+		`case "SaleReversed":`,
+		`return p.bumpSum(ctx, ev, "totalUnits", "units", "teamId", -1)`,
+		`rec.Set("memberCount", 0)`,
+		`rec.Set("totalUnits", 0.0)`,
 	} {
-		if !strings.Contains(projects, want) {
-			t.Errorf("projects projection missing %q:\n%s", want, projects)
+		if !strings.Contains(teams, want) {
+			t.Errorf("teams projection missing %q:\n%s", want, teams)
 		}
 	}
-	if strings.Contains(projects, "applyMerge") {
-		t.Errorf("projects has no plain merge events; applyMerge must not be generated:\n%s", projects)
+	if strings.Contains(teams, "applyMerge") {
+		t.Errorf("teams has no plain merge events; applyMerge must not be generated:\n%s", teams)
 	}
 }
 
-// TestFinding3ScopeResolver: a read model with a declared scope, even with
+// TestDerivationScopeResolver: a read model with a declared scope, even with
 // no derivation at all, gets a Resolve<Param> helper querying the via
 // collection.
-func TestFinding3ScopeResolver(t *testing.T) {
-	files, err := finding3Domain().GenerateGo()
+func TestDerivationScopeResolver(t *testing.T) {
+	files, err := derivationDomain().GenerateGo()
 	if err != nil {
 		t.Fatal(err)
 	}
 	flagged := files[3].Source
 	for _, want := range []string{
-		"func (p *FlaggedEntriesProjection) ResolvePmStaffId(value string) ([]string, error) {",
-		`p.app.FindRecordsByFilter("projectManagers", "staffId = {:v}", "", -1, 0, map[string]any{"v": value})`,
-		`ids = append(ids, r.GetString("projectId"))`,
+		"func (p *EscalatedTicketsProjection) ResolveLeadMemberId(value string) ([]string, error) {",
+		`p.app.FindRecordsByFilter("teamLeads", "memberId = {:v}", "", -1, 0, map[string]any{"v": value})`,
+		`ids = append(ids, r.GetString("teamId"))`,
 	} {
 		if !strings.Contains(flagged, want) {
-			t.Errorf("flaggedEntries projection missing %q:\n%s", want, flagged)
+			t.Errorf("escalatedTickets projection missing %q:\n%s", want, flagged)
 		}
 	}
 }
 
-// TestFinding3DomainCompiles proves the whole Finding 3 domain -- endsStream,
+// TestDerivationDomainCompiles proves the whole derivation domain -- endsStream,
 // toggle, count, sum and a scope resolver together -- is not just
 // syntactically valid but actually compiles against the real pocketcqrs
 // packages, the same way TestGeneratedGoDomainCompiles proves the plain path.
-func TestFinding3DomainCompiles(t *testing.T) {
+func TestDerivationDomainCompiles(t *testing.T) {
 	repoRoot, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	files, err := finding3Domain().GenerateGo()
+	files, err := derivationDomain().GenerateGo()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	dir := t.TempDir()
-	goMod := "module finding3-domain-smoke\n\ngo 1.25.0\n\n" +
+	goMod := "module derivation-domain-smoke\n\ngo 1.25.0\n\n" +
 		"require github.com/jamestryand/pocketcqrs v0.0.0\n\n" +
 		"replace github.com/jamestryand/pocketcqrs => " + repoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
@@ -475,102 +475,101 @@ func TestFinding3DomainCompiles(t *testing.T) {
 	build.Dir = dir
 	build.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("Finding 3 domain failed to build:\n%s", out)
+		t.Fatalf("derivation domain failed to build:\n%s", out)
 	}
 }
 
-// finding4Domain exercises F-20/schema 2.3.0's groupBy derivation: a
-// payrollPeriods read model whose staffTotals field is a nested list of
-// {staffId, outOfHoursHours, entriesLogged} rows, one per distinct staff
-// member who logged time in the period — outOfHoursHours a sum subfield,
-// entriesLogged a count subfield, so both groupBy-owned kinds are covered
-// in one model, mirroring the real project/gotimesheets shape this closes
-// the gap for (FAULTS-AND-WORK.md F-20).
-func finding4Domain() Domain {
+// groupByDomain exercises schema 2.3.0's groupBy derivation: a
+// salesPeriods read model whose memberTotals field is a nested list of
+// {memberId, unitsSold, salesRecorded} rows, one per distinct member
+// who recorded a sale in the period — unitsSold a sum subfield,
+// salesRecorded a count subfield, so both groupBy-owned kinds are covered
+// in one model.
+func groupByDomain() Domain {
 	return Domain{
-		Aggregate: "payrollPeriod",
+		Aggregate: "salesPeriod",
 		Commands: []Command{
-			{Name: "CreatePayrollPeriod", Once: true,
-				Events: []Event{{Name: "PayrollPeriodCreated", NoFields: true}}},
-			{Name: "LogTime", RequiresExisting: true,
-				Events: []Event{{Name: "TimeLogged", Fields: []Field{
-					{Name: "staffId", Type: "text"}, {Name: "hours", Type: "number"},
+			{Name: "CreateSalesPeriod", Once: true,
+				Events: []Event{{Name: "SalesPeriodCreated", NoFields: true}}},
+			{Name: "RecordSale", RequiresExisting: true,
+				Events: []Event{{Name: "SaleRecorded", Fields: []Field{
+					{Name: "memberId", Type: "text"}, {Name: "units", Type: "number"},
 				}}}},
 		},
 		ReadModels: []ReadModel{
 			{
-				Collection: "payrollPeriods",
+				Collection: "salesPeriods",
 				Key:        "periodId",
 				Fields: []Field{
-					{Name: "staffTotals", Type: "json",
-						Derivation: &FieldDerivation{Kind: DerivationGroupBy, GroupByField: "staffId"},
+					{Name: "memberTotals", Type: "json",
+						Derivation: &FieldDerivation{Kind: DerivationGroupBy, GroupByField: "memberId"},
 						Subfields: []Field{
-							{Name: "staffId", Type: "text"},
-							{Name: "outOfHoursHours", Type: "number", Derivation: &FieldDerivation{
-								Kind: DerivationSum, AddOnEventIDs: []string{"TimeLogged"},
-								AmountField: "hours", RowKeyField: "periodId",
+							{Name: "memberId", Type: "text"},
+							{Name: "unitsSold", Type: "number", Derivation: &FieldDerivation{
+								Kind: DerivationSum, AddOnEventIDs: []string{"SaleRecorded"},
+								AmountField: "units", RowKeyField: "periodId",
 							}},
-							{Name: "entriesLogged", Type: "number", Derivation: &FieldDerivation{
-								Kind: DerivationCount, IncrementOnEventIDs: []string{"TimeLogged"}, RowKeyField: "periodId",
+							{Name: "salesRecorded", Type: "number", Derivation: &FieldDerivation{
+								Kind: DerivationCount, IncrementOnEventIDs: []string{"SaleRecorded"}, RowKeyField: "periodId",
 							}},
 						},
 					},
 				},
-				On: []string{"TimeLogged"},
+				On: []string{"SaleRecorded"},
 			},
 		},
 	}
 }
 
-// TestFinding4ProjectionDerivations: the groupBy field's own trigger event
+// TestGroupByProjectionDerivations: the groupBy field's own trigger event
 // must route to BOTH its subfields' dedicated helpers (sum then count, in
 // declaration order), never the generic merge, and getOrCreate must seed
 // the parent field's own zero-state (an empty list) on a brand new row.
-func TestFinding4ProjectionDerivations(t *testing.T) {
-	files, err := finding4Domain().GenerateGo()
+func TestGroupByProjectionDerivations(t *testing.T) {
+	files, err := groupByDomain().GenerateGo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	periods := files[1].Source // payrollPeriods
+	periods := files[1].Source // salesPeriods
 	for _, want := range []string{
-		`case "TimeLogged":`,
-		`p.bumpGroupBySum(ctx, ev, "staffTotals", "staffId", "outOfHoursHours", "hours", "periodId", 1)`,
-		`return p.bumpGroupByCount(ctx, ev, "staffTotals", "staffId", "entriesLogged", "periodId", 1)`,
-		`rec.Set("staffTotals", []any{})`, // zero-state default seeded on create
-		"func (p *PayrollPeriodsProjection) groupByEntry(rec *core.Record, field, groupKeyField string, groupKeyValue any) (map[string]any, []map[string]any) {",
+		`case "SaleRecorded":`,
+		`p.bumpGroupBySum(ctx, ev, "memberTotals", "memberId", "unitsSold", "units", "periodId", 1)`,
+		`return p.bumpGroupByCount(ctx, ev, "memberTotals", "memberId", "salesRecorded", "periodId", 1)`,
+		`rec.Set("memberTotals", []any{})`, // zero-state default seeded on create
+		"func (p *SalesPeriodsProjection) groupByEntry(rec *core.Record, field, groupKeyField string, groupKeyValue any) (map[string]any, []map[string]any) {",
 		"_ = rec.UnmarshalJSONField(field, &rows)",
 		"if entry[groupKeyField] == groupKeyValue {",
-		"func (p *PayrollPeriodsProjection) bumpGroupBySum(ctx context.Context, ev events.Event, field, groupKeyField, subfield, amountField, rowKeyField string, sign float64) error {",
-		"func (p *PayrollPeriodsProjection) bumpGroupByCount(ctx context.Context, ev events.Event, field, groupKeyField, subfield, rowKeyField string, delta int) error {",
+		"func (p *SalesPeriodsProjection) bumpGroupBySum(ctx context.Context, ev events.Event, field, groupKeyField, subfield, amountField, rowKeyField string, sign float64) error {",
+		"func (p *SalesPeriodsProjection) bumpGroupByCount(ctx context.Context, ev events.Event, field, groupKeyField, subfield, rowKeyField string, delta int) error {",
 	} {
 		if !strings.Contains(periods, want) {
-			t.Errorf("payrollPeriods projection missing %q:\n%s", want, periods)
+			t.Errorf("salesPeriods projection missing %q:\n%s", want, periods)
 		}
 	}
 	if strings.Contains(periods, "applyMerge") {
-		// PayrollPeriodCreated has no derived-field trigger of its own AND is
-		// not otherwise merged (staffTotals is the read model's only field),
+		// SalesPeriodCreated has no derived-field trigger of its own AND is
+		// not otherwise merged (memberTotals is the read model's only field),
 		// so there is nothing left for the generic merge path to do.
-		t.Errorf("payrollPeriods has no plain merge events; applyMerge must not be generated:\n%s", periods)
+		t.Errorf("salesPeriods has no plain merge events; applyMerge must not be generated:\n%s", periods)
 	}
 }
 
-// TestFinding4DomainCompiles proves the whole groupBy domain actually
+// TestGroupByDomainCompiles proves the whole groupBy domain actually
 // compiles against the real pocketcqrs packages, the same way
-// TestFinding3DomainCompiles proves toggle/count/sum.
-func TestFinding4DomainCompiles(t *testing.T) {
+// TestDerivationDomainCompiles proves toggle/count/sum.
+func TestGroupByDomainCompiles(t *testing.T) {
 	repoRoot, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	files, err := finding4Domain().GenerateGo()
+	files, err := groupByDomain().GenerateGo()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	dir := t.TempDir()
-	goMod := "module finding4-domain-smoke\n\ngo 1.25.0\n\n" +
+	goMod := "module groupby-domain-smoke\n\ngo 1.25.0\n\n" +
 		"require github.com/jamestryand/pocketcqrs v0.0.0\n\n" +
 		"replace github.com/jamestryand/pocketcqrs => " + repoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
@@ -593,6 +592,6 @@ func TestFinding4DomainCompiles(t *testing.T) {
 	build.Dir = dir
 	build.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("Finding 4 domain failed to build:\n%s", out)
+		t.Fatalf("groupBy domain failed to build:\n%s", out)
 	}
 }

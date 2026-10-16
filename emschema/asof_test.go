@@ -7,76 +7,76 @@ import (
 )
 
 // asOfDocument builds a minimal EventModeling document exercising schema
-// 2.6.0's readModelQuery.asOf: a time-entries read model with a last7Days
+// 2.6.0's readModelQuery.asOf: a tickets read model with a last7Days
 // dateRange filter, and a stateView scenario that pins asOf so the scenario
 // passes deterministically regardless of the real wall-clock date — the
-// exact gap dotnetcqrs's own asOf port (commit 2febf60, v0.7.0) fixed for
-// project/timesheets's export-pm-slice (calendar drift flipped it PASS/FAIL
-// on a rolling ~7-day cadence).
+// exact gap dotnetcqrs's own asOf port (commit 2febf60, v0.7.0) fixed: a
+// rolling-window scenario's calendar drift flipped it PASS/FAIL on a
+// rolling ~7-day cadence.
 func asOfDocument(asOf *string) *Document {
 	return &Document{
 		EventModelingSchemaVersion: SchemaVersion,
 		ID:                         "d1",
-		Name:                       "Time Entries AsOf",
+		Name:                       "Tickets AsOf",
 		Swimlanes:                  []Swimlane{{ID: "sys", Name: "System", Kind: "system"}},
 		Events: map[string]Event{
-			"time-logged": {
-				Name: "Time Logged", SwimlaneID: "sys", Aggregate: "TimeEntry",
+			"ticket-opened": {
+				Name: "Ticket Opened", SwimlaneID: "sys", Aggregate: "Ticket",
 				Fields: []Field{
-					{Name: "entryId", Type: "string", IDAttribute: true},
-					{Name: "taskDate", Type: "date"},
+					{Name: "ticketId", Type: "string", IDAttribute: true},
+					{Name: "openedOn", Type: "date"},
 				},
 			},
 		},
 		Commands: map[string]Command{
-			"log-time": {
-				Name: "Log Time", Aggregate: "TimeEntry",
+			"open-ticket": {
+				Name: "Open Ticket", Aggregate: "Ticket",
 				Fields: []Field{
-					{Name: "entryId", Type: "string"},
-					{Name: "taskDate", Type: "date"},
+					{Name: "ticketId", Type: "string"},
+					{Name: "openedOn", Type: "date"},
 				},
 			},
 		},
 		ReadModels: map[string]ReadModel{
-			"time-entries": {
-				Name:              "Time Entries",
-				BuiltFromEventIDs: []string{"time-logged"},
+			"tickets": {
+				Name:              "Tickets",
+				BuiltFromEventIDs: []string{"ticket-opened"},
 				Fields: []Field{
-					{Name: "entryId", Type: "string", IDAttribute: true},
-					{Name: "taskDate", Type: "date"},
+					{Name: "ticketId", Type: "string", IDAttribute: true},
+					{Name: "openedOn", Type: "date"},
 				},
 				Filters: []ReadModelFilter{
-					{Param: "dateRange", Field: "taskDate", Kind: FilterDateRange,
+					{Param: "dateRange", Field: "openedOn", Kind: FilterDateRange,
 						Presets: []string{DateRangePresetLast7Days}},
 				},
 			},
 		},
 		Screens: map[string]Screen{
-			"scr-log":  {Name: "Log Time Screen"},
-			"scr-view": {Name: "View Time Entries"},
+			"scr-log":  {Name: "Open Ticket Screen"},
+			"scr-view": {Name: "View Tickets"},
 		},
 		Slices: []Slice{
 			{
-				ID: "log-time-slice", Name: "Log Time", Pattern: PatternStateChange,
+				ID: "open-ticket-slice", Name: "Open Ticket", Pattern: PatternStateChange,
 				SwimlaneID: "sys", Status: "wireframe", ScreenID: "scr-log",
-				CommandID: "log-time", EventIDs: []string{"time-logged"},
+				CommandID: "open-ticket", EventIDs: []string{"ticket-opened"},
 			},
 			{
-				ID: "view-time-entries-slice", Name: "View Time Entries", Pattern: PatternStateView,
+				ID: "view-tickets-slice", Name: "View Tickets", Pattern: PatternStateView,
 				SwimlaneID: "sys", Status: "wireframe", ScreenID: "scr-view",
-				ReadModelID: "time-entries",
+				ReadModelID: "tickets",
 				Scenarios: []Scenario{
 					{
 						ID: "last7days-pinned", Name: "a last7Days query pinned to asOf narrows deterministically",
 						Kind: KindStateView,
 						Given: []EventRef{
 							// inside [2026-08-31, 2026-09-06] when asOf = 2026-09-06
-							{EventID: "time-logged", Data: json.RawMessage(`{"entryId":"e1","taskDate":"2026-09-01"}`)},
+							{EventID: "ticket-opened", Data: json.RawMessage(`{"ticketId":"t1","openedOn":"2026-09-01"}`)},
 							// outside that window
-							{EventID: "time-logged", Data: json.RawMessage(`{"entryId":"e2","taskDate":"2026-08-01"}`)},
+							{EventID: "ticket-opened", Data: json.RawMessage(`{"ticketId":"t2","openedOn":"2026-08-01"}`)},
 						},
-						When: readModelQueryJSON("time-entries", `{"dateRange":{"kind":"last7Days"}}`, asOf),
-						Then: json.RawMessage(`{"result":{"entries":[{"entryId":"e1","taskDate":"2026-09-01"}]}}`),
+						When: readModelQueryJSON("tickets", `{"dateRange":{"kind":"last7Days"}}`, asOf),
+						Then: json.RawMessage(`{"result":{"entries":[{"ticketId":"t1","openedOn":"2026-09-01"}]}}`),
 					},
 				},
 			},
@@ -101,7 +101,7 @@ func strPtr(s string) *string { return &s }
 
 // TestImportAndVerifyAsOf is the load-bearing proof: without asOf, this
 // scenario's pass/fail would depend on today's real date (exactly the
-// export-pm-slice drift dotnetcqrs's port fixed); with asOf pinned, it must
+// drift dotnetcqrs's port fixed); with asOf pinned, it must
 // pass deterministically no matter when the suite actually runs.
 func TestImportAndVerifyAsOf(t *testing.T) {
 	doc := asOfDocument(strPtr("2026-09-06"))

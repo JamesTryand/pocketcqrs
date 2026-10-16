@@ -109,7 +109,7 @@ func TestFieldGatedRoleLint(t *testing.T) {
 	}
 }
 
-// TestRequiredOwnershipLint proves update-time-entry's real shape (no
+// TestRequiredOwnershipLint proves an owner-only update's shape (no
 // bypassRoles) lints clean, and that a dangling via.readModelId is caught.
 func TestRequiredOwnershipLint(t *testing.T) {
 	doc := baseValidDoc()

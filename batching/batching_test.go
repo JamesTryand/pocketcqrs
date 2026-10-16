@@ -241,7 +241,7 @@ func TestDeterminismSameQueuedMetaReplayedProducesIdenticalNow(t *testing.T) {
 // against plain sequential HandleWithMeta calls over the same commands
 // (including a same-stream succession within the batch window) -- the
 // batching mechanism must be transparent, producing the same shape of
-// outcome a caller would have gotten before item 4 existed.
+// outcome a caller would have gotten before batching existed.
 func TestRunOnceMatchesSequentialHandleWithMeta(t *testing.T) {
 	refStore, err := events.Open(filepath.Join(t.TempDir(), "ref.db"))
 	if err != nil {

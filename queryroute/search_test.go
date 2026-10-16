@@ -105,7 +105,7 @@ func TestMatchFiltersSearchThroughTheRoute(t *testing.T) {
 		tok, _ := rec.NewAuthToken()
 		return tok
 	}
-	staff, alice := token("support", ""), token("", "c1")
+	agent, alice := token("support", ""), token("", "c1")
 
 	router, _ := apis.NewRouter(app)
 	se := &core.ServeEvent{App: app, Router: router}
@@ -120,7 +120,7 @@ func TestMatchFiltersSearchThroughTheRoute(t *testing.T) {
 	mux, _ := router.BuildMux()
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	f := &fixture{srv: srv, tokens: map[string]string{"staff": staff, "alice": alice}}
+	f := &fixture{srv: srv, tokens: map[string]string{"agent": agent, "alice": alice}}
 
 	get := func(who, q string) (int, map[string]map[string]any) {
 		status, body := f.get(t, who, "/api/cqrs/rm/customers"+q)
@@ -129,19 +129,19 @@ func TestMatchFiltersSearchThroughTheRoute(t *testing.T) {
 		}
 		return status, items(t, body)
 	}
-	if _, rows := get("staff", "?email=ALICE@Example.com"); len(rows) != 1 || rows["c1"]["email"] != "alice@example.com" {
+	if _, rows := get("agent", "?email=ALICE@Example.com"); len(rows) != 1 || rows["c1"]["email"] != "alice@example.com" {
 		t.Fatalf("an exact search over personal data finds the row (and reveals it): %v", rows)
 	}
-	if _, rows := get("staff", "?name=al"); len(rows) != 2 || rows["c3"] != nil {
+	if _, rows := get("agent", "?name=al"); len(rows) != 2 || rows["c3"] != nil {
 		t.Fatalf("a plain prefix search: %v", rows)
 	}
-	if _, rows := get("staff", "?name=al&email=alan@example.com"); len(rows) != 1 || rows["c2"] == nil {
+	if _, rows := get("agent", "?name=al&email=alan@example.com"); len(rows) != 1 || rows["c2"] == nil {
 		t.Fatalf("two searches intersect: %v", rows)
 	}
-	if _, rows := get("staff", "?email=nobody@example.com"); rows == nil || len(rows) != 0 {
+	if _, rows := get("agent", "?email=nobody@example.com"); rows == nil || len(rows) != 0 {
 		t.Fatalf("no match is an empty page: %v", rows)
 	}
-	if status, _ := get("staff", "?name=a"); status != http.StatusBadRequest {
+	if status, _ := get("agent", "?name=a"); status != http.StatusBadRequest {
 		t.Fatalf("a prefix under minPrefixLength is a 400, got %d", status)
 	}
 	if _, rows := get("alice", "?name=al"); len(rows) != 1 || rows["c1"] == nil {

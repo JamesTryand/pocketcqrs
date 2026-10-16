@@ -32,11 +32,11 @@ func TestForbiddenVerdictIs403(t *testing.T) {
 	}
 	t.Cleanup(app.Cleanup)
 	registry := decider.NewRegistry(store)
-	decider.Register(registry, "expense", &decider.Decider[struct{}]{
+	decider.Register(registry, "loan", &decider.Decider[struct{}]{
 		InitialState: func() struct{} { return struct{}{} },
 		Decide: func(cmd decider.Command, _ struct{}) ([]events.NewEvent, error) {
 			if cmd.Name == "Forbidden" {
-				return nil, decider.Forbidden("only its own staff member may change it")
+				return nil, decider.Forbidden("only the member who requested it may change it")
 			}
 			return nil, decider.Forbidden("unreachable")
 		},
@@ -48,14 +48,14 @@ func TestForbiddenVerdictIs403(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := http.Post(srv.URL+"/api/cqrs/expense/x1/Forbidden", "application/json", bytes.NewReader([]byte(`{}`)))
+	resp, err := http.Post(srv.URL+"/api/cqrs/loan/l1/Forbidden", "application/json", bytes.NewReader([]byte(`{}`)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	var body map[string]string
 	_ = json.NewDecoder(resp.Body).Decode(&body)
-	if resp.StatusCode != http.StatusForbidden || body["error"] != "only its own staff member may change it" {
+	if resp.StatusCode != http.StatusForbidden || body["error"] != "only the member who requested it may change it" {
 		t.Fatalf("want 403 with the message, got %d %v", resp.StatusCode, body)
 	}
 }

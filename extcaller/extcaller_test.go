@@ -95,7 +95,7 @@ func TestApply_SuccessDispatchesFollowUp(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
 			t.Errorf("expected Authorization header, got %q", got)
 		}
-		// F-8 follow-up (NEEDS.md): extcaller must send Causation-Id (the
+		// extcaller must send Causation-Id (the
 		// causing event's own id) and Correlation-Id (inherited from the
 		// causing event's metadata, defaulting to its own id when absent --
 		// testEvent has no metadata, so both equal ev.ID here).

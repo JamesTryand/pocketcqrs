@@ -7,10 +7,11 @@ import (
 
 // A create that may begin its stream again after an end (CanBeginAgain, an
 // assign after an unassign) leaves the end not final, so neither generator
-// adds the Ended flag: the aggregate generates exactly as before D28.
+// adds the Ended flag: the aggregate generates exactly as it did before ends
+// were final.
 func TestCanBeginAgainGeneratesNoEndedFlag(t *testing.T) {
-	d := finding3Domain()
-	d.Commands[0].CanBeginAgain = true // CreateStaff
+	d := derivationDomain()
+	d.Commands[0].CanBeginAgain = true // CreateMember
 	js, err := d.Generate()
 	if err != nil {
 		t.Fatal(err)
@@ -25,8 +26,8 @@ func TestCanBeginAgainGeneratesNoEndedFlag(t *testing.T) {
 	if strings.Contains(goFiles[0].Source, "Ended") {
 		t.Errorf("Go decider has an Ended flag:\n%s", goFiles[0].Source)
 	}
-	if !strings.Contains(js[0].Source, "case 'StaffRemoved':\n      return Object.assign({}, state, event.data, { exists: false });") {
-		t.Errorf("StaffRemoved should still reset exists:\n%s", js[0].Source)
+	if !strings.Contains(js[0].Source, "case 'MemberRemoved':\n      return Object.assign({}, state, event.data, { exists: false });") {
+		t.Errorf("MemberRemoved should still reset exists:\n%s", js[0].Source)
 	}
 }
 

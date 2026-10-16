@@ -101,7 +101,7 @@ func TestGatewayBatchingReturnsSameSynchronousShapeAsDirect(t *testing.T) {
 	}
 }
 
-// TestGatewayBatchingStampsRFC3339Now is a regression test for F-16:
+// TestGatewayBatchingStampsRFC3339Now is a regression test:
 // handleViaBatching's pre-enqueue "now" stamp must be real RFC3339
 // (T-separated), not the space-separated near-ISO format that silently
 // broke downstream date-time consumers.

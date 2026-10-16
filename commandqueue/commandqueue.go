@@ -1,6 +1,6 @@
 // Package commandqueue durably records incoming commands before they are
 // decided, so a batching event writer can accumulate many commands' decided
-// events into one SQLite transaction instead of one per command (item 4).
+// events into one SQLite transaction instead of one per command.
 //
 // Deliberately kept in its own SQLite file, separate from events.db -- the
 // same reasoning as idempotency.db. This is possible because completion
@@ -150,7 +150,7 @@ func (s *Store) PendingCommands(ctx context.Context, limit int) ([]QueuedCommand
 }
 
 // Depth reports how many enqueued commands are not yet done. Used for
-// admission control (F-5): a caller sheds new commands once this crosses a
+// admission control: a caller sheds new commands once this crosses a
 // configured ceiling, instead of letting them pile up as blocked goroutines
 // with no bound but SQLite's own busy_timeout.
 func (s *Store) Depth(ctx context.Context) (int, error) {

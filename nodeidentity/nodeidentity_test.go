@@ -85,7 +85,7 @@ func TestResolveEveryCombination(t *testing.T) {
 					before := append([]byte(nil), f.file...)
 					var logged []string
 					got, err := Resolve(Options{
-						Assigned: envs[env], StateDir: "state", Role: "writer", Instance: "timesheets",
+						Assigned: envs[env], StateDir: "state", Role: "writer", Instance: "orders",
 						Logf:     func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) },
 						fs:       f,
 						hostname: func() (string, error) { return "node-3", nil },
@@ -123,13 +123,13 @@ func TestResolveEveryCombination(t *testing.T) {
 func TestAttributes(t *testing.T) {
 	started := time.Date(2026, 9, 27, 1, 40, 12, 345_600_000, time.FixedZone("BST", 3600))
 	got, err := Resolve(Options{
-		Assigned: assignedID, Instance: "timesheets", Role: "reader", StartedAt: started,
+		Assigned: assignedID, Instance: "orders", Role: "reader", StartedAt: started,
 		hostname: func() (string, error) { return "node-3", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Instance != "timesheets" || got.Host != "node-3" || got.Stack != "pocketcqrs" || got.Role != "reader" {
+	if got.Instance != "orders" || got.Host != "node-3" || got.Stack != "pocketcqrs" || got.Role != "reader" {
 		t.Errorf("attributes: %+v", got)
 	}
 	if s := got.StartedAtRFC3339(); s != "2026-09-27T00:40:12.345Z" {
@@ -166,7 +166,7 @@ func TestUnreadableHostnameIsUnknown(t *testing.T) {
 // I6: an explicit instance has node_id's format; empty means the workload's
 // own name.
 func TestValidateInstance(t *testing.T) {
-	for _, ok := range []string{"", "timesheets", "model_b-2", strings.Repeat("a", 64)} {
+	for _, ok := range []string{"", "orders", "model_b-2", strings.Repeat("a", 64)} {
 		if err := ValidateInstance(ok); err != nil {
 			t.Errorf("ValidateInstance(%q) = %v, want nil", ok, err)
 		}

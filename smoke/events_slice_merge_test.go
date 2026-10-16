@@ -133,8 +133,8 @@ console.log("note created: " + event.aggregateId);
 	// a pre-existing, unrelated gap (confirmed independently against
 	// `pack import` with a bad packDir) where app.Start() discards a RunE
 	// error's exit code for every bootstrap-requiring CLI command -- the
-	// same F-9 class main.go already documents fixing for `schema import`
-	// specifically, but nothing else. Out of scope here; see NEEDS.md.
+	// same class main.go already documents fixing for `schema import`
+	// specifically, but nothing else. Out of scope here.
 	emptyFns := t.TempDir()
 	out, _ := exec.Command(src.Bin, "events", "import", packDir, "--dir", targetData, "--functionsDir", emptyFns).CombinedOutput()
 	if !strings.Contains(string(out), "import the pack's code and reload") {

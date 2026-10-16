@@ -41,7 +41,7 @@ var once sync.Once
 // migrations.RegisterExamples and roles.RegisterCollection document.
 //
 // Always registered, not --tutorial-gated: this is core's own shipped
-// primitive, the same posture roles.RegisterCollection takes for Item 11.
+// primitive, the same posture roles.RegisterCollection takes for the capability model.
 //
 // sync.Once because core.AppMigrations is process-global: calling twice
 // would append duplicate entries for the same migration.

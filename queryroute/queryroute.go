@@ -3,8 +3,7 @@
 // for personal data — the port of dotnetcqrs's generated read-model query
 // routes — and works the same for a read model without any.
 //
-// What it guarantees (user's decisions, 2026-10-06; see the notebook's
-// platform/eventmodeling-codegen findings.md "G6 decisions"):
+// What it guarantees (decided 2026-10-06):
 //
 //   - Authorization is the read model's requiredRole, resolved by the same
 //     kind of host hook the command side uses (ResolveOwnRole). Superusers
@@ -81,7 +80,7 @@ type Spec struct {
 
 // Grant is one granting scope: a row is admitted when a row of Collection
 // has MatchField equal to the caller's subject id and SelectField equal to
-// this row's LocalField (a project manager's projects, say).
+// this row's LocalField (a team lead's teams, say).
 type Grant struct {
 	Collection, MatchField, SelectField, LocalField string
 }

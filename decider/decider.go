@@ -104,8 +104,7 @@ func (e *faultError) Unwrap() []error { return []error{ErrDecideFault, e.err} }
 // the JS adapter) — Register[S]'s generated closure discarded the meta
 // parameter entirely. That made any authorization logic ("does this actor
 // hold permission for this command") impossible to express in the
-// documented, idiomatic Go decider pattern. See platform/pocketbase-cqrs-faas
-// FAULTS-AND-WORK.md F-14 for the finding that surfaced this.
+// documented, idiomatic Go decider pattern.
 //
 // Provenance is a separate question from Actor: Actor answers "who/what
 // issued this command" (a user id, or "reactor:<name>" for reactor
@@ -114,9 +113,8 @@ func (e *faultError) Unwrap() []error { return []error{ErrDecideFault, e.err} }
 // It is empty for everything the gateway and local reactors produce today —
 // only a trusted local write path is meant to ever set it — so a decider
 // checking it for elevated trust is trusting whatever wrote that meta, not
-// pattern-matching Actor's string convention. See
-// platform/pocketbase-cqrs-faas NEEDS.md's federation trust model item for
-// the full reasoning.
+// pattern-matching Actor's string convention: which writers are trusted is
+// a federation trust-model question this package does not settle.
 type Command struct {
 	Name       string          `json:"name"`
 	Payload    json.RawMessage `json:"payload"`
@@ -194,7 +192,7 @@ func Register[S any](r *Registry, aggregate string, d *Decider[S]) {
 		initial: func() any { return d.InitialState() },
 		decide: func(cmd Command, state any, meta map[string]any) ([]events.NewEvent, error) {
 			// Fill Command.Actor/Now from meta before Decide sees it — see
-			// Command's own doc comment for why this exists (F-14). meta may
+			// Command's own doc comment for why this exists. meta may
 			// be nil (a bare Handle call with no HandleWithMeta wrapper);
 			// the type assertions below leave Actor/Now as "" in that case,
 			// same as an anonymous command.

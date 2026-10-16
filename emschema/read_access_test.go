@@ -8,31 +8,31 @@ import (
 func readAccessDoc(subjectField string) string {
 	return `{"eventModelingSchemaVersion":"3.17.0","id":"r","name":"R",
 	"swimlanes":[{"id":"s","name":"S","kind":"team"}],
-	"events":{"entry-logged":{"name":"Entry Logged","swimlaneId":"s","aggregate":"entry",
-		"fields":[{"name":"entryId","type":"string","idAttribute":true},{"name":"staffId","type":"string"},{"name":"projectId","type":"string"}]}},
-	"commands":{"log-entry":{"name":"Log Entry","aggregate":"entry","fields":[{"name":"entryId","type":"string","idAttribute":true}]}},
+	"events":{"ticket-opened":{"name":"Ticket Opened","swimlaneId":"s","aggregate":"ticket",
+		"fields":[{"name":"ticketId","type":"string","idAttribute":true},{"name":"agentId","type":"string"},{"name":"teamId","type":"string"}]}},
+	"commands":{"open-ticket":{"name":"Open Ticket","aggregate":"ticket","fields":[{"name":"ticketId","type":"string","idAttribute":true}]}},
 	"readModels":{
-		"time-entries":{"name":"Time Entries","builtFromEventIds":["entry-logged"],"requiredRole":"manager",
-			"fields":[{"name":"entryId","type":"string"},{"name":"staffId","type":"string"},{"name":"projectId","type":"string"}],
+		"tickets":{"name":"Tickets","builtFromEventIds":["ticket-opened"],"requiredRole":"supervisor",
+			"fields":[{"name":"ticketId","type":"string"},{"name":"agentId","type":"string"},{"name":"teamId","type":"string"}],
 			"selfAccess":{"subjectField":"` + subjectField + `","param":"mine"},
-			"scopes":[{"param":"pmStaffId","grantsAccess":true,
-				"via":{"readModelId":"project-managers","matchParamTo":"staffId","selectField":"projectId","filterLocalField":"projectId"}}]},
-		"project-managers":{"name":"Project Managers","builtFromEventIds":["entry-logged"],
-			"fields":[{"name":"entryId","type":"string"},{"name":"staffId","type":"string"},{"name":"projectId","type":"string"}]}},
+			"scopes":[{"param":"leadAgentId","grantsAccess":true,
+				"via":{"readModelId":"team-leads","matchParamTo":"agentId","selectField":"teamId","filterLocalField":"teamId"}}]},
+		"team-leads":{"name":"Team Leads","builtFromEventIds":["ticket-opened"],
+			"fields":[{"name":"ticketId","type":"string"},{"name":"agentId","type":"string"},{"name":"teamId","type":"string"}]}},
 	"screens":{"sc":{"name":"Sc"}},
 	"slices":[{"id":"log","name":"Log","pattern":"stateChange","swimlaneId":"s","status":"planned",
-		"screenId":"sc","commandId":"log-entry","eventIds":["entry-logged"],"scenarios":[]}]}`
+		"screenId":"sc","commandId":"open-ticket","eventIds":["ticket-opened"],"scenarios":[]}]}`
 }
 
 // selfAccess and a granting scope reach the generated JS rule, with the
-// caller's fields named at import (decision 6), and a read model with no
-// access rule is signed-in only (decision 8).
+// caller's fields named at import, and a read model with no access rule is
+// signed-in only.
 func TestReadAccessReachesTheGeneratedRule(t *testing.T) {
-	doc, err := Load(writeDoc(t, readAccessDoc("staffId")))
+	doc, err := Load(writeDoc(t, readAccessDoc("agentId")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	mapped, err := Map(doc, Options{RoleField: "jobRole", SubjectField: "staffId"})
+	mapped, err := Map(doc, Options{RoleField: "jobRole", SubjectField: "agentId"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,27 +40,27 @@ func TestReadAccessReachesTheGeneratedRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var entries, managers string
+	var tickets, leads string
 	for _, f := range files {
 		switch f.Name {
-		case "timeEntries.js":
-			entries = f.Source
-		case "projectManagers.js":
-			managers = f.Source
+		case "tickets.js":
+			tickets = f.Source
+		case "teamLeads.js":
+			leads = f.Source
 		}
 	}
 	for _, want := range []string{
-		`@request.auth.jobRole = "manager"`,
-		`(@request.auth.staffId != "" && staffId = @request.auth.staffId)`,
-		`@collection.projectManagers:grant0.staffId ?= @request.auth.staffId && @collection.projectManagers:grant0.projectId ?= projectId`,
+		`@request.auth.jobRole = "supervisor"`,
+		`(@request.auth.agentId != "" && agentId = @request.auth.agentId)`,
+		`@collection.teamLeads:grant0.agentId ?= @request.auth.agentId && @collection.teamLeads:grant0.teamId ?= teamId`,
 		`"mine" narrows a caller to their own rows`,
 	} {
-		if !strings.Contains(entries, want) {
-			t.Errorf("timeEntries.js lacks %q:\n%s", want, entries)
+		if !strings.Contains(tickets, want) {
+			t.Errorf("tickets.js lacks %q:\n%s", want, tickets)
 		}
 	}
-	if !strings.Contains(managers, "//@rule projectManagers authenticated") {
-		t.Errorf("a read model with no access rule is signed-in only:\n%s", managers)
+	if !strings.Contains(leads, "//@rule teamLeads authenticated") {
+		t.Errorf("a read model with no access rule is signed-in only:\n%s", leads)
 	}
 
 	// the Go target's read route carries the same rule
@@ -70,19 +70,19 @@ func TestReadAccessReachesTheGeneratedRule(t *testing.T) {
 	}
 	var route string
 	for _, f := range goFiles {
-		if f.Name == "timeEntries_query.go" {
+		if f.Name == "tickets_query.go" {
 			route = f.Source
 		}
 	}
 	for _, want := range []string{
-		`RequiredRole: []string{"manager"}`,
-		`SelfSubject: "staffId"`,
+		`RequiredRole: []string{"supervisor"}`,
+		`SelfSubject: "agentId"`,
 		`SelfParam: "mine"`,
-		`{Collection: "projectManagers", MatchField: "staffId", SelectField: "projectId", LocalField: "projectId"}`,
+		`{Collection: "teamLeads", MatchField: "agentId", SelectField: "teamId", LocalField: "teamId"}`,
 	} {
 		// gofmt aligns the fields, so compare with spacing collapsed
 		if !strings.Contains(strings.Join(strings.Fields(route), " "), want) {
-			t.Errorf("timeEntries_query.go lacks %q:\n%s", want, route)
+			t.Errorf("tickets_query.go lacks %q:\n%s", want, route)
 		}
 	}
 }

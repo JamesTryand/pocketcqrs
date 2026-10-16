@@ -188,7 +188,7 @@ func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.E
 			// PERMANENT wiring fault, not a domain refusal: no redelivery
 			// can ever succeed, so logging this at the same level as the
 			// idempotency path below is how a lost reaction stays invisible
-			// (F-2). The reactor gate refuses this at load, so reaching here
+			//. The reactor gate refuses this at load, so reaching here
 			// means the target went away UNDER a live reactor — the case a
 			// load-time check cannot catch.
 			//

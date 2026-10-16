@@ -38,7 +38,7 @@ func (s *State) BuildCatalog(ctx context.Context) (*catalog.Catalog, error) {
 //
 //	GET /api/cqrs/catalog
 //
-// Item 11: gated by authverify.RequireCapabilityCached (capOpsCatalogRead),
+// gated by authverify.RequireCapabilityCached (capOpsCatalogRead),
 // not a bare superuser check — a "roles" record with that capability can
 // reach it, and it is remote-verify-aware on a --cqrsVerifyAuth secondary.
 // For an ordinary single-node superuser (s.Verifier == nil, the common

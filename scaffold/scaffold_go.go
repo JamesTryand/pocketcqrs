@@ -224,7 +224,7 @@ func (d Domain) eventFields(name string) []Field {
 }
 
 // endsForGood reports whether an end is final for this aggregate: an
-// event ends the stream and some create may not begin it again (D28). Only
+// event ends the stream and some create may not begin it again. Only
 // such an aggregate carries the Ended flag, so every other decider
 // generates exactly as before. Mirrors dotnetcqrs's DeciderGenerator.
 func (d Domain) endsForGood() bool {
@@ -275,7 +275,7 @@ func formatGo(src string) (string, error) {
 // naturally one unit, and this repo's own aggregates/projections/reactors
 // split is its own tutorial's tier-per-package layout, not a convention to
 // impose on a downstream consumer's repo (whose own layout is deliberately
-// undocumented elsewhere — see FAULTS-AND-WORK.md D-2).
+// left to that consumer).
 func (d Domain) GenerateGo() ([]GoFile, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
@@ -525,9 +525,9 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 		// endsStream events (an unassign, a removal) reset Exists instead of
 		// setting it -- otherwise the generic fold only ever sets state and
 		// never retracts it, permanently blocking a later create-shaped
-		// command on the same stream once it has ever fired once (Finding 3).
+		// command on the same stream once it has ever fired once.
 		// Where a create may not begin again, the end also sets Ended, which
-		// that create refuses (D28).
+		// that create refuses.
 		existsAfter := "true"
 		if d.eventEndsStream(name) {
 			existsAfter = "false"
@@ -645,7 +645,7 @@ func (d Domain) projectionGo(pkg string, rm ReadModel) string {
 	return goCommit(d.projectionGoShape(pkg, rm), rm)
 }
 
-// goCommit gives a Go projection Commit and Checkpoints (R2): each event's
+// goCommit gives a Go projection Commit and Checkpoints: each event's
 // row writes and its position in data.db commit in one transaction, Apply
 // running on the transaction's app.
 func goCommit(src string, rm ReadModel) string {
@@ -653,8 +653,8 @@ func goCommit(src string, rm ReadModel) string {
 	src = strings.Replace(src, "\t\"github.com/jamestryand/pocketcqrs/events\"\n",
 		"\t\"github.com/jamestryand/pocketcqrs/consumers\"\n\t\"github.com/jamestryand/pocketcqrs/events\"\n\t\"github.com/jamestryand/pocketcqrs/projections\"\n", 1)
 	return src + fmt.Sprintf(`
-// Commit applies ev and records its position in data.db in one transaction
-// (R2): a failure part-way leaves neither, so no event is applied twice or
+// Commit applies ev and records its position in data.db in one transaction:
+// a failure part-way leaves neither, so no event is applied twice or
 // half. The engine calls it in place of Apply.
 func (p *%[1]s) Commit(ctx context.Context, ev events.Event) error {
 	return projections.Commit(ctx, p.app, p.Name(), ev.Position, func(tx core.App) error {
@@ -808,7 +808,7 @@ func (d Domain) projectionGoBody(pkg string, rm ReadModel) string {
 		return b.String()
 	}
 
-	// Finding 3: at least one field is a fold over named events (a toggle,
+	// At least one field is a fold over named events (a toggle,
 	// a count or a sum) rather than a same-named payload copy. Those
 	// trigger events are pulled OUT of the generic merge entirely and
 	// routed to dedicated per-kind helpers instead — an event that feeds a
@@ -913,7 +913,7 @@ func (d Domain) projectionGoBody(pkg string, rm ReadModel) string {
 		b.WriteString("// bumpCount adjusts a count-derivation field. rowKeyField names the\n")
 		b.WriteString("// payload field on the triggering event carrying the TARGET row's key —\n")
 		b.WriteString("// the event is usually on a different stream than this read model's own\n")
-		b.WriteString("// (an assignment event rolling up onto its project), so the row can't be\n")
+		b.WriteString("// (an assignment event rolling up onto its team), so the row can't be\n")
 		b.WriteString("// found by ev.AggregateID the way a same-aggregate field can.\n")
 		fmt.Fprintf(&b, "func (p *%s) bumpCount(ctx context.Context, ev events.Event, field, rowKeyField string, delta int) error {\n", typeName)
 		b.WriteString("\tctx = writeguard.MarkInternal(ctx)\n")

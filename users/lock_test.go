@@ -66,22 +66,22 @@ func TestLockedFieldsCannotBeSelfAssigned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	col.Fields.Add(&core.TextField{Name: "role"}, &core.TextField{Name: "staffId"}, &core.TextField{Name: "nickname"})
+	col.Fields.Add(&core.TextField{Name: "role"}, &core.TextField{Name: "memberId"}, &core.TextField{Name: "nickname"})
 	if err := app.Save(col); err != nil {
 		t.Fatal(err)
 	}
-	if err := LockFields(app, "role", "staffId"); err != nil {
+	if err := LockFields(app, "role", "memberId"); err != nil {
 		t.Fatal(err)
 	}
 	// idempotent: a second boot adds nothing
-	if err := LockFields(app, "role", "staffId"); err != nil {
+	if err := LockFields(app, "role", "memberId"); err != nil {
 		t.Fatal(err)
 	}
 	srv := usersAPI(t, app)
 	const path = "/api/collections/users/records"
 
 	creds := map[string]any{"email": "a@example.com", "password": "secret-password", "passwordConfirm": "secret-password"}
-	withRole := map[string]any{"role": "manager"}
+	withRole := map[string]any{"role": "supervisor"}
 	for k, v := range creds {
 		withRole[k] = v
 	}
@@ -101,7 +101,7 @@ func TestLockedFieldsCannotBeSelfAssigned(t *testing.T) {
 	}
 	token, _ := auth["token"].(string)
 
-	for _, field := range []string{"role", "staffId"} {
+	for _, field := range []string{"role", "memberId"} {
 		if status, _ := call(t, srv, http.MethodPatch, path+"/"+id, token, map[string]any{field: "x"}); status < 400 {
 			t.Errorf("a user must not set their own %s, got %d", field, status)
 		}
@@ -126,7 +126,7 @@ func TestLockedFieldsCannotBeSelfAssigned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status, _ := call(t, srv, http.MethodPatch, path+"/"+id, suToken, map[string]any{"role": "manager"}); status != http.StatusOK {
+	if status, _ := call(t, srv, http.MethodPatch, path+"/"+id, suToken, map[string]any{"role": "supervisor"}); status != http.StatusOK {
 		t.Errorf("a superuser sets the role, got %d", status)
 	}
 }

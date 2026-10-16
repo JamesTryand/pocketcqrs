@@ -1,6 +1,6 @@
 // Package nodeidentity resolves this node's identity at boot, per the
-// cross-stack node-identity contract (platform/cqrs-runtime-contract,
-// contracts/node-identity.md, 1.0): an opaque node_id that survives restarts
+// cross-stack node-identity contract (node-identity 1.0, shared with
+// dotnetcqrs): an opaque node_id that survives restarts
 // and tells apart several nodes on one machine, plus the descriptive
 // attributes reported beside it.
 //

@@ -46,7 +46,7 @@ func TestGoVerifyGenerated(t *testing.T) {
 	doc, mapped := loadMapped(t, fixture(t, "examples/conditional-outcomes.json"))
 	results := goVerify(t, doc, mapped, "")
 	for id, r := range results {
-		want := id != "expense-over-limit"
+		want := id != "refund-over-threshold"
 		if r.Passed != want || r.Hand == want {
 			t.Errorf("%s: passed=%v hand=%v: %s", id, r.Passed, r.Hand, r.Detail)
 		}
@@ -56,20 +56,20 @@ func TestGoVerifyGenerated(t *testing.T) {
 	}
 }
 
-// A host's own Go package runs: its hook decides the over-limit expense
+// A host's own Go package runs: its hook decides the over-threshold refund
 // (a pass, not HAND), and a package the host lacks is a skip.
 func TestGoVerifyHost(t *testing.T) {
 	doc, mapped := loadMapped(t, fixture(t, "examples/conditional-outcomes.json"))
 	host := t.TempDir()
 	for _, d := range mapped.Domains {
-		if d.Aggregate != "expense" {
-			continue // the host has no entry package
+		if d.Aggregate != "refund" {
+			continue // the host has no booking package
 		}
 		files, err := d.GenerateGo()
 		if err != nil {
 			t.Fatal(err)
 		}
-		dir := filepath.Join(host, "expense")
+		dir := filepath.Join(host, "refund")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -80,19 +80,19 @@ func TestGoVerifyHost(t *testing.T) {
 				}
 			}
 		}
-		hand := "package expense\n\nimport (\n\t\"encoding/json\"\n\n\t\"github.com/jamestryand/pocketcqrs/decider\"\n)\n\n" +
-			"func SubmitExpenseOutcome0(s State, cmd decider.Command) bool {\n" +
+		hand := "package refund\n\nimport (\n\t\"encoding/json\"\n\n\t\"github.com/jamestryand/pocketcqrs/decider\"\n)\n\n" +
+			"func RequestRefundOutcome0(s State, cmd decider.Command) bool {\n" +
 			"\tvar p struct{ Amount float64 `json:\"amount\"` }\n\t_ = json.Unmarshal(cmd.Payload, &p)\n\treturn p.Amount > 500\n}\n"
-		if err := os.WriteFile(filepath.Join(dir, "expense_hand.go"), []byte(hand), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "refund_hand.go"), []byte(hand), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	results := goVerify(t, doc, mapped, host)
-	if r := results["expense-over-limit"]; !r.Passed || r.Hand {
+	if r := results["refund-over-threshold"]; !r.Passed || r.Hand {
 		t.Errorf("the host's hook: passed=%v hand=%v: %s", r.Passed, r.Hand, r.Detail)
 	}
 	for id, r := range results {
-		if id != "expense-over-limit" && (!r.Skipped || !strings.Contains(r.Detail, "the host has no Go decider")) {
+		if id != "refund-over-threshold" && (!r.Skipped || !strings.Contains(r.Detail, "the host has no Go decider")) {
 			t.Errorf("%s: skipped=%v: %s", id, r.Skipped, r.Detail)
 		}
 	}
@@ -113,7 +113,7 @@ func TestGoVerifyViews(t *testing.T) {
 }
 
 // Upstream's rows-per-list-item.json through the Go projection, against
-// PocketBase: every scenario passes, a draft's null subtotal included. A
+// PocketBase: every scenario passes, a planned delivery's null total weight included. A
 // sumOfItems column is json (James, 2026-10-15), since a PocketBase number
 // field can't hold null and read 0.
 func TestGoVerifyRowsPerListItem(t *testing.T) {
@@ -134,15 +134,15 @@ func TestGoVerifyRowsPerListItem(t *testing.T) {
 // matches.
 const piiViewDoc = `{"eventModelingSchemaVersion":"3.17.0","id":"p","name":"P",
 	"swimlanes":[{"id":"s","name":"S","kind":"team"}],
-	"events":{"noted":{"name":"Noted","swimlaneId":"s","aggregate":"note","fields":[{"name":"noteId","type":"string","idAttribute":true},{"name":"staffId","type":"string"},{"name":"text","type":"string","pii":true,"piiSubject":"staffId"}]}},
-	"commands":{"take":{"name":"Take","aggregate":"note","fields":[{"name":"noteId","type":"string","idAttribute":true},{"name":"staffId","type":"string"},{"name":"text","type":"string","pii":true,"piiSubject":"staffId"}]}},
+	"events":{"noted":{"name":"Noted","swimlaneId":"s","aggregate":"note","fields":[{"name":"noteId","type":"string","idAttribute":true},{"name":"authorId","type":"string"},{"name":"text","type":"string","pii":true,"piiSubject":"authorId"}]}},
+	"commands":{"take":{"name":"Take","aggregate":"note","fields":[{"name":"noteId","type":"string","idAttribute":true},{"name":"authorId","type":"string"},{"name":"text","type":"string","pii":true,"piiSubject":"authorId"}]}},
 	"readModels":{"notes":{"name":"Notes","builtFromEventIds":["noted"],
-		"fields":[{"name":"noteId","type":"string","idAttribute":true},{"name":"staffId","type":"string"},{"name":"text","type":"string","pii":true,"piiSubject":"staffId"}]}},
+		"fields":[{"name":"noteId","type":"string","idAttribute":true},{"name":"authorId","type":"string"},{"name":"text","type":"string","pii":true,"piiSubject":"authorId"}]}},
 	"screens":{"sc":{"name":"Sc"}},
 	"slices":[
 		{"id":"t","name":"T","pattern":"stateChange","swimlaneId":"s","status":"planned","screenId":"sc","commandId":"take","eventIds":["noted"],"scenarios":[]},
 		{"id":"v","name":"V","pattern":"stateView","swimlaneId":"s","status":"planned","screenId":"sc","readModelId":"notes","scenarios":[
-			{"id":"plain","name":"plain","kind":"stateView","given":[{"eventId":"noted","data":{"noteId":"n1","staffId":"s1","text":"call Ada"}}],
+			{"id":"plain","name":"plain","kind":"stateView","given":[{"eventId":"noted","data":{"noteId":"n1","authorId":"u1","text":"call Ada"}}],
 			 "when":{"readModelId":"notes"},"then":{"result":{"entries":[{"noteId":"n1","text":"call Ada"}]}}}]}]}`
 
 func TestGoVerifyRevealsPersonalData(t *testing.T) {

@@ -8,62 +8,61 @@ import (
 )
 
 // requiredRoleDocument builds a minimal EventModeling document exercising
-// schema 2.7.0's readModel.requiredRole: a staff-roster read model gated to
-// "manager"/"administrator", the read-side mirror of the fixture
+// schema 2.7.0's readModel.requiredRole: a member-directory read model gated
+// to "supervisor"/"administrator", the read-side mirror of the fixture
 // TestBuildPolicies-style tests use for command.requiredRole (see the
 // authorize package's own tests), mirroring dotnetcqrs's own port
-// (commit 382fb9e, v0.8.0), raised by project/timesheets's D12 — an
-// unscoped read model returned its full tenant-wide contents to any
+// (commit 382fb9e, v0.8.0), raised because an unscoped read model returned its full tenant-wide contents to any
 // signed-in user.
 func requiredRoleDocument(roles ...string) *Document {
 	return &Document{
 		EventModelingSchemaVersion: SchemaVersion,
 		ID:                         "d1",
-		Name:                       "Staff Roster RequiredRole",
+		Name:                       "Member Directory RequiredRole",
 		Swimlanes:                  []Swimlane{{ID: "sys", Name: "System", Kind: "system"}},
 		Events: map[string]Event{
-			"staff-onboarded": {
-				Name: "Staff Onboarded", SwimlaneID: "sys", Aggregate: "Staff",
+			"member-joined": {
+				Name: "Member Joined", SwimlaneID: "sys", Aggregate: "Member",
 				Fields: []Field{
-					{Name: "staffId", Type: "string", IDAttribute: true},
-					{Name: "hourlyCost", Type: "number"},
+					{Name: "memberId", Type: "string", IDAttribute: true},
+					{Name: "annualFee", Type: "number"},
 				},
 			},
 		},
 		Commands: map[string]Command{
-			"onboard-staff": {
-				Name: "Onboard Staff", Aggregate: "Staff",
+			"add-member": {
+				Name: "Add Member", Aggregate: "Member",
 				Fields: []Field{
-					{Name: "staffId", Type: "string"},
-					{Name: "hourlyCost", Type: "number"},
+					{Name: "memberId", Type: "string"},
+					{Name: "annualFee", Type: "number"},
 				},
 			},
 		},
 		ReadModels: map[string]ReadModel{
-			"staff-roster": {
-				Name:              "Staff Roster",
-				BuiltFromEventIDs: []string{"staff-onboarded"},
+			"member-directory": {
+				Name:              "Member Directory",
+				BuiltFromEventIDs: []string{"member-joined"},
 				Fields: []Field{
-					{Name: "staffId", Type: "string", IDAttribute: true},
-					{Name: "hourlyCost", Type: "number"},
+					{Name: "memberId", Type: "string", IDAttribute: true},
+					{Name: "annualFee", Type: "number"},
 				},
 				RequiredRole: roles,
 			},
 		},
 		Screens: map[string]Screen{
-			"scr-onboard": {Name: "Onboard Staff Screen"},
-			"scr-roster":  {Name: "View Staff Roster"},
+			"scr-add":       {Name: "Add Member Screen"},
+			"scr-directory": {Name: "View Member Directory"},
 		},
 		Slices: []Slice{
 			{
-				ID: "onboard-staff-slice", Name: "Onboard Staff", Pattern: PatternStateChange,
-				SwimlaneID: "sys", Status: "wireframe", ScreenID: "scr-onboard",
-				CommandID: "onboard-staff", EventIDs: []string{"staff-onboarded"},
+				ID: "add-member-slice", Name: "Add Member", Pattern: PatternStateChange,
+				SwimlaneID: "sys", Status: "wireframe", ScreenID: "scr-add",
+				CommandID: "add-member", EventIDs: []string{"member-joined"},
 			},
 			{
-				ID: "view-staff-roster-slice", Name: "View Staff Roster", Pattern: PatternStateView,
-				SwimlaneID: "sys", Status: "wireframe", ScreenID: "scr-roster",
-				ReadModelID: "staff-roster",
+				ID: "view-member-directory-slice", Name: "View Member Directory", Pattern: PatternStateView,
+				SwimlaneID: "sys", Status: "wireframe", ScreenID: "scr-directory",
+				ReadModelID: "member-directory",
 			},
 		},
 	}
@@ -74,7 +73,7 @@ func requiredRoleDocument(roles ...string) *Document {
 // round-trip proof TestImportAndVerifyDateRangeFilter established for
 // Filters.
 func TestMapCarriesReadModelRequiredRole(t *testing.T) {
-	doc := requiredRoleDocument("manager", "administrator")
+	doc := requiredRoleDocument("supervisor", "administrator")
 
 	mapped, err := Map(doc, Options{})
 	if err != nil {
@@ -84,7 +83,7 @@ func TestMapCarriesReadModelRequiredRole(t *testing.T) {
 		t.Fatalf("expected one aggregate, got %d", len(mapped.Domains))
 	}
 	rm := mapped.Domains[0].ReadModels[0]
-	if len(rm.RequiredRole) != 2 || rm.RequiredRole[0] != "manager" || rm.RequiredRole[1] != "administrator" {
+	if len(rm.RequiredRole) != 2 || rm.RequiredRole[0] != "supervisor" || rm.RequiredRole[1] != "administrator" {
 		t.Fatalf("requiredRole not carried through correctly: %+v", rm.RequiredRole)
 	}
 }
@@ -96,7 +95,7 @@ func TestMapCarriesReadModelRequiredRole(t *testing.T) {
 // generated route to hook a check into, unlike dotnetcqrs's
 // resolveOwnRole).
 func TestGeneratedProjectionEmitsRoleRule(t *testing.T) {
-	doc := requiredRoleDocument("manager", "administrator")
+	doc := requiredRoleDocument("supervisor", "administrator")
 	mapped, err := Map(doc, Options{})
 	if err != nil {
 		t.Fatalf("expected the document to map cleanly: %v", err)
@@ -107,14 +106,14 @@ func TestGeneratedProjectionEmitsRoleRule(t *testing.T) {
 	}
 	var projection string
 	for _, f := range files {
-		if f.Name == "staffRoster.js" {
+		if f.Name == "memberDirectory.js" {
 			projection = f.Source
 		}
 	}
 	if projection == "" {
-		t.Fatalf("expected a staffRoster.js projection file, got files: %+v", fileNames(files))
+		t.Fatalf("expected a memberDirectory.js projection file, got files: %+v", fileNames(files))
 	}
-	wantRule := `//@rule staffRoster @request.auth.role = "manager" || @request.auth.role = "administrator"`
+	wantRule := `//@rule memberDirectory @request.auth.role = "supervisor" || @request.auth.role = "administrator"`
 	if !strings.Contains(projection, wantRule) {
 		t.Fatalf("expected the projection to declare a role rule.\nwant substring: %s\ngot:\n%s", wantRule, projection)
 	}
@@ -122,7 +121,7 @@ func TestGeneratedProjectionEmitsRoleRule(t *testing.T) {
 
 // A read model declaring no access rule is read by every signed-in caller
 // (schema 3.8.0), so the importer gives it "authenticated" rather than the
-// deployment default, which is public unless set (decision 8, 2026-10-15).
+// deployment default, which is public unless set.
 func TestGeneratedProjectionIsSignedInOnlyWhenNoRuleDeclared(t *testing.T) {
 	doc := requiredRoleDocument() // no roles
 	mapped, err := Map(doc, Options{})
@@ -134,8 +133,8 @@ func TestGeneratedProjectionIsSignedInOnlyWhenNoRuleDeclared(t *testing.T) {
 		t.Fatalf("expected generation to succeed: %v", err)
 	}
 	for _, f := range files {
-		if f.Name == "staffRoster.js" && !strings.Contains(f.Source, "//@rule staffRoster authenticated\n") {
-			t.Fatalf("expected //@rule staffRoster authenticated, got:\n%s", f.Source)
+		if f.Name == "memberDirectory.js" && !strings.Contains(f.Source, "//@rule memberDirectory authenticated\n") {
+			t.Fatalf("expected //@rule memberDirectory authenticated, got:\n%s", f.Source)
 		}
 	}
 }

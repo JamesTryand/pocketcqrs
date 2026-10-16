@@ -96,7 +96,7 @@ func TestRequireCapabilityRemote(t *testing.T) {
 	v := New(base, cache, 5*time.Minute, 0)
 
 	// secondary: same collections (roles, _superusers), NOT the same rows --
-	// exactly the F-13 topology, now exercised for a non-superuser collection
+	// exactly the master/secondary topology, now exercised for a non-superuser collection
 	sApp := openTestApp(t)
 	// only needed to create the local "roles" collection shell so
 	// Materialize has somewhere to bind the verdict's record into; the row

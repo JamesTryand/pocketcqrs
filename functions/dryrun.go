@@ -207,8 +207,8 @@ type ProjectionDryRun struct {
 	// groupByBump finds-or-creates a nested entry and adds to ITS running
 	// value).
 	Rows map[string]map[string]map[string]any
-	// Position is the last event the run applied, as Commit records it live
-	// (R2): every event counts, one the projection doesn't handle too. A
+	// Position is the last event the run applied, as Commit records it live:
+	// every event counts, one the projection doesn't handle too. A
 	// failing event fails the whole run, so no rows are seen part-applied.
 	Position int64
 }

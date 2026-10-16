@@ -12,7 +12,7 @@ import (
 )
 
 // AuthOrigins is PocketBase's own "_authOrigins" collection, safe to add to
-// Register's collections alongside the projection-owned ones (F-6).
+// Register's collections alongside the projection-owned ones.
 // PocketBase writes it directly during login (`authAlert`, tracking device
 // fingerprints for the "new device" alert) — outside the event log, on any
 // node that serves the login request. That write's own error is already
@@ -27,7 +27,7 @@ import (
 // own stock signup/password-change/OTP/MFA endpoints outright, since those
 // writes ARE the point of the request, not a best-effort side effect. Whether
 // user identity should be a PocketBase auth record or a modelled aggregate is
-// an open, project-specific decision (see NEEDS.md) — not something core can
+// an open, deployment-specific decision — not something core can
 // decide generically by extending this list.
 const AuthOrigins = "_authOrigins"
 

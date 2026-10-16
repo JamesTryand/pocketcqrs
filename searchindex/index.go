@@ -431,7 +431,7 @@ func Register(ctx context.Context, engine *consumers.Engine, store *Store, spec 
 		}
 		// The switch-over needs no order: whichever runs first in a pass,
 		// it happens only once the rebuild has reached the live index's
-		// checkpoint, so the new index is never behind the old (R6).
+		// checkpoint, so the new index is never behind the old.
 		engine.Register(live)
 		engine.Register(rebuild)
 	}

@@ -17,7 +17,7 @@ func newJSONFieldCollection(t *testing.T, app core.App, name string) *core.Colle
 	return col
 }
 
-// TestFindRecordDecodesJSONField reproduces F-15: PublicExport's raw
+// TestFindRecordDecodesJSONField reproduces a fixed bug: PublicExport's raw
 // types.JSONRaw crossing into goja as an array of numeric byte codes instead
 // of the value a json-typed field actually holds.
 func TestFindRecordDecodesJSONField(t *testing.T) {

@@ -28,8 +28,8 @@ type WireOptions struct {
 	// facade must refuse to start, not quietly use a stand-in.
 	KMS           kms.Client
 	CacheCapacity int
-	// Outbox, when set, takes the key service calls off the engine's pass
-	// (R4): the key destroyer records each erasure there and Wire runs its
+	// Outbox, when set, takes the key service calls off the engine's pass:
+	// the key destroyer records each erasure there and Wire runs its
 	// worker until ctx is done, so hand Wire a context that lives as long
 	// as the host. Writer only; nil calls the key service from the pass.
 	Outbox *outbox.Store

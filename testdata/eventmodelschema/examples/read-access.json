@@ -3,81 +3,81 @@
   "eventModelingSchemaVersion": "3.15.0",
   "id": "read-access-example",
   "name": "Read Access Example",
-  "description": "Who may read which rows of a read model (3.8.0). A manager holds requiredRole and sees every time entry. Anyone else sees their own entries (selfAccess) and the entries on projects they manage (a scope with grantsAccess), and nothing else. The selfAccess param lets a manager ask for only their own entries too. Each stateView scenario names its caller.",
+  "description": "Who may read which rows of a read model (3.8.0). A supervisor holds requiredRole and sees every ticket. Anyone else sees the tickets they own (selfAccess) and the tickets of teams they lead (a scope with grantsAccess), and nothing else. The selfAccess param lets a supervisor ask for only their own tickets too. Each stateView scenario names its caller.",
   "swimlanes": [
-    { "id": "work", "name": "Work", "kind": "team" }
+    { "id": "desk", "name": "Support Desk", "kind": "team" }
   ],
   "events": {
-    "project-manager-assigned": {
-      "name": "Project Manager Assigned",
-      "swimlaneId": "work",
-      "aggregate": "project",
+    "team-lead-assigned": {
+      "name": "Team Lead Assigned",
+      "swimlaneId": "desk",
+      "aggregate": "team",
       "fields": [
         { "name": "assignmentId", "type": "string", "idAttribute": true },
-        { "name": "projectId", "type": "string" },
-        { "name": "staffId", "type": "string" }
+        { "name": "teamId", "type": "string" },
+        { "name": "agentId", "type": "string" }
       ]
     },
-    "project-manager-unassigned": {
-      "name": "Project Manager Unassigned",
-      "swimlaneId": "work",
-      "aggregate": "project",
+    "team-lead-unassigned": {
+      "name": "Team Lead Unassigned",
+      "swimlaneId": "desk",
+      "aggregate": "team",
       "fields": [
         { "name": "assignmentId", "type": "string", "idAttribute": true },
-        { "name": "projectId", "type": "string" },
-        { "name": "staffId", "type": "string" }
+        { "name": "teamId", "type": "string" },
+        { "name": "agentId", "type": "string" }
       ]
     },
-    "time-logged": {
-      "name": "Time Logged",
-      "swimlaneId": "work",
-      "aggregate": "timeEntry",
+    "ticket-opened": {
+      "name": "Ticket Opened",
+      "swimlaneId": "desk",
+      "aggregate": "ticket",
       "fields": [
-        { "name": "entryId", "type": "string", "idAttribute": true },
-        { "name": "projectId", "type": "string" },
-        { "name": "staffId", "type": "string" },
-        { "name": "hours", "type": "decimal" }
+        { "name": "ticketId", "type": "string", "idAttribute": true },
+        { "name": "teamId", "type": "string" },
+        { "name": "agentId", "type": "string" },
+        { "name": "estimatedEffort", "type": "decimal" }
       ]
     }
   },
   "commands": {
-    "log-time": { "name": "Log Time", "aggregate": "timeEntry" },
-    "assign-project-manager": { "name": "Assign Project Manager", "aggregate": "project" },
-    "unassign-project-manager": { "name": "Unassign Project Manager", "aggregate": "project" }
+    "open-ticket": { "name": "Open Ticket", "aggregate": "ticket" },
+    "assign-team-lead": { "name": "Assign Team Lead", "aggregate": "team" },
+    "unassign-team-lead": { "name": "Unassign Team Lead", "aggregate": "team" }
   },
   "readModels": {
-    "project-managers": {
-      "name": "Project Managers",
-      "question": "Who manages which project?",
-      "builtFromEventIds": ["project-manager-assigned", "project-manager-unassigned"],
-      "removedByEventIds": ["project-manager-unassigned"],
+    "team-leads": {
+      "name": "Team Leads",
+      "question": "Who leads which team?",
+      "builtFromEventIds": ["team-lead-assigned", "team-lead-unassigned"],
+      "removedByEventIds": ["team-lead-unassigned"],
       "fields": [
         { "name": "assignmentId", "type": "string", "idAttribute": true },
-        { "name": "projectId", "type": "string" },
-        { "name": "staffId", "type": "string" }
+        { "name": "teamId", "type": "string" },
+        { "name": "agentId", "type": "string" }
       ],
-      "requiredRole": "manager"
+      "requiredRole": "supervisor"
     },
-    "time-entries": {
-      "name": "Time Entries",
-      "question": "What time has been logged, by whom, on which project?",
-      "builtFromEventIds": ["time-logged"],
+    "tickets": {
+      "name": "Tickets",
+      "question": "Which tickets have been opened, owned by whom, in which team?",
+      "builtFromEventIds": ["ticket-opened"],
       "fields": [
-        { "name": "entryId", "type": "string", "idAttribute": true },
-        { "name": "projectId", "type": "string" },
-        { "name": "staffId", "type": "string" },
-        { "name": "hours", "type": "decimal" }
+        { "name": "ticketId", "type": "string", "idAttribute": true },
+        { "name": "teamId", "type": "string" },
+        { "name": "agentId", "type": "string" },
+        { "name": "estimatedEffort", "type": "decimal" }
       ],
-      "requiredRole": "manager",
-      "selfAccess": { "subjectField": "staffId", "param": "mine" },
+      "requiredRole": "supervisor",
+      "selfAccess": { "subjectField": "agentId", "param": "mine" },
       "scopes": [
         {
-          "param": "managedBy",
+          "param": "ledBy",
           "via": {
-            "readModelId": "project-managers",
-            "matchParamTo": "staffId",
-            "selectField": "projectId",
-            "filterLocalField": "projectId"
+            "readModelId": "team-leads",
+            "matchParamTo": "agentId",
+            "selectField": "teamId",
+            "filterLocalField": "teamId"
           },
           "grantsAccess": true
         }
@@ -85,143 +85,143 @@
     }
   },
   "screens": {
-    "log-time-screen": { "name": "Log Time" },
-    "projects-screen": { "name": "Projects" },
-    "my-time-screen": { "name": "My Time" }
+    "open-ticket-screen": { "name": "Open Ticket" },
+    "teams-screen": { "name": "Teams" },
+    "my-tickets-screen": { "name": "My Tickets" }
   },
   "slices": [
     {
-      "id": "assign-project-manager-slice",
-      "name": "Assign Project Manager",
+      "id": "assign-team-lead-slice",
+      "name": "Assign Team Lead",
       "pattern": "stateChange",
-      "swimlaneId": "work",
+      "swimlaneId": "desk",
       "status": "created",
-      "screenId": "projects-screen",
-      "commandId": "assign-project-manager",
-      "eventIds": ["project-manager-assigned"],
+      "screenId": "teams-screen",
+      "commandId": "assign-team-lead",
+      "eventIds": ["team-lead-assigned"],
       "scenarios": []
     },
     {
-      "id": "unassign-project-manager-slice",
-      "name": "Unassign Project Manager",
+      "id": "unassign-team-lead-slice",
+      "name": "Unassign Team Lead",
       "pattern": "stateChange",
-      "swimlaneId": "work",
+      "swimlaneId": "desk",
       "status": "created",
-      "screenId": "projects-screen",
-      "commandId": "unassign-project-manager",
-      "eventIds": ["project-manager-unassigned"],
+      "screenId": "teams-screen",
+      "commandId": "unassign-team-lead",
+      "eventIds": ["team-lead-unassigned"],
       "scenarios": []
     },
     {
-      "id": "log-time-slice",
-      "name": "Log Time",
+      "id": "open-ticket-slice",
+      "name": "Open Ticket",
       "pattern": "stateChange",
-      "swimlaneId": "work",
+      "swimlaneId": "desk",
       "status": "created",
-      "screenId": "log-time-screen",
-      "commandId": "log-time",
-      "eventIds": ["time-logged"],
+      "screenId": "open-ticket-screen",
+      "commandId": "open-ticket",
+      "eventIds": ["ticket-opened"],
       "scenarios": []
     },
     {
-      "id": "view-time-slice",
-      "name": "View Time",
+      "id": "view-tickets-slice",
+      "name": "View Tickets",
       "pattern": "stateView",
-      "swimlaneId": "work",
+      "swimlaneId": "desk",
       "status": "created",
-      "screenId": "my-time-screen",
-      "readModelId": "time-entries",
+      "screenId": "my-tickets-screen",
+      "readModelId": "tickets",
       "scenarios": [
         {
-          "id": "manager-sees-every-entry",
-          "name": "A manager holds requiredRole, so sees every entry",
+          "id": "supervisor-sees-every-ticket",
+          "name": "A supervisor holds requiredRole, so sees every ticket",
           "kind": "stateView",
           "given": [
-            { "eventId": "time-logged", "data": { "entryId": "e1", "projectId": "p1", "staffId": "s1", "hours": 2 } },
-            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+            { "eventId": "ticket-opened", "data": { "ticketId": "t1", "teamId": "g1", "agentId": "a1", "estimatedEffort": 2 } },
+            { "eventId": "ticket-opened", "data": { "ticketId": "t2", "teamId": "g2", "agentId": "a2", "estimatedEffort": 3 } }
           ],
-          "when": { "readModelId": "time-entries", "caller": { "subjectId": "m1", "role": "manager" } },
+          "when": { "readModelId": "tickets", "caller": { "subjectId": "sup1", "role": "supervisor" } },
           "then": {
             "result": {
-              "entries": [
-                { "entryId": "e1", "staffId": "s1" },
-                { "entryId": "e2", "staffId": "s2" }
+              "tickets": [
+                { "ticketId": "t1", "agentId": "a1" },
+                { "ticketId": "t2", "agentId": "a2" }
               ]
             }
           }
         },
         {
-          "id": "staff-sees-only-own-entries",
-          "name": "Anyone else sees only their own entries, without asking for them",
+          "id": "agent-sees-only-own-tickets",
+          "name": "Anyone else sees only the tickets they own, without asking for them",
           "kind": "stateView",
           "given": [
-            { "eventId": "time-logged", "data": { "entryId": "e1", "projectId": "p1", "staffId": "s1", "hours": 2 } },
-            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+            { "eventId": "ticket-opened", "data": { "ticketId": "t1", "teamId": "g1", "agentId": "a1", "estimatedEffort": 2 } },
+            { "eventId": "ticket-opened", "data": { "ticketId": "t2", "teamId": "g2", "agentId": "a2", "estimatedEffort": 3 } }
           ],
-          "when": { "readModelId": "time-entries", "caller": { "subjectId": "s1", "role": "staff" } },
-          "then": { "result": { "entries": [ { "entryId": "e1", "staffId": "s1" } ] } }
+          "when": { "readModelId": "tickets", "caller": { "subjectId": "a1", "role": "agent" } },
+          "then": { "result": { "tickets": [ { "ticketId": "t1", "agentId": "a1" } ] } }
         },
         {
-          "id": "project-manager-also-sees-managed-projects",
-          "name": "A granting scope adds the entries on projects the caller manages",
+          "id": "team-lead-also-sees-led-teams",
+          "name": "A granting scope adds the tickets of teams the caller leads",
           "kind": "stateView",
           "given": [
-            { "eventId": "project-manager-assigned", "data": { "assignmentId": "p2:s1", "projectId": "p2", "staffId": "s1" } },
-            { "eventId": "time-logged", "data": { "entryId": "e1", "projectId": "p1", "staffId": "s1", "hours": 2 } },
-            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } },
-            { "eventId": "time-logged", "data": { "entryId": "e3", "projectId": "p3", "staffId": "s3", "hours": 1 } }
+            { "eventId": "team-lead-assigned", "data": { "assignmentId": "g2:a1", "teamId": "g2", "agentId": "a1" } },
+            { "eventId": "ticket-opened", "data": { "ticketId": "t1", "teamId": "g1", "agentId": "a1", "estimatedEffort": 2 } },
+            { "eventId": "ticket-opened", "data": { "ticketId": "t2", "teamId": "g2", "agentId": "a2", "estimatedEffort": 3 } },
+            { "eventId": "ticket-opened", "data": { "ticketId": "t3", "teamId": "g3", "agentId": "a3", "estimatedEffort": 1 } }
           ],
-          "when": { "readModelId": "time-entries", "caller": { "subjectId": "s1", "role": "staff" } },
+          "when": { "readModelId": "tickets", "caller": { "subjectId": "a1", "role": "agent" } },
           "then": {
             "result": {
-              "entries": [
-                { "entryId": "e1", "staffId": "s1" },
-                { "entryId": "e2", "staffId": "s2" }
+              "tickets": [
+                { "ticketId": "t1", "agentId": "a1" },
+                { "ticketId": "t2", "agentId": "a2" }
               ]
             }
           }
         },
         {
-          "id": "an-unassigned-project-manager-loses-the-grant",
-          "name": "Unassigning removes the project-managers row, and with it the access it granted",
+          "id": "an-unassigned-team-lead-loses-the-grant",
+          "name": "Unassigning removes the team-leads row, and with it the access it granted",
           "kind": "stateView",
           "given": [
-            { "eventId": "project-manager-assigned", "data": { "assignmentId": "p2:s1", "projectId": "p2", "staffId": "s1" } },
-            { "eventId": "project-manager-unassigned", "data": { "assignmentId": "p2:s1", "projectId": "p2", "staffId": "s1" } },
-            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+            { "eventId": "team-lead-assigned", "data": { "assignmentId": "g2:a1", "teamId": "g2", "agentId": "a1" } },
+            { "eventId": "team-lead-unassigned", "data": { "assignmentId": "g2:a1", "teamId": "g2", "agentId": "a1" } },
+            { "eventId": "ticket-opened", "data": { "ticketId": "t2", "teamId": "g2", "agentId": "a2", "estimatedEffort": 3 } }
           ],
-          "when": { "readModelId": "time-entries", "caller": { "subjectId": "s1", "role": "staff" } },
-          "then": { "result": { "entries": [] } }
+          "when": { "readModelId": "tickets", "caller": { "subjectId": "a1", "role": "agent" } },
+          "then": { "result": { "tickets": [] } }
         },
         {
           "id": "a-param-cannot-widen-access",
           "name": "A scope param names the caller, whatever value is sent",
           "kind": "stateView",
           "given": [
-            { "eventId": "project-manager-assigned", "data": { "assignmentId": "p2:s2", "projectId": "p2", "staffId": "s2" } },
-            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+            { "eventId": "team-lead-assigned", "data": { "assignmentId": "g2:a2", "teamId": "g2", "agentId": "a2" } },
+            { "eventId": "ticket-opened", "data": { "ticketId": "t2", "teamId": "g2", "agentId": "a2", "estimatedEffort": 3 } }
           ],
           "when": {
-            "readModelId": "time-entries",
-            "queryParams": { "managedBy": "s2" },
-            "caller": { "subjectId": "s1", "role": "staff" }
+            "readModelId": "tickets",
+            "queryParams": { "ledBy": "a2" },
+            "caller": { "subjectId": "a1", "role": "agent" }
           },
-          "then": { "result": { "entries": [] } }
+          "then": { "result": { "tickets": [] } }
         },
         {
-          "id": "manager-asks-for-own-entries",
-          "name": "The selfAccess param narrows even a role holder to their own entries",
+          "id": "supervisor-asks-for-own-tickets",
+          "name": "The selfAccess param narrows even a role holder to the tickets they own",
           "kind": "stateView",
           "given": [
-            { "eventId": "time-logged", "data": { "entryId": "e1", "projectId": "p1", "staffId": "m1", "hours": 2 } },
-            { "eventId": "time-logged", "data": { "entryId": "e2", "projectId": "p2", "staffId": "s2", "hours": 3 } }
+            { "eventId": "ticket-opened", "data": { "ticketId": "t1", "teamId": "g1", "agentId": "sup1", "estimatedEffort": 2 } },
+            { "eventId": "ticket-opened", "data": { "ticketId": "t2", "teamId": "g2", "agentId": "a2", "estimatedEffort": 3 } }
           ],
           "when": {
-            "readModelId": "time-entries",
+            "readModelId": "tickets",
             "queryParams": { "mine": "true" },
-            "caller": { "subjectId": "m1", "role": "manager" }
+            "caller": { "subjectId": "sup1", "role": "supervisor" }
           },
-          "then": { "result": { "entries": [ { "entryId": "e1", "staffId": "m1" } ] } }
+          "then": { "result": { "tickets": [ { "ticketId": "t1", "agentId": "sup1" } ] } }
         }
       ]
     }

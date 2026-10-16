@@ -71,7 +71,7 @@ func TestOnceIdentityIsResolvedEveryFieldIsSetInTheContractsOrder(t *testing.T) 
 	s := startOn(t, h)
 	h.SetIdentity(nodeidentity.Identity{
 		NodeID: "0192b5c4-7e1a-7c3e-9f00-5b2d8a1c4e77", Kind: nodeidentity.Persistent,
-		Instance: "timesheets", Host: "node-3", Stack: nodeidentity.Stack, Role: "writer", StartedAt: started,
+		Instance: "orders", Host: "node-3", Stack: nodeidentity.Stack, Role: "writer", StartedAt: started,
 	})
 
 	body, raw := healthz(t, s)
@@ -91,7 +91,7 @@ func TestOnceIdentityIsResolvedEveryFieldIsSetInTheContractsOrder(t *testing.T) 
 		}
 	}
 	if body["node_id"] != "0192b5c4-7e1a-7c3e-9f00-5b2d8a1c4e77" || body["identity"] != "persistent" ||
-		body["instance"] != "timesheets" || body["role"] != "writer" {
+		body["instance"] != "orders" || body["role"] != "writer" {
 		t.Errorf("identity fields: %v", body)
 	}
 }

@@ -67,7 +67,7 @@ func (p *JSProjection) Apply(ctx context.Context, ev events.Event) error {
 }
 
 // Commit is Apply with the event's position, in one data.db transaction
-// (R2, consumers.Committer): project(event) runs first, outside it (it is
+// (consumers.Committer): project(event) runs first, outside it (it is
 // pure), then its ops and the position commit together or not at all. An
 // event the projection doesn't handle still records its position.
 func (p *JSProjection) Commit(ctx context.Context, ev events.Event) error {
@@ -222,7 +222,7 @@ type rowOp struct {
 	delete     bool
 	key        any
 	fields     map[string]any
-	// increment marks a count/sum-derivation op (Finding 3): add delta to
+	// increment marks a count/sum-derivation op: add delta to
 	// incField rather than set fields verbatim. It exists as its own op
 	// shape, not a fields entry, because a derived count/sum must ACCUMULATE
 	// across events, and a plain upsert's field-merge can't do that: an
@@ -239,7 +239,7 @@ type rowOp struct {
 	delta     float64
 
 	// groupBy marks a groupBy-derivation op (schema 2.3.0's nested/grouped
-	// rollup, Finding 4): find-or-create the entry in groupByField's own
+	// rollup): find-or-create the entry in groupByField's own
 	// JSON array (on the row named by key) whose groupKeyField equals
 	// groupKeyValue, then add delta to that entry's subfield. Reuses key
 	// and delta from increment above — same accumulation, one JSON level

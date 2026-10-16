@@ -7,39 +7,40 @@ import (
 	"testing"
 )
 
-// refusalDomain: an entry whose updates are refused while it is on an
-// invoice, for non-positive or over-a-day hours, for a frozen invoice, for a
-// tag it already has; and a claim refused while another invoice holds it.
+// refusalDomain: a booking whose changes are refused while an event plan
+// holds it, for a non-positive or over-a-day duration, for a frozen event
+// plan, for a tag it already has; and a hold refused while another event
+// plan holds it.
 func refusalDomain() Domain {
 	return Domain{
-		Aggregate: "entry",
+		Aggregate: "booking",
 		Commands: []Command{
-			{Name: "LogEntry", Once: true,
-				Fields: []Field{{Name: "hours", Type: "number"}, {Name: "tags", Type: "json"}},
-				Events: []Event{{Name: "EntryLogged", Fields: []Field{{Name: "hours", Type: "number"}, {Name: "tags", Type: "json"}}}}},
-			{Name: "ClaimEntry", RequiresExisting: true,
-				Fields: []Field{{Name: "invoiceId", Type: "text"}},
-				Events: []Event{{Name: "EntryClaimed", Fields: []Field{{Name: "claimedFor", Type: "text"}}}},
-				Refusals: []Refusal{{Message: "entry is on another invoice", All: []RefusalCondition{
-					{Side: "state", Field: "claimedFor", Op: "set"},
-					{Side: "state", Field: "claimedFor", Op: "notEquals", Operand: &RefusalOperand{Side: "command", Field: "invoiceId"}},
+			{Name: "MakeBooking", Once: true,
+				Fields: []Field{{Name: "duration", Type: "number"}, {Name: "tags", Type: "json"}},
+				Events: []Event{{Name: "BookingMade", Fields: []Field{{Name: "duration", Type: "number"}, {Name: "tags", Type: "json"}}}}},
+			{Name: "HoldBooking", RequiresExisting: true,
+				Fields: []Field{{Name: "planId", Type: "text"}},
+				Events: []Event{{Name: "BookingHeld", Fields: []Field{{Name: "heldFor", Type: "text"}}}},
+				Refusals: []Refusal{{Message: "booking is held by another event plan", All: []RefusalCondition{
+					{Side: "state", Field: "heldFor", Op: "set"},
+					{Side: "state", Field: "heldFor", Op: "notEquals", Operand: &RefusalOperand{Side: "command", Field: "planId"}},
 				}}}},
-			{Name: "UpdateEntry", RequiresExisting: true,
-				Fields: []Field{{Name: "hours", Type: "number"}, {Name: "tag", Type: "text"}, {Name: "invoiceId", Type: "text"}},
-				Events: []Event{{Name: "EntryUpdated", Fields: []Field{{Name: "hours", Type: "number"}}}},
+			{Name: "ChangeBooking", RequiresExisting: true,
+				Fields: []Field{{Name: "duration", Type: "number"}, {Name: "tag", Type: "text"}, {Name: "planId", Type: "text"}},
+				Events: []Event{{Name: "BookingChanged", Fields: []Field{{Name: "duration", Type: "number"}}}},
 				Refusals: []Refusal{
-					{Message: "entry is on an invoice", All: []RefusalCondition{{Side: "state", Field: "claimedFor", Op: "set"}}},
-					{Message: "hours must be positive", All: []RefusalCondition{{Side: "command", Field: "hours", Op: "atMost", Operand: &RefusalOperand{Literal: 0.0}}}},
-					{Message: "a day has at most 24 hours", All: []RefusalCondition{{Side: "command", Field: "hours", Op: "greaterThan", Operand: &RefusalOperand{Literal: 24.0}}}},
-					{Message: "not more than logged", All: []RefusalCondition{{Side: "command", Field: "hours", Op: "greaterThan", Operand: &RefusalOperand{Side: "state", Field: "hours"}}}},
-					{Message: "invoice is frozen", All: []RefusalCondition{{Side: "command", Field: "invoiceId", Op: "equals", Operand: &RefusalOperand{Literal: "frozen"}}}},
+					{Message: "booking is held by an event plan", All: []RefusalCondition{{Side: "state", Field: "heldFor", Op: "set"}}},
+					{Message: "duration must be positive", All: []RefusalCondition{{Side: "command", Field: "duration", Op: "atMost", Operand: &RefusalOperand{Literal: 0.0}}}},
+					{Message: "a booking lasts at most one day", All: []RefusalCondition{{Side: "command", Field: "duration", Op: "greaterThan", Operand: &RefusalOperand{Literal: 24.0}}}},
+					{Message: "not more than booked", All: []RefusalCondition{{Side: "command", Field: "duration", Op: "greaterThan", Operand: &RefusalOperand{Side: "state", Field: "duration"}}}},
+					{Message: "event plan is frozen", All: []RefusalCondition{{Side: "command", Field: "planId", Op: "equals", Operand: &RefusalOperand{Literal: "frozen"}}}},
 					{Message: "already tagged", All: []RefusalCondition{{Side: "state", Field: "tags", Op: "contains", Operand: &RefusalOperand{Side: "command", Field: "tag"}}}},
 				}},
 		},
 	}
 }
 
-const refusalBehaviour = `package entry
+const refusalBehaviour = `package booking
 
 import (
 	"encoding/json"
@@ -50,7 +51,7 @@ import (
 )
 
 func fold(t *testing.T, evs ...events.Event) State {
-	d := Entry()
+	d := Booking()
 	s := d.InitialState()
 	for _, ev := range evs {
 		var err error
@@ -62,7 +63,7 @@ func fold(t *testing.T, evs ...events.Event) State {
 }
 
 func refusal(t *testing.T, s State, name, payload string) string {
-	_, err := Entry().Decide(decider.Command{Name: name, Payload: json.RawMessage(payload)}, s)
+	_, err := Booking().Decide(decider.Command{Name: name, Payload: json.RawMessage(payload)}, s)
 	if err == nil {
 		return ""
 	}
@@ -70,24 +71,24 @@ func refusal(t *testing.T, s State, name, payload string) string {
 }
 
 func TestRefusals(t *testing.T) {
-	logged := events.Event{Type: EntryLogged, Data: json.RawMessage(` + "`" + `{"hours":8,"tags":["night"]}` + "`" + `)}
-	claimed := events.Event{Type: EntryClaimed, Data: json.RawMessage(` + "`" + `{"claimedFor":"inv-1"}` + "`" + `)}
+	logged := events.Event{Type: BookingMade, Data: json.RawMessage(` + "`" + `{"duration":8,"tags":["night"]}` + "`" + `)}
+	claimed := events.Event{Type: BookingHeld, Data: json.RawMessage(` + "`" + `{"heldFor":"plan-1"}` + "`" + `)}
 	open := fold(t, logged)
-	onInvoice := fold(t, logged, claimed)
+	held := fold(t, logged, claimed)
 	for _, c := range []struct{ s State; name, payload, want string }{
-		{open, "UpdateEntry", ` + "`" + `{"hours":7}` + "`" + `, ""},
-		{onInvoice, "UpdateEntry", ` + "`" + `{"hours":7}` + "`" + `, "entry is on an invoice"},
-		{open, "UpdateEntry", ` + "`" + `{"hours":0}` + "`" + `, "hours must be positive"},
-		{open, "UpdateEntry", ` + "`" + `{"hours":-2}` + "`" + `, "hours must be positive"},
-		{open, "UpdateEntry", ` + "`" + `{"hours":25}` + "`" + `, "a day has at most 24 hours"},
-		{open, "UpdateEntry", ` + "`" + `{"hours":9}` + "`" + `, "not more than logged"},
-		{open, "UpdateEntry", ` + "`" + `{}` + "`" + `, ""},
-		{open, "UpdateEntry", ` + "`" + `{"hours":1,"invoiceId":"frozen"}` + "`" + `, "invoice is frozen"},
-		{open, "UpdateEntry", ` + "`" + `{"hours":1,"tag":"night"}` + "`" + `, "already tagged"},
-		{open, "UpdateEntry", ` + "`" + `{"hours":1,"tag":"day"}` + "`" + `, ""},
-		{open, "ClaimEntry", ` + "`" + `{"invoiceId":"inv-2"}` + "`" + `, ""},
-		{onInvoice, "ClaimEntry", ` + "`" + `{"invoiceId":"inv-1"}` + "`" + `, ""},
-		{onInvoice, "ClaimEntry", ` + "`" + `{"invoiceId":"inv-2"}` + "`" + `, "entry is on another invoice"},
+		{open, "ChangeBooking", ` + "`" + `{"duration":7}` + "`" + `, ""},
+		{held, "ChangeBooking", ` + "`" + `{"duration":7}` + "`" + `, "booking is held by an event plan"},
+		{open, "ChangeBooking", ` + "`" + `{"duration":0}` + "`" + `, "duration must be positive"},
+		{open, "ChangeBooking", ` + "`" + `{"duration":-2}` + "`" + `, "duration must be positive"},
+		{open, "ChangeBooking", ` + "`" + `{"duration":25}` + "`" + `, "a booking lasts at most one day"},
+		{open, "ChangeBooking", ` + "`" + `{"duration":9}` + "`" + `, "not more than booked"},
+		{open, "ChangeBooking", ` + "`" + `{}` + "`" + `, ""},
+		{open, "ChangeBooking", ` + "`" + `{"duration":1,"planId":"frozen"}` + "`" + `, "event plan is frozen"},
+		{open, "ChangeBooking", ` + "`" + `{"duration":1,"tag":"night"}` + "`" + `, "already tagged"},
+		{open, "ChangeBooking", ` + "`" + `{"duration":1,"tag":"day"}` + "`" + `, ""},
+		{open, "HoldBooking", ` + "`" + `{"planId":"plan-2"}` + "`" + `, ""},
+		{held, "HoldBooking", ` + "`" + `{"planId":"plan-1"}` + "`" + `, ""},
+		{held, "HoldBooking", ` + "`" + `{"planId":"plan-2"}` + "`" + `, "booking is held by another event plan"},
 	} {
 		if got := refusal(t, c.s, c.name, c.payload); got != c.want {
 			t.Errorf("%s %s: got %q, want %q", c.name, c.payload, got, c.want)
@@ -98,7 +99,7 @@ func TestRefusals(t *testing.T) {
 
 // The Go target's refusals, run: the generated decider is built in its own
 // module with a test beside it that folds events and checks every rule's
-// message, and that an unset value (no hours sent) never trips a numeric
+// message, and that an unset value (no duration sent) never trips a numeric
 // rule.
 func TestGoRefusalsRun(t *testing.T) {
 	runGeneratedGo(t, refusalDomain(), refusalBehaviour)
@@ -150,8 +151,8 @@ func TestRefusalFieldsAreChecked(t *testing.T) {
 	for name, cond := range map[string]RefusalCondition{
 		"unknown state field":   {Side: "state", Field: "ghost", Op: "set"},
 		"unknown command field": {Side: "command", Field: "ghost", Op: "set"},
-		"numeric on text":       {Side: "command", Field: "invoiceId", Op: "atLeast", Operand: &RefusalOperand{Literal: 1.0}},
-		"contains on a number":  {Side: "state", Field: "hours", Op: "contains", Operand: &RefusalOperand{Literal: 1.0}},
+		"numeric on text":       {Side: "command", Field: "planId", Op: "atLeast", Operand: &RefusalOperand{Literal: 1.0}},
+		"contains on a number":  {Side: "state", Field: "duration", Op: "contains", Operand: &RefusalOperand{Literal: 1.0}},
 	} {
 		d := refusalDomain()
 		d.Commands[2].Refusals = []Refusal{{Message: "x", All: []RefusalCondition{cond}}}

@@ -88,8 +88,8 @@ func TestFulfillmentDispatchesTask(t *testing.T) {
 }
 
 // TestFulfillmentInheritsProvenance proves reactors.Dispatch propagates a
-// causing event's provenance onto its reaction, the mechanism the federation
-// trust model item in NEEDS.md needs: a local reactor reacting to an event
+// causing event's provenance onto its reaction, the mechanism a federation
+// trust model needs: a local reactor reacting to an event
 // that itself carries provenance (e.g. once a federation-ingest write sets
 // it) must not silently drop that signal just because the reactor itself has
 // no idea federation exists.

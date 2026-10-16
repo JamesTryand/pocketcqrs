@@ -48,7 +48,7 @@ const reactorDoc = `{"eventModelingSchemaVersion":"3.17.0","id":"o","name":"O",
 			"when":{"commandId":"raise-notification","data":{"text":"hi"}},
 			"then":{"events":[{"eventId":"notification-raised","data":{"text":"hi"}}]}}]}]}`
 
-// R3: where a generated reactor sends its command.
+// Where a generated reactor sends its command.
 //   - Same aggregate as the trigger: the trigger's own stream. It used to
 //     be prefix + that stream id, a stream that never exists, so auto-ship
 //     shipped nothing ("order does not exist").

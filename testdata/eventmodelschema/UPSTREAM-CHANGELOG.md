@@ -3,6 +3,23 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 4.0.0
+
+**Breaking:**
+- `command.scope.memberOfVia` requires `actorField`: the field of the membership read model that holds a member's
+  actor id. A scope allows the command when the membership read model has a row whose `matchField` equals the value
+  `resolveVia` found and whose `actorField` equals the command's actor. Before, the document named only the matched
+  field, so which field held the member was left to each generator's convention. A 3.x document with a `scope` must
+  add `actorField`; any other 3.x document validates unchanged.
+
+**Examples:**
+- The examples describe neutral domains (equipment hire, a support desk, a venue's bookings, a grant fund, delivery
+  runs, a tool library). They demonstrate the same features as before.
+- `examples/state-ownership.json` also demonstrates a command `scope` with `actorField`.
+
+**Clarified:** a command's authorization declarations (`requiredRole`, `fieldGatedRole`, `requiredOwnership`,
+`scope`) combine: every one declared must hold. See `docs/design-notes.md`.
+
 ## 3.17.0
 
 **Additive (non-breaking):**
@@ -24,7 +41,7 @@ See `docs/design-notes.md` for the full rationale behind each change.
   items, absent unless every item carries it.
 - `derivation.kind: "byEvent"` (`values`): a literal per event, such as a status (`toggle` is the 0/1 case). An
   event not named leaves the field as it was.
-- `examples/rows-per-list-item.json`: an invoice's parts per project.
+- `examples/rows-per-list-item.json`: a delivery's loads per depot.
 
 ## 3.15.0
 
@@ -36,16 +53,16 @@ See `docs/design-notes.md` for the full rationale behind each change.
 - `requiredOwnership` is now either `via` (a read model, as before, with optional `bypassRoles`) or `stateField`
   (with optional `message`), never both. `bypassRoles` stays with `via`: a decision knows its actor, not their
   role.
-- `examples/state-ownership.json`: an expense changed only by its own staff member.
+- `examples/state-ownership.json`: a loan request changed only by the member who made it.
 
 ## 3.14.0
 
 **Additive (non-breaking):**
 - `readModel.rowKeyField`: the field of each event a read model is built from (and removed by) that names the row
   it updates, in place of the event's stream. Without it, a row is a stream, as before.
-- The use: one stream that holds many rows' events, such as a ledger recording a payment per person per run. Every
-  one of those events must carry the field. `examples/repeated-outcomes.json` gains a `payments` read model, one row
-  per payment.
+- The use: one stream that holds many rows' events, such as a grant round recording an award per recipient. Every
+  one of those events must carry the field. `examples/repeated-outcomes.json` gains an `awards` read model, one row
+  per award.
 
 ## 3.13.0
 
@@ -69,11 +86,11 @@ See `docs/design-notes.md` for the full rationale behind each change.
 - When any alternative has a `when`, the alternatives are tried in order after the command's refusals; the first
   whose `when` holds is the result, and the last has none (the default). So the same command and state always
   give the same events.
-- `set` fixes field values on an alternative's events, by event id then field (`{ "entry-flagged": { "reason":
-  "long-day" } }`).
+- `set` fixes field values on an alternative's events, by event id then field (`{ "booking-flagged": { "reason":
+  "long-hire" } }`).
 - New example `examples/conditional-outcomes.json`, with a declared condition and a hand-written one.
-- Raised by `project/timesheets` D30.18 (F15): an entry whose hours are paid at no cost is logged and flagged in
-  one decision. 3.3.0 could list the two alternatives but not say which applies, so generators refused it.
+- The need: a record that is made and flagged for review in one decision. 3.3.0 could list the two alternatives but
+  not say which applies, so generators refused it.
 
 **Not enforced here:** that the last alternative has no `when`, that the ids in `eventIds` and `set` belong to
 the slice, and that each field named exists. Reference checks, for a generator or a lint.
@@ -86,11 +103,11 @@ the slice, and that each field named exists. Reference checks, for a generator o
   another numeric `state` or `command` field.
 - A comparison with an unset value never holds. A rule that also refuses a missing value
   says so with a separate `is: notSet` rule.
-- `examples/refusals.json` uses them: "hours must be positive" is `atMost: 0` (it was
-  `equals: 0`, which let negative hours through), and a new rule refuses more than 24.
-- Raised by `project/timesheets` D30 (F10-F12): a conversion rate must be more than 0, and
-  a VAT percentage from 0 to 100. As hand-written guards, the generated stand-ins couldn't
-  see them.
+- `examples/refusals.json` uses them: "duration must be positive" is `atMost: 0` (it was
+  `equals: 0`, which let negative durations through), and a new rule refuses more than 24.
+- The need: range rules, such as a conversion rate that must be more than 0, or a VAT
+  percentage from 0 to 100. As hand-written guards, the generated stand-ins couldn't see
+  them.
 
 ## 3.10.0
 
@@ -113,11 +130,10 @@ the slice, and that each field named exists. Reference checks, for a generator o
 - A command scenario's `when` may name its `actor` and the time it happens (`at`), for a
   harness that runs a host's own deciders: they record who and when on events, so a
   worked example that checks values has to fix both.
-- New example `examples/refusals.json`: an entry claimed by one invoice at a time, and
-  frozen while claimed. The other examples are bumped.
-- Raised by `project/timesheets` (decision D29, 2026-10-10). Every guard of this kind was
-  hand-written, so the scenario harness (which runs the generated decider) reported
-  them all as failures.
+- New example `examples/refusals.json`: a room booking held by one event plan at a time,
+  and frozen while held. The other examples are bumped.
+- Raised 2026-10-10: every guard of this kind was hand-written, so a scenario harness
+  (which runs the generated decider) reported them all as failures.
 
 ## 3.9.0
 
@@ -129,11 +145,11 @@ the slice, and that each field named exists. Reference checks, for a generator o
 - Without it, nothing could say "this event takes the row away". `endsStream` (2.2.0) is
   about the write side's `Exists`, not read models. So every runtime hand-wrote the
   delete, or forgot to.
-- Example `read-access.json`: unassigning a project manager removes the row, and with it
-  the access the row granted (a 3.8.0 granting scope through that read model).
-- Raised by `project/timesheets` (decision D23, 2026-10-09). An unassigned staff member
-  kept their project-staff row, and with it access to the project's documents. Four other
-  projections there already hand-wrote this delete.
+- Example `read-access.json`: unassigning a team lead removes the row, and with it the
+  access the row granted (a 3.8.0 granting scope through that read model).
+- Raised 2026-10-09: a member unassigned from a team kept their team-members row, and with
+  it access to the team's documents. Four other projections in the same model already
+  hand-wrote this delete.
 
 ## 3.8.0
 
@@ -142,12 +158,12 @@ the slice, and that each field named exists. Reference checks, for a generator o
   the scope's param always names the caller: its value is the caller's own subject id,
   and whatever value the request sent is ignored. A caller who does not hold the read
   model's `requiredRole` may also see the rows this scope admits for them. "The
-  entries on projects I manage" is the example: a scope through a project-managers
-  read model.
+  tickets of teams I lead" is the example: a scope through a team-leads read
+  model.
 - `readModelSelfAccess` gains `param`, an optional query param. When a request carries
   it, any caller is narrowed to their own rows, role holders included, and its value is
-  ignored. Without it, a manager on their own "my time" page sees everyone's rows,
-  because holding `requiredRole` shows every row.
+  ignored. Without it, a supervisor on their own "my tickets" page sees everyone's
+  rows, because holding `requiredRole` shows every row.
 - `readModelQuery` (a stateView scenario's `when`) gains `caller`: `{ "subjectId",
   "role"? }`, the caller the scenario reads as. Leaving it out keeps the old meaning: a
   caller who holds `requiredRole`.
@@ -165,9 +181,8 @@ the slice, and that each field named exists. Reference checks, for a generator o
 - **Generators must fail closed.** A runtime that cannot apply a declared access rule
   must refuse to generate, or refuse the query. It must never serve the rows unscoped.
 - New example `examples/read-access.json`; the order-fulfillment examples are bumped.
-- Raised by `project/timesheets` (decision D21, 2026-10-09). Its hand-written routes
-  scoped a staff caller only when the client sent the scope param, so a caller who left
-  the param out read everyone's rows.
+- Raised 2026-10-09: hand-written routes scoped a caller without the role only when the
+  client sent the scope param, so a caller who left the param out read everyone's rows.
 
 ## 3.7.1
 
@@ -213,9 +228,8 @@ the slice, and that each field named exists. Reference checks, for a generator o
   partition (a global event).
 - Without `partitioning`, nothing changes. Split documents carry `partitioning` inline
   in the manifest; `manifest.schema.json`, `split.js` and `join.js` are updated.
-- Raised by `project/container-paas` and `project/landing-pages` (decision 0006:
-  tenancy in the data model from day one, because adding it after events exist is a
-  migration).
+- Raised by multi-tenant systems that need tenancy in the data model from day one,
+  because adding it after events exist is a migration.
 
 **Examples:** `order-fulfillment` is partitioned by `shopId`, with `operator` able to
 read across shops. Both order-fulfillment examples are bumped to `3.7.0`.
@@ -243,7 +257,7 @@ accepted, and mean nothing, in a document without `partitioning`.
 - Timeouts, retries, backoff and attempt tracking are **not** in the document. The
   runtime owns them, and the host configures them. Any lifecycle records the runtime
   keeps (attempts, timeouts) are its own, like the `DataSubject` stream.
-- Raised by `project/container-paas`: its deploy pipeline is mostly calls that take
+- Raised by a system whose deploy pipeline is mostly calls that take
   seconds to minutes and can succeed, fail or never answer, and the schema had no way
   to say an automation calls out at all.
 
@@ -281,8 +295,8 @@ scenario for each. Both order-fulfillment examples are bumped to `3.6.0`.
 - Scenarios: `given` can contain `{ "elapsed": "<duration>" }` between events,
   meaning that much time passes there. This works in any scenario, since a decider
   guarding on time needs it too.
-- Raised by `project/landing-pages` (checkout expiry, drip sequences) and
-  `project/container-paas` (certificate renewal, reconcile loops).
+- Raised by checkout expiry, drip sequences, certificate renewal and reconcile
+  loops.
 
 **Examples:** `delivery-overdue-slice` flags an order not delivered or failed
 `deliveryOverdueAfter` (default `P5D`) after shipping, with an `elapsed` scenario.
@@ -313,8 +327,7 @@ fields. Checks for a lint or the host.
   party had no slice it could belong to.
 - Hotspots can target an `ingress`. Split documents keep `ingresses` in their own
   registry file; `manifest.schema.json` and `split.js` are updated.
-- Raised by `project/landing-pages` (payment-processor webhooks) and
-  `project/container-paas` (provider callbacks).
+- Raised by payment-processor webhooks and provider callbacks.
 
 **Examples:** a `carrier-webhook` ingress from the shipping partner feeds a new
 `record-delivery-slice`: `record-delivery` emits `order-delivered` or
@@ -334,7 +347,7 @@ names a field of every command the ingress feeds. Reference checks for a lint.
 - `eventIds` (and `resultEventIds`) keep their meaning: every event the command can
   emit. Without `outcomes`, whether those events come together or as alternatives is
   unspecified, as before.
-- Raised by `project/container-paas` (decision 0008, bounded state machines): a
+- Raised by a design that specifies aggregates as bounded state machines: a
   transition emitting `A and B` looked identical to one emitting `A or B`, so the
   difference could only be written in prose.
 
@@ -373,7 +386,7 @@ are bumped to `3.3.0`.
   erasure (`RequestErasure` where the runtime governs erasure), never `EraseSubject`.
 - Split documents carry `dataSubjects` inline in the manifest, like `swimlanes`.
   `manifest.schema.json`, `split.js` and `join.js` are updated to match.
-- Raised by `platform/eventmodeling-codegen`: a person reading or erasing their own
+- Raised by generator work: a person reading or erasing their own
   data (GDPR access, portability and erasure) had no way to be declared. The
   command side has had `requiredOwnership` since 2.5.0; the read side had only
   "this role sees every row".
@@ -425,7 +438,7 @@ like `piiSubject`.
 - `phonetic` matching is deliberately **not** in this version. It needs one
   algorithm pinned identically across implementations, and will come in a later
   minor version once a real document needs it.
-- Raised by `platform/eventmodeling-codegen`: a PII field is stored encrypted, and
+- Raised by generator work: a PII field is stored encrypted, and
   the same value encrypts differently every time, so before this change it could
   not be searched at all, and nothing in a document could say it should be.
 
@@ -449,7 +462,7 @@ generator/lint, like `piiSubject`.
 - `piiSubject` names a field only. There are deliberately no sentinels (no
   "aggregate id", no "acting user"). A subject is always a value you can see in the
   payload. See `docs/design-notes.md`, v3.0.0.
-- Raised by `platform/eventmodeling-codegen`, which is building crypto-shredding on
+- Raised by generator work building crypto-shredding on
   top of `pii`. Until now `pii` was a bare flag, so nothing said *whose* key to use,
   and no default is safe: the aggregate id is wrong whenever a stream holds someone
   else's data.
@@ -469,11 +482,10 @@ they belong to a generator/lint, which should error rather than guess.
 **Additive (non-breaking):**
 - `readModel` gains `requiredRole` — the read-side mirror of `command.requiredRole`
   (2.5.0): the actor's own role must be a member of the declared role(s) to query
-  this read model at all. Raised by `project/timesheets`
-  (`build-plan/00-decisions-and-blockers.md` D12): every generated read-model query
+  this read model at all. Raised 2026-09-08: every generated read-model query
   route required only *an* authenticated actor, never a role, so any signed-in user
-  could read any tenant's full data (confirmed in a real browser — a Staff-role
-  account reading the full staff roster including hourly costs).
+  could read any tenant's full data (seen in practice in a browser, not only
+  predicted).
 - **Internal rename, no document-visible change**: the `$def` backing `requiredRole`
   (`command.requiredRole`, `commandFieldGatedRole.requiredRole`, and now
   `readModel.requiredRole`) is renamed from `commandRole` to `roleRequirement` — it
@@ -484,7 +496,7 @@ they belong to a generator/lint, which should error rather than guess.
 
 A 2.6.0 document validates unchanged against 2.7.0. Consuming `readModel.requiredRole`
 (a generated `ReadModelAuthorization` check in every generated query route,
-structurally parallel to `CommandAuthorization`) is `platform/eventmodeling-codegen`'s
+structurally parallel to `CommandAuthorization`) is a generator's
 job, not this schema's — same split every other read/write-side capability here has
 kept (`filters`, `asOf`, `command.requiredRole` itself).
 
@@ -498,17 +510,16 @@ kept (`filters`, `asOf`, `command.requiredRole` itself).
   the live clock, letting a scenario pin "today" once instead of drifting out of its own
   window on a rolling cadence. Absent, behavior is unchanged (today's live-clock
   resolution).
-- Consuming `asOf` (stubbing the verify-time clock) is a generator's job
-  (`platform/eventmodeling-codegen`), not this schema's — same split as `filters`
-  itself.
+- Consuming `asOf` (stubbing the verify-time clock) is a generator's job, not this
+  schema's — same split as `filters` itself.
 
 A 2.5.0 document validates unchanged against 2.6.0.
 
 ## 2.5.0
 
 **Additive (non-breaking):**
-- `command` gains four optional authorization declarations, from the signed-off
-  `platform/command-authorization` design proposal:
+- `command` gains four optional authorization declarations, from a signed-off
+  command-authorization design proposal:
   - `requiredRole` (new `$def` `commandRole`: a role id, or a non-empty array of
     role ids) — the actor's own role must match one of them.
   - `fieldGatedRole` (new `$def` `commandFieldGatedRole`: `{ field, value,
@@ -534,7 +545,7 @@ design rationale, including why `requiredOwnership`'s resolution needed a
 read-model `via` lookup rather than a bare field name, and what this addition
 deliberately leaves to the host layer (how an actor's role claim itself gets
 populated — including for an "administrator" role that lives outside any
-`staff`-shaped aggregate).
+`user`-shaped aggregate).
 
 A 2.4.0 document validates unchanged against 2.5.0.
 
@@ -550,8 +561,8 @@ A 2.4.0 document validates unchanged against 2.5.0.
 
 See `docs/design-notes.md` ("v2.4.0: `readModel.filters`...") for why presets are a
 closed enum, the documented (not schema-enforced) runtime `queryParams` value
-convention, and why this deliberately does not solve `staffTotals`-style cross-row
-correlation.
+convention, and why this deliberately does not solve cross-row correlation (a value
+falling inside a *different* row's date range).
 
 A 2.3.0 document validates unchanged against 2.4.0.
 

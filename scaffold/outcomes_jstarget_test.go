@@ -14,15 +14,15 @@ import (
 // The JS target runs the same outcomes as TestGoOutcomesRun, with a real
 // hand file compiled into the decider's program.
 func TestJSOutcomesRun(t *testing.T) {
-	files, err := payDomain().Generate()
+	files, err := accountsDomain().Generate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if files[1].Name != "ledger.hand.js.example" || !strings.Contains(files[0].Source, "//@hooks ReleasePayRunOutcome0PersonPaid SubmitExpenseOutcome0") {
+	if files[1].Name != "ledger.hand.js.example" || !strings.Contains(files[0].Source, "//@hooks CloseGrantRoundOutcome0GrantAwarded RequestRefundOutcome0") {
 		t.Fatalf("the decider names its hooks and an example hand file comes with it: %s\n%s", files[1].Name, files[0].Source)
 	}
-	hand := `function SubmitExpenseOutcome0(state, command) { return command.payload.amount > 500; }
-function ReleasePayRunOutcome0PersonPaid(state, command) { return [{ personId: 'p1', amount: 120 }, { personId: 'p2', amount: 80 }]; }
+	hand := `function RequestRefundOutcome0(state, command) { return command.payload.amount > 500; }
+function CloseGrantRoundOutcome0GrantAwarded(state, command) { return [{ recipientId: 'r1', amount: 120 }, { recipientId: 'r2', amount: 80 }]; }
 `
 	spec, err := functions.LoadDeciderSourceWithHand(functions.NewGojaRuntime(nil), "ledger.js", files[0].Source, hand)
 	if err != nil {
@@ -34,11 +34,11 @@ function ReleasePayRunOutcome0PersonPaid(state, command) { return [{ personId: '
 	}
 	defer store.Close()
 	for _, c := range []struct{ name, payload, want string }{
-		{"LogEntry", `{"hours":8}`, `EntryLogged{"hours":8}`},
-		{"LogEntry", `{"hours":13}`, `EntryLogged{"hours":13} EntryFlagged{"reason":"long-day"}`},
-		{"SubmitExpense", `{"amount":100}`, `ExpenseSubmitted{"amount":100}`},
-		{"SubmitExpense", `{"amount":900}`, `ExpenseSubmitted{"amount":900} ExpenseFlagged{"reason":"over-limit"}`},
-		{"ReleasePayRun", `{"period":"2026-09"}`, `PayRunReleased{"period":"2026-09"} PersonPaid{"amount":120,"personId":"p1"} PersonPaid{"amount":80,"personId":"p2"}`},
+		{"MakeBooking", `{"days":7}`, `BookingMade{"days":7}`},
+		{"MakeBooking", `{"days":15}`, `BookingMade{"days":15} BookingFlagged{"reason":"long-hire"}`},
+		{"RequestRefund", `{"amount":100}`, `RefundRequested{"amount":100}`},
+		{"RequestRefund", `{"amount":900}`, `RefundRequested{"amount":900} RefundFlagged{"reason":"over-threshold"}`},
+		{"CloseGrantRound", `{"period":"2026-09"}`, `GrantRoundClosed{"period":"2026-09"} GrantAwarded{"amount":120,"recipientId":"r1"} GrantAwarded{"amount":80,"recipientId":"r2"}`},
 	} {
 		run, err := functions.DryRunDecide(store, spec, "s", decider.Command{Name: c.name, Payload: json.RawMessage(c.payload)}, map[string]any{})
 		if err != nil {

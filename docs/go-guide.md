@@ -175,8 +175,8 @@ enforce it.
 `cmd.Provenance` is a separate, narrower signal: empty for everything the
 gateway and local reactors produce today, and set only by a trusted local
 write path that has verified a command's causal chain crossed a trust
-boundary (e.g. a federated peer deployment, once that exists — see
-platform/pocketbase-cqrs-faas NEEDS.md's federation trust model item). Do
+boundary (e.g. a federated peer deployment, once that exists; the
+federation trust model is still an open question). Do
 **not** infer trust from `cmd.Actor`'s `"reactor:<name>"` prefix — that
 string only says which reactor produced the command, unconditionally, and is
 identical whether the reactor reacted to a purely local event or one that

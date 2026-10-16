@@ -13,7 +13,7 @@ import (
 )
 
 // positionsTable holds each projection's position in the node's own data.db,
-// beside its rows, so the two commit together (R2). Never the replicated
+// beside its rows, so the two commit together. Never the replicated
 // events.db: that is the master's single-writer log, read-only elsewhere.
 const positionsTable = "_cqrsPositions"
 
@@ -65,7 +65,7 @@ func savePosition(ctx context.Context, db dbx.Builder, name string, position int
 }
 
 // Commit runs apply, an event's row ops, and records position as name's in
-// one data.db transaction (R2): either both land or neither does, so a
+// one data.db transaction: either both land or neither does, so a
 // crash or a failing op can't leave half an event applied, or its rows
 // without its position (applied twice on the next pass). apply must write
 // through the tx app it is given.

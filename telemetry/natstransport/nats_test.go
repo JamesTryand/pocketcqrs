@@ -111,7 +111,7 @@ func TestASnapshotArrivesOnTheNodeIDsSubjectAndSurvivesABusRestart(t *testing.T)
 	}
 
 	h := opsport.New("node-3", started)
-	h.SetIdentity(nodeidentity.Identity{NodeID: nodeID, Kind: nodeidentity.Persistent, Instance: "timesheets",
+	h.SetIdentity(nodeidentity.Identity{NodeID: nodeID, Kind: nodeidentity.Persistent, Instance: "orders",
 		Host: "node-3", Stack: nodeidentity.Stack, Role: "writer", StartedAt: started})
 	if err := h.BeginCatchUp(func() []consumers.Status { return nil }, time.Minute, nil); err != nil {
 		t.Fatal(err)

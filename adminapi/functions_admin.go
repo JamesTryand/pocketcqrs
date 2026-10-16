@@ -86,8 +86,7 @@ type FunctionFile struct {
 // (goja). That is deliberate and unchanged from the rest of the platform —
 // functions are trusted, owner-authored code, `pack import` already writes
 // the same files, and every route here requires a superuser token. Untrusted
-// function code remains the open question that a wasm runtime would answer
-// (see NEEDS.md).
+// function code remains an open question, one a wasm runtime would answer.
 //
 // A write is refused unless the source loads: a file that cannot be parsed
 // or compiled would abort EVERY later reload (reloads are all-or-nothing),
@@ -503,11 +502,11 @@ func (s *State) handleDryRun(re *core.RequestEvent) error {
 			summary += fmt.Sprintf(" %d returned value(s) were NOT dispatch descriptors and would be discarded at runtime.",
 				res.IgnoredValues)
 		}
-		// The //@dispatches gate, REPORTED rather than enforced (F-2).
+		// The //@dispatches gate, REPORTED rather than enforced.
 		//
 		// A dry run that passes what the reload then refuses is the same
 		// silent divergence the gate exists to close, one surface over — and
-		// this project has already learned once (F-9/F-10) that fixing a
+		// this project has already learned once that fixing a
 		// command without fixing its class leaves the next one open.
 		//
 		// It reports instead of erroring because a dry run's job is "tell me
@@ -592,8 +591,8 @@ func (s *State) handleDryRun(re *core.RequestEvent) error {
 }
 
 // diffProjection compares a simulation against the live collections, per
-// collection. Note the M7 caveat: read-modify-write projections read live
-// state during simulation, so only absolute-recompute projections are
+// collection. A caveat: read-modify-write projections read live state
+// during simulation, so only absolute-recompute projections are
 // expected to come back clean.
 func (s *State) diffProjection(spec *functions.ProjectionSpec, res *functions.ProjectionDryRun) (map[string][]string, error) {
 	out := map[string][]string{}

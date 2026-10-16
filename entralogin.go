@@ -19,13 +19,13 @@ import (
 	"github.com/jamestryand/pocketcqrs/users"
 )
 
-// Item 12: Microsoft/Entra sign-in for the users collection (see users.go).
+// Microsoft/Entra sign-in for the users collection (see users.go).
 // This is a route pair around PocketBase's OWN native
 // /api/collections/users/auth-with-oauth2 handler -- not a reimplementation
 // of the OAuth2 token exchange. That distinction is load-bearing on a
 // multi-node deployment: auth-with-oauth2 is already on authforward's
 // forwarding suffix list (authforward.go's authFlowSuffixes), so calling
-// the real endpoint gets F-12's split-brain protection for free, exactly
+// the real endpoint gets the split-brain protection for free, exactly
 // like every other native auth flow already does. Reimplementing the
 // exchange directly against tools/auth + app.Save would silently bypass
 // that middleware -- it operates at the router level by URL path, not by

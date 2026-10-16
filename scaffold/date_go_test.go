@@ -4,8 +4,8 @@ import "testing"
 
 // dayDomain: a booking for a calendar date. The model's dates are
 // "2026-09-15", so the generated Go must fold one and produce it back as it
-// came: time.Time read only RFC 3339, and the timesheets model's own events
-// didn't fold (found by schema verify --lang go).
+// came: time.Time read only RFC 3339, and a real model's own events didn't
+// fold (found by schema verify --lang go).
 func dayDomain() Domain {
 	booked := Event{Name: "DayBooked", Fields: []Field{{Name: "bookingId", Type: "text"}, {Name: "day", Type: "date"}}}
 	moved := Event{Name: "DayMoved", Fields: []Field{{Name: "bookingId", Type: "text"}, {Name: "day", Type: "date"}}}

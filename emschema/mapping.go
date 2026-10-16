@@ -70,7 +70,7 @@ func Map(doc *Document, opts Options) (*Mapped, error) {
 		d := *m.byAggregate[name]
 		d.RoleField, d.SubjectField = opts.RoleField, opts.SubjectField
 		// schema 3.8.0: a read model declaring no access rule is read by
-		// every signed-in caller (decision 8, 2026-10-15)
+		// every signed-in caller
 		d.SignedInByDefault = true
 		if err := d.Validate(); err != nil {
 			rep.errorf("aggregate %q: %v", name, err)
@@ -103,7 +103,7 @@ type mapper struct {
 	// eventEndsStream marks the ids of events tagged `endsStream: true` in
 	// the source document -- scenarioNetExists needs this to fold a
 	// scenario's `given` into a net "does the stream currently exist"
-	// verdict rather than just scanning for own-stream presence. Finding 3.
+	// verdict rather than just scanning for own-stream presence.
 	eventEndsStream map[string]bool
 	prefixMin       map[string]int // hashed prefix filters: minPrefixLength per (read model, field, normalizer)
 }
@@ -306,8 +306,8 @@ func (m *mapper) mapAutomation(s Slice) {
 	// only when this slice's own scenario evidence says so, the same rule
 	// hasCreateEvidence applies to a directly-invoked command: a `given`
 	// event on the TARGET aggregate's own stream is real evidence the stream
-	// already exists (the fan-out-lock case: log an entry, then an invoice
-	// reaction locks it), while a foreign-aggregate given (the trigger's own
+	// already exists (the fan-out-lock case: place an order, then a
+	// shipment reaction locks it), while a foreign-aggregate given (the trigger's own
 	// history) is not. This also lets two independent automations/commands
 	// each genuinely create the same aggregate TYPE (two triggers each
 	// raising a fresh notification) without one disqualifying the other,
@@ -337,7 +337,7 @@ func (m *mapper) mapAutomation(s Slice) {
 			"triggering event, and let the target decider refuse what doesn't hold",
 			s.ID, s.ReadModelID)
 	}
-	// Where the command goes (R3, as dotnetcqrs's mapper): an automation on
+	// Where the command goes (as dotnetcqrs's mapper): an automation on
 	// its trigger's own aggregate acts on the trigger's own stream (no
 	// prefix; with one, auto-ship sent ShipOrder to a stream that never
 	// exists). Across aggregates the target id is derived from the source,
@@ -950,11 +950,11 @@ func ReadModelCollectionName(name, id string) string {
 // as the generated decider's own Evolve will: a `given` event on the
 // slice's OWN aggregate stream sets `exists` true, unless it is tagged
 // `endsStream`, which resets it false; a foreign-aggregate given (an
-// ordinary cross-aggregate precondition, e.g. "the project exists") is not
+// ordinary cross-aggregate precondition, e.g. "the customer exists") is not
 // evidence either way and is skipped. Order matters — this is a FOLD, not a
 // scan for presence — because a `given` that assigns then unassigns nets
 // back to "does not exist", which is create evidence, not update evidence
-// (Finding 3 / proposal Q5): scanning for "any own-stream event present"
+// scanning for "any own-stream event present"
 // would misclassify that reassignment case as update evidence and wrongly
 // turn off the create-only guard.
 func (m *mapper) scenarioNetExists(sc Scenario, agg string) bool {
@@ -992,7 +992,7 @@ func (m *mapper) hasCreateEvidence(s Slice, agg string) bool {
 // exactly that, its `given` ending the own stream (netting to "does not
 // exist" with an own-stream endsStream event in it) and the command still
 // succeeding (a re-assign after an unassign). Error scenarios are not
-// evidence. With no such scenario the end is final (D28): the generated
+// evidence. With no such scenario the end is final: the generated
 // create refuses an ended stream. Mirrors dotnetcqrs's
 // HasBeginAgainEvidence.
 func (m *mapper) hasBeginAgainEvidence(s Slice, agg string) bool {

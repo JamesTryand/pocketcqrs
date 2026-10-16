@@ -15,7 +15,7 @@ type Config struct {
 // RegisterRoutes binds the whole catalog/ops/admin HTTP surface in one
 // call: catalog, events/streams/deadletters/admin-mode (ops), hot reload,
 // and function-file management (list/read/write/delete/dryrun/scaffold).
-// This is the one-call surface Item 10 exists for — before this package, a
+// This is the one-call surface this package exists for — before this package, a
 // Go embedder reconstructing its own main.go (docs/go-guide.md's wrapper
 // pattern) had no way to reach any of these routes at all, since they lived
 // as unexported, package-private functions in pocketcqrs's own module-root

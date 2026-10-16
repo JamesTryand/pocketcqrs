@@ -142,9 +142,9 @@ func TestHandleWithoutMetaKeepsDeciderMetadata(t *testing.T) {
 }
 
 // gatedState mirrors the shape of an authorization check a real decider
-// needs -- e.g. rotaboard's requirePermission -- to prove cmd.Actor is
-// actually usable for one, not just present on the struct. See F-14: before
-// this fix, a typed Decider[S] had no way to express this at all.
+// needs -- e.g. a requirePermission check -- to prove cmd.Actor is
+// actually usable for one, not just present on the struct. Before this fix,
+// a typed Decider[S] had no way to express this at all.
 type gatedState struct {
 	Granted map[string]bool
 }
@@ -337,7 +337,7 @@ func TestDecideWithMetaStampsNowOnlyIfAbsent(t *testing.T) {
 	if got2["now"] == nil || got2["now"] == "" {
 		t.Fatal("expected now to be filled in when absent")
 	}
-	// F-16: the stamped format must be real RFC3339 (T-separated), not the
+	// the stamped format must be real RFC3339 (T-separated), not the
 	// space-separated near-ISO format that broke downstream date-time
 	// consumers.
 	now, ok := got2["now"].(string)

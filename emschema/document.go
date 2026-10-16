@@ -80,7 +80,7 @@ type Event struct {
 	// EndsStream marks an event that closes its own aggregate's stream (an
 	// unassign, a removal): folded, it resets the synthesized `Exists` to
 	// false instead of true, so a later create-shaped command on the same
-	// stream is legal again. Added in schema 2.2.0 (Finding 3).
+	// stream is legal again. Added in schema 2.2.0.
 	EndsStream bool `json:"endsStream,omitempty"`
 }
 
@@ -96,11 +96,11 @@ type Command struct {
 	// RequiredRole names the role(s) whose actor may issue this command
 	// outright — a single role id, or a list (any one satisfies it). Absent
 	// means no role requirement, the default for every command before this.
-	// Added in schema 2.5.0 (platform/command-authorization).
+	// Added in schema 2.5.0 (command authorization).
 	RequiredRole RoleList `json:"requiredRole,omitempty"`
 	// FieldGatedRole additionally requires a role only when the command's
-	// own payload field equals a specific value (e.g. onboard-staff's
-	// role="manager" needs an administrator actor; setting role="staff"
+	// own payload field equals a specific value (e.g. add-member's
+	// role="supervisor" needs an administrator actor; setting role="member"
 	// needs nobody in particular). Orthogonal to RequiredRole — a command
 	// may declare either, both, or neither. Added in schema 2.5.0.
 	FieldGatedRole *CommandFieldGatedRole `json:"fieldGatedRole,omitempty"`
@@ -113,8 +113,8 @@ type Command struct {
 	// resolved through two read-model hops — first resolving a value off
 	// the command's own target, then checking membership against that
 	// value in a second read model — unless the actor's role is one of
-	// BypassRoles. The "Manager bypasses; otherwise a Project Manager of
-	// the target's own project" shape. Kept as its own declaration rather
+	// BypassRoles. The "a supervisor bypasses; otherwise a lead of the
+	// target's own team" shape. Kept as its own declaration rather
 	// than folded into RequiredOwnership: a genuine second resolution hop
 	// (set membership, not equality) RequiredOwnership does not need.
 	// Added in schema 2.5.0.
@@ -252,7 +252,7 @@ type ReadModel struct {
 	Fields            []Field  `json:"fields,omitempty"`
 	// Scopes declares, per non-column query param, how it resolves through
 	// another read model (a semi-join) rather than a plain column filter.
-	// Added in schema 2.2.0 (Finding 3).
+	// Added in schema 2.2.0.
 	Scopes []ReadModelScope `json:"scopes,omitempty"`
 	// Filters declares a single-field WHERE-range query filter against one
 	// of this read model's own columns, with named presets rather than a
@@ -405,7 +405,7 @@ type Field struct {
 	// Derivation makes a read-model field a fold over named events instead
 	// of a same-named payload copy — a toggle, a count, a sum or (schema
 	// 2.3.0) a groupBy. Only meaningful on a readModel field. toggle/count/
-	// sum added in schema 2.2.0 (Finding 3).
+	// sum added in schema 2.2.0.
 	Derivation *FieldDerivation `json:"derivation,omitempty"`
 }
 
@@ -451,7 +451,7 @@ type FieldDerivation struct {
 	// RowKeyField names the payload field on the triggering events that
 	// carries the target row's key (count/sum only — the events are
 	// usually on a different stream than the read model's own, e.g. an
-	// assignment event carrying the projectId it should roll up onto).
+	// assignment event carrying the teamId it should roll up onto).
 	// Defaults to the read model's own key-field name when empty.
 	RowKeyField string `json:"rowKeyField,omitempty"`
 
@@ -597,10 +597,10 @@ type Hotspot struct {
 // (2026-09-02) is additive only, `field.derivation` gains kind `groupBy`;
 // 2.4.0 (2026-09-02) is additive only, `readModel` gains `filters`; 2.5.0
 // (2026-09-03) is additive only, `command` gains `requiredRole`/
-// `fieldGatedRole`/`requiredOwnership`/`scope` — platform/command-
-// authorization, ported from dotnetcqrs's own v0.6.0 (`CommandAuthorization`
-// policy table + `MapCqrsGateway`'s `authorize` hook) after that project
-// proved it out first in `project/timesheets`. See package `authorize` for
+// `fieldGatedRole`/`requiredOwnership`/`scope` — command authorization,
+// ported from dotnetcqrs's own v0.6.0 (`CommandAuthorization` policy table +
+// `MapCqrsGateway`'s `authorize` hook), where it was proved out first. See
+// package `authorize` for
 // this project's own policy-table + gateway-hook equivalent. 2.6.0 and 2.7.0
 // (both 2026-09-08) are additive only, ported the same day dotnetcqrs shipped
 // them (v0.7.0/v0.8.0): `readModelQuery.asOf` (a verify-scenario clock pin —
@@ -621,7 +621,12 @@ type Hotspot struct {
 // feature from 3.2.0 on that it cannot apply yet, instead of dropping it.
 // An export uses only what this package reads, so it is a valid 3.17.0
 // document (every version since 3.1.1 is additive).
-const SchemaVersion = "3.17.0"
+//
+// 4.0.0 (breaking: command.scope.memberOfVia requires actorField, the field
+// of the membership read model compared with the command's actor) was
+// vendored on 2026-10-16, with upstream's examples rewritten in neutral
+// domains. An export declares 4.0.0.
+const SchemaVersion = "4.0.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

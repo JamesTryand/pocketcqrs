@@ -362,7 +362,7 @@ function project(event) {
 	}
 }
 
-// TestDryRunProjectionOverFixtureIsolatesReads is the M7 caveat, enforced.
+// TestDryRunProjectionOverFixtureIsolatesReads is the dry run's read caveat, enforced.
 // A read-modify-write projection querying live collections mid-simulation
 // gives an answer that depends on the real database — which is exactly how a
 // fixture assertion passes vacuously. Over a fixture, `pb` reads nothing.
@@ -404,25 +404,25 @@ function project(event) {
 	}
 }
 
-// TestDryRunProjectionOverFixtureAccumulatesIncrements is Finding 3's count/
-// sum case, verified over an ISOLATED fixture: a count-derivation projection
+// TestDryRunProjectionOverFixtureAccumulatesIncrements is the count/sum
+// derivation case, verified over an ISOLATED fixture: a count-derivation projection
 // must never need to read its own running total back through `pb` (that
-// reads nothing over a fixture, per the M7 invariant above) — the host
+// reads nothing over a fixture, per the invariant above) — the host
 // itself accumulates an increment op's delta across the fixture, the same
 // way it accumulates a plain upsert's fields. Two increments and one
 // decrement on the same row must net to 1, entirely from op deltas, with no
 // reader installed at all.
 func TestDryRunProjectionOverFixtureAccumulatesIncrements(t *testing.T) {
 	rt := NewGojaRuntime(nil)
-	spec, err := LoadProjectionSource(rt, nil, "projects.js", `//@trigger projection projects on StaffAssignedToProject StaffUnassignedFromProject
-//@schema projects projectId:text staffCount:number
-//@key projectId
+	spec, err := LoadProjectionSource(rt, nil, "teams.js", `//@trigger projection teams on MemberAssignedToTeam MemberUnassignedFromTeam
+//@schema teams teamId:text memberCount:number
+//@key teamId
 function project(event) {
   switch (event.type) {
-    case 'StaffAssignedToProject':
-      return { increment: { key: event.data.projectId, field: 'staffCount', delta: 1 } };
-    case 'StaffUnassignedFromProject':
-      return { increment: { key: event.data.projectId, field: 'staffCount', delta: -1 } };
+    case 'MemberAssignedToTeam':
+      return { increment: { key: event.data.teamId, field: 'memberCount', delta: 1 } };
+    case 'MemberUnassignedFromTeam':
+      return { increment: { key: event.data.teamId, field: 'memberCount', delta: -1 } };
     default:
       return;
   }
@@ -433,20 +433,20 @@ function project(event) {
 	}
 
 	fixture := []events.Event{
-		{Position: 1, AggregateID: "a1", Type: "StaffAssignedToProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
-		{Position: 2, AggregateID: "a2", Type: "StaffAssignedToProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
-		{Position: 3, AggregateID: "a1", Type: "StaffUnassignedFromProject", Data: json.RawMessage(`{"projectId":"p1"}`)},
+		{Position: 1, AggregateID: "a1", Type: "MemberAssignedToTeam", Data: json.RawMessage(`{"teamId":"g1"}`)},
+		{Position: 2, AggregateID: "a2", Type: "MemberAssignedToTeam", Data: json.RawMessage(`{"teamId":"g1"}`)},
+		{Position: 3, AggregateID: "a1", Type: "MemberUnassignedFromTeam", Data: json.RawMessage(`{"teamId":"g1"}`)},
 	}
 	res, err := DryRunProjectionOver(spec, fixture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := res.Rows["projects"]["p1"]["staffCount"]; got != float64(1) {
-		t.Fatalf("expected staffCount to net to 1 across the fixture with no reads, got %v (rows: %v)", got, res.Rows)
+	if got := res.Rows["teams"]["g1"]["memberCount"]; got != float64(1) {
+		t.Fatalf("expected memberCount to net to 1 across the fixture with no reads, got %v (rows: %v)", got, res.Rows)
 	}
 }
 
-// TestDryRunProjectionOverFixtureAccumulatesGroupByBump is Finding 4's
+// TestDryRunProjectionOverFixtureAccumulatesGroupByBump is the
 // groupBy derivation (schema 2.3.0) proven under the SAME isolation
 // TestDryRunProjectionOverFixtureIsolatesReads exercises for a plain
 // count/sum: two contributing events for the same group key must
@@ -456,17 +456,17 @@ function project(event) {
 // vacuous pass.
 func TestDryRunProjectionOverFixtureAccumulatesGroupByBump(t *testing.T) {
 	rt := NewGojaRuntime(nil)
-	spec, err := LoadProjectionSource(rt, nil, "payrollPeriods.js", `//@trigger projection payrollPeriods on TimeLogged
-//@schema payrollPeriods periodId:text staffTotals:json
+	spec, err := LoadProjectionSource(rt, nil, "salesPeriods.js", `//@trigger projection salesPeriods on SaleRecorded
+//@schema salesPeriods periodId:text memberTotals:json
 //@key periodId
 function project(event) {
   return { groupByBump: {
     key: event.data.periodId,
-    field: 'staffTotals',
-    groupField: 'staffId',
-    groupValue: event.data.staffId,
-    subfield: 'outOfHoursHours',
-    delta: event.data.hours,
+    field: 'memberTotals',
+    groupField: 'memberId',
+    groupValue: event.data.memberId,
+    subfield: 'unitsSold',
+    delta: event.data.units,
   } };
 }
 `)
@@ -475,27 +475,27 @@ function project(event) {
 	}
 
 	fixture := []events.Event{
-		{Position: 1, AggregateID: "t1", Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s1","hours":3}`)},
-		{Position: 2, AggregateID: "t2", Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s1","hours":2}`)},
-		{Position: 3, AggregateID: "t3", Type: "TimeLogged", Data: json.RawMessage(`{"periodId":"pp1","staffId":"s2","hours":4}`)},
+		{Position: 1, AggregateID: "t1", Type: "SaleRecorded", Data: json.RawMessage(`{"periodId":"pp1","memberId":"m1","units":3}`)},
+		{Position: 2, AggregateID: "t2", Type: "SaleRecorded", Data: json.RawMessage(`{"periodId":"pp1","memberId":"m1","units":2}`)},
+		{Position: 3, AggregateID: "t3", Type: "SaleRecorded", Data: json.RawMessage(`{"periodId":"pp1","memberId":"m2","units":4}`)},
 	}
 	res, err := DryRunProjectionOver(spec, fixture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, ok := res.Rows["payrollPeriods"]["pp1"]["staffTotals"].([]map[string]any)
+	rows, ok := res.Rows["salesPeriods"]["pp1"]["memberTotals"].([]map[string]any)
 	if !ok || len(rows) != 2 {
-		t.Fatalf("expected 2 staffTotals entries, got %#v (rows: %v)", res.Rows["payrollPeriods"]["pp1"]["staffTotals"], res.Rows)
+		t.Fatalf("expected 2 memberTotals entries, got %#v (rows: %v)", res.Rows["salesPeriods"]["pp1"]["memberTotals"], res.Rows)
 	}
-	byStaff := map[string]any{}
+	byMember := map[string]any{}
 	for _, r := range rows {
-		byStaff[fmt.Sprint(r["staffId"])] = r["outOfHoursHours"]
+		byMember[fmt.Sprint(r["memberId"])] = r["unitsSold"]
 	}
-	if byStaff["s1"] != float64(5) {
-		t.Errorf("expected s1 outOfHoursHours=5 (3+2 accumulated), got %v", byStaff["s1"])
+	if byMember["m1"] != float64(5) {
+		t.Errorf("expected m1 unitsSold=5 (3+2 accumulated), got %v", byMember["m1"])
 	}
-	if byStaff["s2"] != float64(4) {
-		t.Errorf("expected s2 outOfHoursHours=4 (its own entry), got %v", byStaff["s2"])
+	if byMember["m2"] != float64(4) {
+		t.Errorf("expected m2 unitsSold=4 (its own entry), got %v", byMember["m2"])
 	}
 }
 

@@ -64,7 +64,7 @@ const (
 )
 
 // components is the stock binary's own bootstrap state. It embeds
-// *adminapi.State (Item 10: the admin/introspection HTTP surface, factored
+// *adminapi.State (the admin/introspection HTTP surface, factored
 // out so a Go embedder can register the same routes in its own main.go)
 // plus the handful of fields that are this binary's own concern and never
 // reach the admin surface: command idempotency, command batching, node
@@ -75,7 +75,7 @@ type components struct {
 
 	idempotency *idempotency.Store
 
-	// batchWriter backs command batching (item 4, on by default), or is
+	// batchWriter backs command batching (on by default), or is
 	// nil when --cqrsCommandBatching=false or this node is a roleSecondary,
 	// which never runs its own writer.
 	batchWriter *batching.Writer
@@ -94,7 +94,7 @@ type components struct {
 	commandQueue *commandqueue.Store
 	checkpoints  *events.Store
 
-	// verifyCache holds --cqrsVerifyAuth's (F-13) bounded-TTL verdicts.
+	// verifyCache holds --cqrsVerifyAuth's bounded-TTL verdicts.
 	// Nil except on a secondary running verify mode. State.Verifier reads
 	// through this cache; components only holds it to start/stop its
 	// pruner.
@@ -152,8 +152,8 @@ func main() {
 	// platform, so it gets the same short-circuit as `skill` above, for the
 	// same reason: going through app.Start() bootstraps a full pb_data/
 	// before any RunE runs, with no per-command opt-out, and a refused
-	// import left one behind despite writing nothing itself (F-10).
-	// Short-circuiting also fixes F-9 for this command: PocketBase's own
+	// import left one behind despite writing nothing itself.
+	// Short-circuiting also fixes the lost exit code for this command: PocketBase's own
 	// pb.Execute() discards RootCmd.Execute()'s return value, so a RunE
 	// error used to print correctly but never reach a non-zero exit code.
 	// Running Execute() directly here lets main() act on it.
@@ -233,7 +233,7 @@ func main() {
 		"register this repo's example domains (task, order) and their collections; off by default — pocketcqrs ships empty",
 	)
 
-	// Item 9: //@schema collections default to public ListRule/ViewRule
+	// //@schema collections default to public ListRule/ViewRule
 	// (writes stay write-guarded regardless). This flag changes the
 	// deployment-wide default; a //@rule directive in a function file
 	// overrides it per collection. Every reconcile (boot and reload) keeps
@@ -260,7 +260,7 @@ func main() {
 			"directive overrides this per collection. Existing collections follow it on every boot and reload.",
 	)
 
-	// Item 12: the address entralogin.go's callback handler POSTs to for
+	// the address entralogin.go's callback handler POSTs to for
 	// the real /api/collections/users/auth-with-oauth2 exchange -- this
 	// node's OWN --http listen address (PocketBase's own default, so an
 	// unconfigured deployment just works). Explicit and operator-supplied
@@ -276,7 +276,7 @@ func main() {
 		"cqrsSelfAddr",
 		"127.0.0.1:8090",
 		"this node's own --http listen address, used only for the internal Microsoft/Entra "+
-			"OAuth2 exchange call (Item 12); must match --http (or wherever this node actually "+
+			"OAuth2 exchange call; must match --http (or wherever this node actually "+
 			"listens) for that sign-in flow to work",
 	)
 
@@ -287,7 +287,7 @@ func main() {
 	// can't hold them (see consumers.NewEngineWithCheckpoints, and
 	// events.ErrReadOnly below).
 	// What this flag ALONE does NOT do: forward commands or auth traffic
-	// to a master (item 3 -- see --cqrsMasterAddr below, a separate,
+	// to a master (see --cqrsMasterAddr below, a separate,
 	// already-built flag) — a secondary with no --cqrsMasterAddr set
 	// refuses commands outright (503) rather than silently accepting
 	// ones it can't durably apply.
@@ -448,7 +448,7 @@ func main() {
 			"an empty one (e.g. started before its LiteFS mount is up). Leave off for the first boot "+
 			"that creates the log. A "+roleSecondary+" always requires it",
 	)
-	// Command forwarding (item 3): only meaningful on a secondary. Empty
+	// Command forwarding: only meaningful on a secondary. Empty
 	// (the default) leaves a secondary refusing commands outright (see
 	// events.ErrReadOnly in gateway.go) -- a deliberate choice, e.g. a
 	// pure reporting replica that should never accept write traffic even
@@ -470,7 +470,7 @@ func main() {
 			", commands are proxied there instead of refused. No effect on "+roleMaster,
 	)
 
-	// Auth-collection forwarding (item 5's remainder, F-12): deliberately a
+	// Auth-collection forwarding (the auth-collection remainder): deliberately a
 	// SEPARATE opt-in from --cqrsMasterAddr, not bundled with it, found
 	// necessary while wiring this up -- once PocketBase's own login flow
 	// forwards to the master, every token a client gets is signed with the
@@ -489,11 +489,11 @@ func main() {
 			"CQRS commands) to the master too, since a secondary's copy of those collections is a "+
 			"different table, not a stale replica. Requires --cqrsMasterAddr. WARNING: without "+
 			"--cqrsVerifyAuth, enabling this breaks authenticated LOCAL reads on this secondary -- "+
-			"every token becomes master-signed and unverifiable here (F-13); add --cqrsVerifyAuth "+
+			"every token becomes master-signed and unverifiable here; add --cqrsVerifyAuth "+
 			"so this node verifies those tokens against the master instead.",
 	)
 
-	// Remote token verification (F-13's fix): a secondary cannot verify any
+	// Remote token verification (the fix): a secondary cannot verify any
 	// token itself -- the key material (record TokenKey + collection secret)
 	// lives only in each node's own, never-replicated data.db. Shape C':
 	// ask the master, cache the verdict for a bounded TTL. Implies
@@ -543,7 +543,7 @@ func main() {
 			"Shares --cqrsVerifyGrace's outage policy.",
 	)
 
-	// Command batching (item 4): ON by default -- F-5's fix (queue-depth
+	// Command batching: ON by default -- the fix (queue-depth
 	// admission control, --cqrsCommandQueueMaxDepth) is only built on this
 	// path, so making it the default collapses two admission-control
 	// mechanisms (a bounded semaphore for the direct path, plus this
@@ -564,7 +564,7 @@ func main() {
 			"transaction per command; raises write throughput under load at the cost of variable "+
 			"added latency, bounded by --cqrsBatchTimeout. On by default; pass "+
 			"--cqrsCommandBatching=false for the old one-transaction-per-command path (that path "+
-			"has no admission control of its own -- see F-5).",
+			"has no admission control of its own).",
 	)
 	var batchTimeout time.Duration
 	app.RootCmd.PersistentFlags().DurationVar(
@@ -580,7 +580,7 @@ func main() {
 		"cqrsCommandQueueMaxDepth",
 		0,
 		"shed new commands with 503 (Retry-After: 1) once this many are enqueued and not yet "+
-			"committed (F-5). Only takes effect when batching is active (on by default). "+
+			"committed. Only takes effect when batching is active (on by default). "+
 			"0 disables shedding.",
 	)
 
@@ -709,13 +709,13 @@ func main() {
 		migrations.RegisterExamples()
 	}
 
-	// Item 11: the roles collection (capability-based ops/dashboard access,
+	// the roles collection (capability-based ops/dashboard access,
 	// see adminapi's capOps* constants) is always registered, unlike the
 	// --tutorial examples above -- it's this project's own feature, not
 	// switchable content, so every deployment gets it.
 	roles.RegisterCollection()
 
-	// Item 12: the users collection is a shipped, app-extensible end-user
+	// the users collection is a shipped, app-extensible end-user
 	// auth primitive -- always registered for the same reason roles is:
 	// it's core's own baseline, not example content a consumer opts into.
 	// Unlike roles/service_accounts it carries no special sensitivity or
@@ -809,7 +809,7 @@ func main() {
 		c.idempotency = idem
 		gatewayCfg.Idempotency = idem
 
-		// remote token verification (F-13): the verdict cache is another
+		// remote token verification: the verdict cache is another
 		// small dedicated SQLite file -- and SQLite rather than a map so a
 		// verdict cached before a master outage survives this node
 		// restarting during it (the exact scenario --cqrsVerifyGrace exists
@@ -867,7 +867,7 @@ func main() {
 		c.Engine.Rebuilds = rebuilds
 		c.Engine.Wipe = projections.Wipe(e.App)
 
-		// command batching (item 4): on by default, and never on a
+		// command batching: on by default, and never on a
 		// secondary -- it has no writable store to enqueue into or commit
 		// against (a secondary forwards or refuses; see --cqrsMasterAddr).
 		if commandBatching && c.role != roleSecondary {
@@ -923,7 +923,7 @@ func main() {
 		}
 
 		c.FnRuntime = rt
-		// effect functions' work (R4): recorded on the engine's pass, run off
+		// effect functions' work: recorded on the engine's pass, run off
 		// it by the outbox worker started below; the master only, as every
 		// side effect is (see runsSideEffects)
 		if runsSideEffects(c.role) {
@@ -988,7 +988,7 @@ func main() {
 		// functions. The order is when each runs in a pass, not a guarantee
 		// about what another has seen (see consumers.Engine.Register): no
 		// projection may read another's collections, and no reactor a
-		// projection (R6)
+		// projection
 		for _, spec := range loaded.Projections {
 			c.JSProjs = append(c.JSProjs, spec.Consumer())
 		}
@@ -1023,7 +1023,7 @@ func main() {
 		// rather than quietly doing nothing.
 		rt.SetRegistry(c.Registry)
 		rt.SetWarn(func(msg string, args ...any) { logger.Warn(msg, args...) })
-		// //@dispatches gate (F-2): the registry is complete here — deciders
+		// //@dispatches gate: the registry is complete here — deciders
 		// were registered above — so the live registry IS the right thing to
 		// validate against at boot. A reload cannot say the same; see
 		// adminapi's State.ProspectiveCommands.
@@ -1088,7 +1088,7 @@ func main() {
 		}
 
 		// _authOrigins is PocketBase's own collection, not projection-owned,
-		// but safe to guard alongside them — see writeguard.AuthOrigins (F-6).
+		// but safe to guard alongside them — see writeguard.AuthOrigins.
 		writeguard.Register(e.App, append(cols, writeguard.AuthOrigins)...)
 
 		// effect functions: durable delivery through the consumers engine,
@@ -1151,7 +1151,7 @@ func main() {
 			authverify.Register(e, c.Verifier)
 		}
 		if forwardAuth && gatewayCfg.Forward != nil {
-			// item 5's remainder (F-12): PocketBase's own native auth
+			// auth-collection forwarding: PocketBase's own native auth
 			// traffic (_users/_superusers/etc.) needs the same
 			// forward-to-master treatment as CQRS commands, for a
 			// different reason -- a secondary's copy of those collections
@@ -1196,7 +1196,7 @@ func main() {
 				return mode
 			})
 			if c.role == roleSecondary && liteFSEvents != "" {
-				// R7: wake on each transaction LiteFS applies to the log
+				// wake on each transaction LiteFS applies to the log
 				watch := litefswatch.Config{URL: liteFSEvents, DB: filepath.Base(c.eventsPath), Notify: c.Engine.Nudge,
 					Logger: func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) }}
 				bg.Go(func(ctx context.Context) { litefswatch.Watch(ctx, watch) })

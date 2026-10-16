@@ -304,7 +304,7 @@ func lintScenarios(doc *Document, s Slice, r *Report) {
 
 // lintCommandAuth checks referential integrity and structural completeness
 // for a command's requiredRole/fieldGatedRole/requiredOwnership/scope —
-// platform/command-authorization, schema 2.5.0. requiredRole itself needs no
+// command authorization, schema 2.5.0. requiredRole itself needs no
 // check here (a non-empty RoleList is already guaranteed by
 // RoleList.UnmarshalJSON refusing anything but a string or string array);
 // the other three carry read-model references the source schema cannot

@@ -72,7 +72,7 @@ api.example.com {
 
 dash.example.com {
 	# the ops dashboard is an admin surface: put it behind whatever
-	# your edge uses for staff access, not on the open internet
+	# your edge uses for operator access, not on the open internet
 	reverse_proxy 127.0.0.1:8091
 }
 ```
@@ -106,7 +106,7 @@ Both snippets get automatic HTTPS from Caddy. For nginx the equivalent is
 `proxy_pass` per `location`, plus `proxy_buffering off;` and
 `proxy_read_timeout` raised on `/api/realtime` so SSE streams are not cut.
 
-Best for: ops tooling, staff dashboards, anything that must hold a superuser
+Best for: ops tooling, internal dashboards, anything that must hold a superuser
 token. Also the pattern for an **external read-model consumer**: tail
 `GET /api/cqrs/events?after=<checkpoint>` from your own process, keep your own
 checkpoint, and write into whatever store you like — the same shape as an
@@ -173,8 +173,8 @@ PocketBase's dot-notation lets a filter traverse it directly — no separate
 lookup query, no local `IN (...)` set to build client-side:
 
 ```
-GET /api/collections/time_entries/records
-    ?filter=projectId.managerId = "<pmRecordId>"
+GET /api/collections/tickets/records
+    ?filter=teamId.leadId = "<leadRecordId>"
 ```
 
 This does the same job `ReadModelScope`'s `via`/`matchParamTo`/`selectField`/
@@ -214,8 +214,8 @@ function dateRangeBounds(preset, custom) {
 }
 
 const { from, to } = dateRangeBounds('last7Days');
-const filter = `taskDate >= "${from} 00:00:00.000Z" && taskDate <= "${to} 23:59:59.999Z"`;
-fetch(`/api/collections/time_entries/records?filter=${encodeURIComponent(filter)}`);
+const filter = `openedOn >= "${from} 00:00:00.000Z" && openedOn <= "${to} 23:59:59.999Z"`;
+fetch(`/api/collections/tickets/records?filter=${encodeURIComponent(filter)}`);
 ```
 
 This mirrors `emschema/verify.go`'s `resolveDateRangeFilter`, the Go-side
@@ -225,10 +225,10 @@ projection at import time — same preset math, same `{"kind": "last7Days"}` /
 of `eventmodelschema` 2.4.0 documented, just resolved against the wall
 clock on the query side instead of a scenario fixture.
 
-Both can combine in one request, exactly as a `pmStaffId`-scoped,
-`dateRange`-filtered `time-entries` query would need to:
+Both can combine in one request, exactly as a `leadAgentId`-scoped,
+`dateRange`-filtered `tickets` query would need to:
 
 ```
-GET /api/collections/time_entries/records
-    ?filter=projectId.managerId = "<pmId>" && taskDate >= "..." && taskDate <= "..."
+GET /api/collections/tickets/records
+    ?filter=teamId.leadId = "<leadId>" && openedOn >= "..." && openedOn <= "..."
 ```

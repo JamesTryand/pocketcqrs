@@ -34,8 +34,8 @@ func hostFunctions(t *testing.T, hook string) string {
 	if err := imp.Execute(); err != nil {
 		t.Fatalf("import: %v\n%s", err, out.String())
 	}
-	src := "function SubmitExpenseOutcome0(state, command) { return " + hook + "; }\n"
-	if err := os.WriteFile(filepath.Join(dir, "expense.hand.js"), []byte(src), 0o644); err != nil {
+	src := "function RequestRefundOutcome0(state, command) { return " + hook + "; }\n"
+	if err := os.WriteFile(filepath.Join(dir, "refund.hand.js"), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir

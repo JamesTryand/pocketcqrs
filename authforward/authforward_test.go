@@ -70,7 +70,7 @@ func TestShouldForwardWriteShapedRecordsOnAuthCollection(t *testing.T) {
 func TestShouldForwardReadsOnAuthCollectionRecords(t *testing.T) {
 	// reads forward too: a secondary's auth-collection rows are its own
 	// local, divergent data, so listing/viewing them locally serves the
-	// wrong rows -- the same split-brain F-12 fixed for writes
+	// wrong rows -- the same split-brain fixed for writes
 	app := openTestApp(t)
 	if !ShouldForward(app, http.MethodGet, "/api/collections/_superusers/records") {
 		t.Fatal("expected a GET to _superusers/records to be forwarded")

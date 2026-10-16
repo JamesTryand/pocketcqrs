@@ -8,8 +8,8 @@ import (
 )
 
 // TestExternalModuleCanConsumeExtcaller is the regression test for the
-// "extcaller cannot be consumed as an external Go module dependency" fix
-// (see NEEDS.md): it builds a throwaway module, completely outside this
+// "extcaller cannot be consumed as an external Go module dependency" fix:
+// it builds a throwaway module, completely outside this
 // repo's module graph, that depends on this package via a replace directive
 // and supplies its own Gateway implementation -- without ever importing
 // internal/gatewayclient, which Go's own internal-package rule makes

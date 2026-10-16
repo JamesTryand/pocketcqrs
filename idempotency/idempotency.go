@@ -1,6 +1,6 @@
 // Package idempotency lets the command gateway recognize a retried command
 // and replay its original outcome instead of re-deciding it — the fix for
-// F-4 (a client that retries after an ambiguous timeout can double-apply a
+// The problem (a client that retries after an ambiguous timeout can double-apply a
 // command).
 //
 // Records live in their own small SQLite file, deliberately separate from

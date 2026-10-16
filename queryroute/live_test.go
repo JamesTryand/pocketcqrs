@@ -94,39 +94,39 @@ func viewKeys(t *testing.T, data string, key string) string {
 // access rules), then a new one when the collection changes, after the
 // write commits, and only when the viewer's result changed.
 func TestLiveRouteSendsTheViewersResultAndChanges(t *testing.T) {
-	srv, app, tokens := accessFixture(t, timeEntries)
-	live := openLive(t, srv.URL, tokens["s2"], queryroute.PathPrefix+"timeEntries/live")
+	srv, app, tokens := accessFixture(t, tickets)
+	live := openLive(t, srv.URL, tokens["a2"], queryroute.PathPrefix+"tickets/live")
 	if live.status != http.StatusOK {
 		t.Fatalf("live route: %d", live.status)
 	}
-	if name, data := live.next(); name != "view" || viewKeys(t, data, "entryId") != "e2" {
+	if name, data := live.next(); name != "view" || viewKeys(t, data, "ticketId") != "t2" {
 		t.Fatalf("first push is the viewer's own result: %s %s", name, data)
 	}
 
-	col, _ := app.FindCollectionByNameOrId("timeEntries")
-	save := func(entry, staff string) {
+	col, _ := app.FindCollectionByNameOrId("tickets")
+	save := func(ticket, agent string) {
 		rec := core.NewRecord(col)
-		rec.Set("entryId", entry)
-		rec.Set("staffId", staff)
-		rec.Set("projectId", "p2")
+		rec.Set("ticketId", ticket)
+		rec.Set("agentId", agent)
+		rec.Set("teamId", "g2")
 		if err := app.Save(rec); err != nil {
 			t.Fatal(err)
 		}
 	}
-	save("e5", "s3") // someone else's: s2's result is unchanged, nothing is pushed
-	save("e6", "s2") // s2's own
-	if name, data := live.next(); name != "view" || viewKeys(t, data, "entryId") != "e2,e6" {
+	save("t5", "a3") // someone else's: a2's result is unchanged, nothing is pushed
+	save("t6", "a2") // a2's own
+	if name, data := live.next(); name != "view" || viewKeys(t, data, "ticketId") != "t2,t6" {
 		t.Fatalf("the next push is the changed result, not a repeat: %s %s", name, data)
 	}
 }
 
 // A caller the read route refuses is refused here too, before any stream.
 func TestLiveRouteRefusesWhoTheReadRouteRefuses(t *testing.T) {
-	srv, _, tokens := accessFixture(t, timeEntries)
-	if live := openLive(t, srv.URL, tokens["nobody"], queryroute.PathPrefix+"timeEntries/live"); live.status != http.StatusForbidden {
+	srv, _, tokens := accessFixture(t, tickets)
+	if live := openLive(t, srv.URL, tokens["nobody"], queryroute.PathPrefix+"tickets/live"); live.status != http.StatusForbidden {
 		t.Fatalf("want 403, got %d", live.status)
 	}
-	if live := openLive(t, srv.URL, "", queryroute.PathPrefix+"timeEntries/live"); live.status == http.StatusOK {
+	if live := openLive(t, srv.URL, "", queryroute.PathPrefix+"tickets/live"); live.status == http.StatusOK {
 		t.Fatalf("an anonymous caller must not get a stream")
 	}
 }
@@ -152,12 +152,12 @@ func TestLiveRoutePushesTheRedactedResultOnErasure(t *testing.T) {
 
 // The stream ends when the viewer's token expires, with an `expired` event.
 func TestLiveRouteEndsWhenTheTokenExpires(t *testing.T) {
-	srv, app, _ := accessFixture(t, timeEntries)
+	srv, app, _ := accessFixture(t, tickets)
 	people, _ := app.FindCollectionByNameOrId("people")
 	rec := core.NewRecord(people)
 	rec.SetEmail("brief@people.test")
 	rec.SetPassword("1234567890")
-	rec.Set("role", "manager")
+	rec.Set("role", "supervisor")
 	if err := app.Save(rec); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestLiveRouteEndsWhenTheTokenExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	live := openLive(t, srv.URL, token, queryroute.PathPrefix+"timeEntries/live")
+	live := openLive(t, srv.URL, token, queryroute.PathPrefix+"tickets/live")
 	if name, _ := live.next(); name != "view" {
 		t.Fatalf("first event: %s", name)
 	}

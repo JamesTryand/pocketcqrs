@@ -29,7 +29,7 @@ func (f *flaky) DestroyKey(ctx context.Context, subject string) error {
 }
 
 // With an outbox the destroyer only records the erasure on the engine's
-// pass (R4); the worker destroys the key, a failure due again later (a
+// pass; the worker destroys the key, a failure due again later (a
 // due time, never a pause) and never given up. An evictor registered while
 // a destruction is still pending starts before it, so the erasure reaches
 // the cache though the destroyer's checkpoint is past it.

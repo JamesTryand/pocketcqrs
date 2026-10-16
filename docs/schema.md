@@ -68,8 +68,8 @@ naming each one, if anything is left over:
 
 ```
 emschema: refusals.json declares 2 thing(s) pocketcqrs cannot apply yet, so nothing was generated (dropping them would generate code without them):
-  /commands/claim-entry-for-invoice/refuseWhen: refuseWhen, rules that refuse a command (schema 3.10.0; numeric operators 3.11.0)
-  /commands/update-entry/refuseWhen: refuseWhen, rules that refuse a command (schema 3.10.0; numeric operators 3.11.0)
+  /commands/hold-booking-for-event-plan/refuseWhen: refuseWhen, rules that refuse a command (schema 3.10.0; numeric operators 3.11.0)
+  /commands/change-booking/refuseWhen: refuseWhen, rules that refuse a command (schema 3.10.0; numeric operators 3.11.0)
 ```
 
 The check is an allow-list, so a key added upstream after the vendored schema
@@ -100,7 +100,7 @@ The caller's role and subject id are fields of their auth record:
 record's own id), matching the server's `--cqrsRoleField`/`--cqrsSubjectField`,
 which also stop a user setting either on themselves. An empty subject id
 matches nothing. `selfAccess.param` only ever narrows, so on this target it is
-the client's filter (`staffId = @request.auth.staffId`), named in a comment.
+the client's filter (`memberId = @request.auth.memberId`), named in a comment.
 `selfAccess.via` is refused. On the Go target the same rule is applied by the
 generated read route (`queryroute.Spec`'s `RequiredRole`, `SelfSubject`,
 `SelfParam` and `Grants`, with the host's `ResolveOwnRole` and `SubjectOf`
@@ -165,7 +165,7 @@ up. A JS decider throws an `Error` named `Forbidden`; a Go decider returns
 
 A read model's `rowKeyField` (3.14.0) keys each row by that field of the
 event, in place of the event's stream, so one stream's events can update many
-rows (a pay run recording a payment per person). Every event the read model is
+rows (a grant round closing with an award per recipient). Every event the read model is
 built from or removed by must carry it, or the import is refused; at run time
 an event without it stops the projection rather than write a row keyed by
 nothing.
@@ -182,11 +182,11 @@ import.
 ### A row per group of a list
 
 A read model's `rowsPerListItem` (3.16.0) makes a row per group of a stream's
-list items in place of one row per stream: an invoice's lines become a part
-per project, keyed `<stream>|<group>`. An event carrying the list replaces it;
+list items in place of one row per stream: a delivery's parcels become a load
+per depot, keyed `<stream>|<group>`. An event carrying the list replaces it;
 the read model's other fields merge from the stream's events onto every row
-(so a customer named only when the invoice was drafted is still on the rows
-its issue rebuilt). A group that leaves the list loses its row, an item with
+(so a vehicle named only when the delivery was planned is still on the rows
+its dispatch rebuilt). A group that leaves the list loses its row, an item with
 no group is in no row, and a removing event removes all of the stream's rows.
 A `sumOfItems` field is the sum of a subfield over the row's items, and null
 until every one of them carries it. Its column is json, whatever number type
@@ -393,10 +393,13 @@ lower-camel convention (`Order` → `order`).
 
 ## Schema version
 
-This project reads **schema 3.17.0** documents, and an export declares it.
-Import reads everything up to 3.1.1 and refuses the rest by name (above);
-every version since 3.1.1 is additive, so an export, which uses only what
-import reads, is a valid 3.17.0 document.
+This project reads **schema 4.0.0** documents, and an export declares it.
+Import refuses by name anything it cannot apply (above). 4.0.0 is breaking
+in one place: a command `scope`'s `memberOfVia` must name its `actorField`,
+the field of the membership read model compared with the command's actor;
+lint refuses a scope without it. Every other change since 3.1.1 is
+additive, so an export, which uses only what import reads, is a valid 4.0.0
+document.
 
 **Import reports a document's declared version but does not branch on it**,
 which is deliberate rather than left over: the 2.0.0 bump fixed the signal

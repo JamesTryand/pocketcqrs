@@ -1,8 +1,6 @@
 // Package searchindex is search as a special kind of read model: the
 // indexes behind readModel match filters (schema 3.1.0), the port of
-// dotnetcqrs's search stores and index consumers. The pinned rules
-// (notebook platform/eventmodeling-codegen findings.md, "D5 decisions" and
-// "D6 decisions"):
+// dotnetcqrs's search stores and index consumers. The pinned rules:
 //
 //   - Every index lives in its own SQLite file (search.db), with
 //     secure_delete on, excluded from backups and rebuilt from the log. Its

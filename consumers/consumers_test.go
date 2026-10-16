@@ -195,7 +195,7 @@ func (f *failingConsumer) Name() string                                     { re
 func (f *failingConsumer) Apply(ctx context.Context, ev events.Event) error { return f.fail }
 
 // TestRunOnceIsolatesFailingConsumerFromLaterOnes is a regression test for
-// F-17: a consumer registered before a failing one must not be starved by
+// a consumer registered before a failing one must not be starved by
 // it — RunOnce's own doc comment already promised this isolation, but the
 // implementation used to `return err` on the first failure, aborting every
 // consumer registered after it in the same pass.
@@ -352,7 +352,7 @@ func (a *appender) Apply(ctx context.Context, ev events.Event) error {
 	return nil
 }
 
-// R6: registration order is when a consumer runs in a pass, not a guarantee
+// registration order is when a consumer runs in a pass, not a guarantee
 // about what it has seen. Each consumer reads to the head as it is when it
 // runs, so a consumer registered later can be AHEAD of one registered
 // earlier. Nothing may decide from another consumer's output on the strength

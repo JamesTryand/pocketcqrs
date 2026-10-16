@@ -146,8 +146,8 @@ and declare `//@handles`.
 
 A decider whose outcome is chosen by hand-written code (schema 3.12.0
 `when: "hand"`, 3.13.0 `repeated`) names its **hand file**, a companion beside
-it (`//@hand expense.hand.js`), and the **hooks** that file must define
-(`//@hooks SubmitExpenseOutcome0`). The two files are compiled into one program,
+it (`//@hand refund.hand.js`), and the **hooks** that file must define
+(`//@hooks RequestRefundOutcome0`). The two files are compiled into one program,
 so a hook runs in the decider's own VM with its bindings removed: it sees the
 folded state and the command, and nothing else (no `Date`, no I/O, no read
 models). The hand file has no `//@trigger` of its own and is never loaded on its

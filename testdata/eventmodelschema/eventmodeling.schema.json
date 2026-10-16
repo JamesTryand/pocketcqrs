@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "3.17.0"
+      "default": "4.0.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -462,11 +462,17 @@
           "additionalProperties": false
         },
         "memberOfVia": {
+          "description": "4.0.0: the membership read model. The command is allowed when it has a row whose matchField equals the value resolveVia found and whose actorField equals the command's actor.",
           "type": "object",
-          "required": ["readModelId", "matchField"],
+          "required": ["readModelId", "matchField", "actorField"],
           "properties": {
             "readModelId": { "$ref": "#/$defs/id" },
-            "matchField": { "type": "string", "minLength": 1 }
+            "matchField": { "type": "string", "minLength": 1 },
+            "actorField": {
+              "description": "4.0.0: the field of the membership read model that holds a member's actor id, compared with the command's actor.",
+              "type": "string",
+              "minLength": 1
+            }
           },
           "additionalProperties": false
         }
