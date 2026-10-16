@@ -343,6 +343,9 @@ func lintCommandAuth(doc *Document, id string, c Command, r *Report) {
 		}
 		if sc.MemberOfVia.ReadModelID == "" || sc.MemberOfVia.MatchField == "" {
 			r.errorf("command %q: scope.memberOfVia is missing readModelId/matchField", id)
+		} else if sc.MemberOfVia.ActorField == "" {
+			r.errorf("command %q: scope.memberOfVia is missing actorField, the field of %q holding a member's "+
+				"actor id (schema 4.0.0); nothing assumes one", id, sc.MemberOfVia.ReadModelID)
 		} else if _, ok := doc.ReadModels[sc.MemberOfVia.ReadModelID]; !ok {
 			r.errorf("command %q: scope.memberOfVia references read model %q, which does not exist",
 				id, sc.MemberOfVia.ReadModelID)

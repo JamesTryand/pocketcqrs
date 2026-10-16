@@ -92,6 +92,9 @@ type ScopePolicy struct {
 	ResolveSelectField string
 	MemberOfCollection string
 	MemberOfMatchField string
+	// MemberOfActorField is the field of MemberOfCollection holding a
+	// member's actor id: the document names it (schema 4.0.0).
+	MemberOfActorField string
 	BypassRoles        []string
 }
 
@@ -162,7 +165,8 @@ func BuildPolicies(doc *emschema.Document) (map[Key]Policy, error) {
 				ResolveCollection: resolveCol, ResolveKeyField: sc.ResolveVia.KeyField,
 				ResolveSelectField: sc.ResolveVia.SelectField,
 				MemberOfCollection: memberCol, MemberOfMatchField: sc.MemberOfVia.MatchField,
-				BypassRoles: append([]string(nil), sc.BypassRoles...),
+				MemberOfActorField: sc.MemberOfVia.ActorField,
+				BypassRoles:        append([]string(nil), sc.BypassRoles...),
 			}
 		}
 		out[key] = policy
@@ -182,19 +186,19 @@ func resolveCollection(doc *emschema.Document, cmdID, field, readModelID string)
 
 // Authorizer evaluates a built policy table against a real request. Both
 // resolver funcs are pluggable, not resolved from any fixed PocketBase
-// field/claim — mirroring dotnetcqrs's own resolveOwnRole/resolveOwnStaffId
+// field/claim — mirroring dotnetcqrs's own resolveOwnRole/resolveOwnSubjectId
 // delegates and the same "auth is deliberately not built into this
 // library" split this project's own authverify package already holds for
-// authentication itself: a role or "own staff id" is inherently
-// project-specific (this package has no domain concept of "staff" at all),
-// so the deployment supplies both at its own wiring site. Either may be
+// authentication itself: which claim carries a role or the caller's own
+// subject id is the host's to say, so the deployment supplies both at its
+// own wiring site. Either may be
 // nil, in which case the corresponding resolved value is "" — the same
 // "no actor" posture an anonymous caller already produces if
 // gateway.Config.AllowAnonymous permits the request through at all.
 type Authorizer struct {
-	Policies          map[Key]Policy
-	ResolveOwnRole    func(auth *core.Record) string
-	ResolveOwnStaffID func(auth *core.Record) string
+	Policies            map[Key]Policy
+	ResolveOwnRole      func(auth *core.Record) string
+	ResolveOwnSubjectID func(auth *core.Record) string
 }
 
 // Authorize evaluates the declared policy for (aggregate, command), if any.
@@ -238,9 +242,9 @@ func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payl
 		}
 	}
 
-	ownStaffID := ""
-	if a.ResolveOwnStaffID != nil {
-		ownStaffID = a.ResolveOwnStaffID(auth)
+	ownSubjectID := ""
+	if a.ResolveOwnSubjectID != nil {
+		ownSubjectID = a.ResolveOwnSubjectID(auth)
 	}
 
 	if own := policy.Ownership; own != nil && !containsFold(own.BypassRoles, ownRole) {
@@ -251,7 +255,7 @@ func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payl
 		if err != nil {
 			return false, fmt.Errorf("authorize: %s/%s: resolving ownership: %w", aggregate, command, err)
 		}
-		if owner := rec.GetString(own.OwnerField); owner == "" || owner != ownStaffID {
+		if owner := rec.GetString(own.OwnerField); owner == "" || owner != ownSubjectID {
 			return false, nil
 		}
 	}
@@ -266,8 +270,8 @@ func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payl
 		}
 		selected := resolved.GetString(sc.ResolveSelectField)
 		_, err = app.FindFirstRecordByFilter(sc.MemberOfCollection,
-			sc.MemberOfMatchField+" = {:val} && staffId = {:staff}",
-			dbx.Params{"val": selected, "staff": ownStaffID})
+			sc.MemberOfMatchField+" = {:val} && "+sc.MemberOfActorField+" = {:actor}",
+			dbx.Params{"val": selected, "actor": ownSubjectID})
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}

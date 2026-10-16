@@ -9,36 +9,34 @@ import (
 	"github.com/jamestryand/pocketcqrs/emschema"
 )
 
-// testDoc mirrors project/timesheets' own real shapes closely enough to be
-// a meaningful fixture: a Manager-only command, an onboard-staff-shaped
-// fieldGatedRole, an ownership-only command (no bypass, the real
-// update-time-entry shape), and a scope command (Manager bypass, the real
-// flag-time-entry shape) — plus one command with no declaration at all, to
-// prove BuildPolicies leaves it out of the table entirely.
+// testDoc is one command of each kind: a supervisor-only command, a
+// field-gated invitation, an ownership-only command (no bypass), and a
+// scope command (supervisor bypass) — plus one command with no declaration
+// at all, to prove BuildPolicies leaves it out of the table entirely.
 func testDoc() *emschema.Document {
 	return &emschema.Document{
 		Commands: map[string]emschema.Command{
-			"set-rate-override": {Name: "Set Rate Override", Aggregate: "rate_override",
-				RequiredRole: emschema.RoleList{"manager"}},
-			"onboard-staff": {Name: "Onboard Staff", Aggregate: "staff",
+			"set-price": {Name: "Set Price", Aggregate: "price",
+				RequiredRole: emschema.RoleList{"supervisor"}},
+			"invite-user": {Name: "Invite User", Aggregate: "user",
 				FieldGatedRole: &emschema.CommandFieldGatedRole{
-					Field: "role", Value: "manager", RequiredRole: emschema.RoleList{"administrator"},
+					Field: "role", Value: "supervisor", RequiredRole: emschema.RoleList{"admin"},
 				}},
-			"update-time-entry": {Name: "Update Time Entry", Aggregate: "time_entry",
+			"update-order": {Name: "Update Order", Aggregate: "order",
 				RequiredOwnership: &emschema.CommandOwnership{
-					Via: &emschema.CommandOwnershipVia{ReadModelID: "time-entries", KeyField: "entryId", OwnerField: "staffId"},
+					Via: &emschema.CommandOwnershipVia{ReadModelID: "orders", KeyField: "orderId", OwnerField: "ownerId"},
 				}},
-			"flag-time-entry": {Name: "Flag Time Entry", Aggregate: "time_entry",
+			"flag-order": {Name: "Flag Order", Aggregate: "order",
 				Scope: &emschema.CommandScope{
-					BypassRoles: []string{"manager"},
-					ResolveVia:  emschema.CommandScopeResolveVia{ReadModelID: "time-entries", KeyField: "entryId", SelectField: "projectId"},
-					MemberOfVia: emschema.CommandScopeMemberOfVia{ReadModelID: "project-managers", MatchField: "projectId"},
+					BypassRoles: []string{"supervisor"},
+					ResolveVia:  emschema.CommandScopeResolveVia{ReadModelID: "orders", KeyField: "orderId", SelectField: "regionId"},
+					MemberOfVia: emschema.CommandScopeMemberOfVia{ReadModelID: "region-members", MatchField: "regionId", ActorField: "memberId"},
 				}},
-			"log-time-entry": {Name: "Log Time Entry", Aggregate: "time_entry"}, // no declaration at all
+			"place-order": {Name: "Place Order", Aggregate: "order"}, // no declaration at all
 		},
 		ReadModels: map[string]emschema.ReadModel{
-			"time-entries":     {Name: "Time Entries"},
-			"project-managers": {Name: "Project Managers"},
+			"orders":         {Name: "Orders"},
+			"region-members": {Name: "Region Members"},
 		},
 	}
 }
@@ -53,40 +51,41 @@ func TestBuildPolicies(t *testing.T) {
 		t.Fatalf("expected 4 policies (the undeclared command excluded), got %d: %v", len(policies), policies)
 	}
 
-	rate := policies[Key{"rate_override", "SetRateOverride"}]
-	if len(rate.RequiredRole) != 1 || rate.RequiredRole[0] != "manager" {
-		t.Errorf("SetRateOverride: expected requiredRole [manager], got %+v", rate)
+	price := policies[Key{"price", "SetPrice"}]
+	if len(price.RequiredRole) != 1 || price.RequiredRole[0] != "supervisor" {
+		t.Errorf("SetPrice: expected requiredRole [supervisor], got %+v", price)
 	}
 
-	onboard := policies[Key{"staff", "OnboardStaff"}]
-	if onboard.FieldGatedRole == nil || onboard.FieldGatedRole.Field != "role" ||
-		onboard.FieldGatedRole.Value != "manager" || len(onboard.FieldGatedRole.RequiredRole) != 1 ||
-		onboard.FieldGatedRole.RequiredRole[0] != "administrator" {
-		t.Errorf("OnboardStaff: unexpected fieldGatedRole: %+v", onboard.FieldGatedRole)
+	invite := policies[Key{"user", "InviteUser"}]
+	if invite.FieldGatedRole == nil || invite.FieldGatedRole.Field != "role" ||
+		invite.FieldGatedRole.Value != "supervisor" || len(invite.FieldGatedRole.RequiredRole) != 1 ||
+		invite.FieldGatedRole.RequiredRole[0] != "admin" {
+		t.Errorf("InviteUser: unexpected fieldGatedRole: %+v", invite.FieldGatedRole)
 	}
 
-	update := policies[Key{"time_entry", "UpdateTimeEntry"}]
-	if update.Ownership == nil || update.Ownership.Collection != "timeEntries" ||
-		update.Ownership.KeyField != "entryId" || update.Ownership.OwnerField != "staffId" ||
+	update := policies[Key{"order", "UpdateOrder"}]
+	if update.Ownership == nil || update.Ownership.Collection != "orders" ||
+		update.Ownership.KeyField != "orderId" || update.Ownership.OwnerField != "ownerId" ||
 		len(update.Ownership.BypassRoles) != 0 {
-		t.Errorf("UpdateTimeEntry: unexpected ownership: %+v", update.Ownership)
+		t.Errorf("UpdateOrder: unexpected ownership: %+v", update.Ownership)
 	}
 
-	flag := policies[Key{"time_entry", "FlagTimeEntry"}]
-	if flag.Scope == nil || flag.Scope.ResolveCollection != "timeEntries" || flag.Scope.ResolveKeyField != "entryId" ||
-		flag.Scope.ResolveSelectField != "projectId" || flag.Scope.MemberOfCollection != "projectManagers" ||
-		flag.Scope.MemberOfMatchField != "projectId" || len(flag.Scope.BypassRoles) != 1 || flag.Scope.BypassRoles[0] != "manager" {
-		t.Errorf("FlagTimeEntry: unexpected scope: %+v", flag.Scope)
+	flag := policies[Key{"order", "FlagOrder"}]
+	if flag.Scope == nil || flag.Scope.ResolveCollection != "orders" || flag.Scope.ResolveKeyField != "orderId" ||
+		flag.Scope.ResolveSelectField != "regionId" || flag.Scope.MemberOfCollection != "regionMembers" ||
+		flag.Scope.MemberOfMatchField != "regionId" || flag.Scope.MemberOfActorField != "memberId" ||
+		len(flag.Scope.BypassRoles) != 1 || flag.Scope.BypassRoles[0] != "supervisor" {
+		t.Errorf("FlagOrder: unexpected scope: %+v", flag.Scope)
 	}
 
-	if _, ok := policies[Key{"time_entry", "LogTimeEntry"}]; ok {
-		t.Error("LogTimeEntry declares nothing and must not appear in the table")
+	if _, ok := policies[Key{"order", "PlaceOrder"}]; ok {
+		t.Error("PlaceOrder declares nothing and must not appear in the table")
 	}
 }
 
 func TestBuildPoliciesRefusesAMissingAggregateTag(t *testing.T) {
 	doc := &emschema.Document{Commands: map[string]emschema.Command{
-		"do-thing": {Name: "Do Thing", RequiredRole: emschema.RoleList{"manager"}}, // no Aggregate
+		"do-thing": {Name: "Do Thing", RequiredRole: emschema.RoleList{"supervisor"}}, // no Aggregate
 	}}
 	if _, err := BuildPolicies(doc); err == nil {
 		t.Fatal("a command declaring an auth requirement with no aggregate tag must be refused")
@@ -154,22 +153,22 @@ func TestAuthorize_NoPolicy_Allows(t *testing.T) {
 
 func TestAuthorize_RequiredRole(t *testing.T) {
 	a := &Authorizer{
-		Policies:       map[Key]Policy{{"rate_override", "SetRateOverride"}: {RequiredRole: []string{"manager"}}},
-		ResolveOwnRole: func(*core.Record) string { return "manager" },
+		Policies:       map[Key]Policy{{"price", "SetPrice"}: {RequiredRole: []string{"supervisor"}}},
+		ResolveOwnRole: func(*core.Record) string { return "supervisor" },
 	}
-	ok, err := a.Authorize(newTestApp(t), "rate_override", "SetRateOverride", "r1", nil, nil)
+	ok, err := a.Authorize(newTestApp(t), "price", "SetPrice", "r1", nil, nil)
 	if err != nil || !ok {
-		t.Fatalf("manager should be authorized, got ok=%v err=%v", ok, err)
+		t.Fatalf("a supervisor should be authorized, got ok=%v err=%v", ok, err)
 	}
 
-	a.ResolveOwnRole = func(*core.Record) string { return "staff" }
-	ok, err = a.Authorize(newTestApp(t), "rate_override", "SetRateOverride", "r1", nil, nil)
+	a.ResolveOwnRole = func(*core.Record) string { return "member" }
+	ok, err = a.Authorize(newTestApp(t), "price", "SetPrice", "r1", nil, nil)
 	if err != nil || ok {
-		t.Fatalf("staff should be refused, got ok=%v err=%v", ok, err)
+		t.Fatalf("a member should be refused, got ok=%v err=%v", ok, err)
 	}
 
-	a.ResolveOwnRole = func(*core.Record) string { return "MANAGER" }
-	ok, err = a.Authorize(newTestApp(t), "rate_override", "SetRateOverride", "r1", nil, nil)
+	a.ResolveOwnRole = func(*core.Record) string { return "SUPERVISOR" }
+	ok, err = a.Authorize(newTestApp(t), "price", "SetPrice", "r1", nil, nil)
 	if err != nil || !ok {
 		t.Fatalf("the role match must be case-insensitive, got ok=%v err=%v", ok, err)
 	}
@@ -177,62 +176,62 @@ func TestAuthorize_RequiredRole(t *testing.T) {
 
 func TestAuthorize_FieldGatedRole(t *testing.T) {
 	a := &Authorizer{
-		Policies: map[Key]Policy{{"staff", "OnboardStaff"}: {FieldGatedRole: &FieldGatedRolePolicy{
-			Field: "role", Value: "manager", RequiredRole: []string{"administrator"},
+		Policies: map[Key]Policy{{"user", "InviteUser"}: {FieldGatedRole: &FieldGatedRolePolicy{
+			Field: "role", Value: "supervisor", RequiredRole: []string{"admin"},
 		}}},
 	}
 	app := newTestApp(t)
 
-	// role=manager in the payload, actor is administrator -> allowed
-	a.ResolveOwnRole = func(*core.Record) string { return "administrator" }
-	ok, err := a.Authorize(app, "staff", "OnboardStaff", "s1", []byte(`{"role":"manager"}`), nil)
+	// role=supervisor in the payload, actor is an admin -> allowed
+	a.ResolveOwnRole = func(*core.Record) string { return "admin" }
+	ok, err := a.Authorize(app, "user", "InviteUser", "u1", []byte(`{"role":"supervisor"}`), nil)
 	if err != nil || !ok {
-		t.Fatalf("an administrator onboarding a manager should be allowed, got ok=%v err=%v", ok, err)
+		t.Fatalf("an admin inviting a supervisor should be allowed, got ok=%v err=%v", ok, err)
 	}
 
-	// role=manager in the payload, actor is a plain manager (not administrator) -> refused
-	a.ResolveOwnRole = func(*core.Record) string { return "manager" }
-	ok, err = a.Authorize(app, "staff", "OnboardStaff", "s1", []byte(`{"role":"manager"}`), nil)
+	// role=supervisor in the payload, actor is a supervisor (not an admin) -> refused
+	a.ResolveOwnRole = func(*core.Record) string { return "supervisor" }
+	ok, err = a.Authorize(app, "user", "InviteUser", "u1", []byte(`{"role":"supervisor"}`), nil)
 	if err != nil || ok {
-		t.Fatalf("a Manager (not Administrator) onboarding a Manager should be refused, got ok=%v err=%v", ok, err)
+		t.Fatalf("a supervisor (not an admin) inviting a supervisor should be refused, got ok=%v err=%v", ok, err)
 	}
 
-	// role=staff in the payload -> condition doesn't apply, anyone may
+	// role=member in the payload -> condition doesn't apply, anyone may
 	a.ResolveOwnRole = func(*core.Record) string { return "" }
-	ok, err = a.Authorize(app, "staff", "OnboardStaff", "s1", []byte(`{"role":"staff"}`), nil)
+	ok, err = a.Authorize(app, "user", "InviteUser", "u1", []byte(`{"role":"member"}`), nil)
 	if err != nil || !ok {
-		t.Fatalf("onboarding a plain staff member should need nobody in particular, got ok=%v err=%v", ok, err)
+		t.Fatalf("inviting a plain member should need nobody in particular, got ok=%v err=%v", ok, err)
 	}
 }
 
 func TestAuthorize_Ownership(t *testing.T) {
 	app := newTestApp(t)
-	col := mustCreateCollection(t, app, "timeEntries", "entryId", "staffId")
-	mustInsertRow(t, app, col, map[string]string{"entryId": "e1", "staffId": "staff1"})
+	col := mustCreateCollection(t, app, "orders", "orderId", "ownerId")
+	mustInsertRow(t, app, col, map[string]string{"orderId": "o1", "ownerId": "u1"})
 
 	a := &Authorizer{
-		Policies: map[Key]Policy{{"time_entry", "UpdateTimeEntry"}: {Ownership: &OwnershipPolicy{
-			Collection: "timeEntries", KeyField: "entryId", OwnerField: "staffId",
+		Policies: map[Key]Policy{{"order", "UpdateOrder"}: {Ownership: &OwnershipPolicy{
+			Collection: "orders", KeyField: "orderId", OwnerField: "ownerId",
 		}}},
-		ResolveOwnRole:    func(*core.Record) string { return "staff" },
-		ResolveOwnStaffID: func(*core.Record) string { return "staff1" },
+		ResolveOwnRole:      func(*core.Record) string { return "member" },
+		ResolveOwnSubjectID: func(*core.Record) string { return "u1" },
 	}
 
-	// the owner may update their own entry
-	ok, err := a.Authorize(app, "time_entry", "UpdateTimeEntry", "e1", nil, nil)
+	// the owner may update their own order
+	ok, err := a.Authorize(app, "order", "UpdateOrder", "o1", nil, nil)
 	if err != nil || !ok {
-		t.Fatalf("the owning staff member should be authorized, got ok=%v err=%v", ok, err)
+		t.Fatalf("the owner should be authorized, got ok=%v err=%v", ok, err)
 	}
 
-	// a different staff member may not
-	a.ResolveOwnStaffID = func(*core.Record) string { return "staff2" }
-	ok, err = a.Authorize(app, "time_entry", "UpdateTimeEntry", "e1", nil, nil)
+	// someone else may not
+	a.ResolveOwnSubjectID = func(*core.Record) string { return "u2" }
+	ok, err = a.Authorize(app, "order", "UpdateOrder", "o1", nil, nil)
 	if err != nil || ok {
-		t.Fatalf("a non-owning staff member should be refused, got ok=%v err=%v", ok, err)
+		t.Fatalf("someone other than the owner should be refused, got ok=%v err=%v", ok, err)
 	}
 
-	// a nonexistent entry is refused, not an error
-	ok, err = a.Authorize(app, "time_entry", "UpdateTimeEntry", "does-not-exist", nil, nil)
+	// a nonexistent order is refused, not an error
+	ok, err = a.Authorize(app, "order", "UpdateOrder", "does-not-exist", nil, nil)
 	if err != nil || ok {
 		t.Fatalf("a nonexistent target should be refused cleanly, got ok=%v err=%v", ok, err)
 	}
@@ -240,17 +239,17 @@ func TestAuthorize_Ownership(t *testing.T) {
 
 func TestAuthorize_OwnershipBypass(t *testing.T) {
 	app := newTestApp(t)
-	col := mustCreateCollection(t, app, "timeEntries", "entryId", "staffId")
-	mustInsertRow(t, app, col, map[string]string{"entryId": "e1", "staffId": "staff1"})
+	col := mustCreateCollection(t, app, "orders", "orderId", "ownerId")
+	mustInsertRow(t, app, col, map[string]string{"orderId": "o1", "ownerId": "u1"})
 
 	a := &Authorizer{
-		Policies: map[Key]Policy{{"time_entry", "UpdateTimeEntry"}: {Ownership: &OwnershipPolicy{
-			Collection: "timeEntries", KeyField: "entryId", OwnerField: "staffId", BypassRoles: []string{"manager"},
+		Policies: map[Key]Policy{{"order", "UpdateOrder"}: {Ownership: &OwnershipPolicy{
+			Collection: "orders", KeyField: "orderId", OwnerField: "ownerId", BypassRoles: []string{"supervisor"},
 		}}},
-		ResolveOwnRole:    func(*core.Record) string { return "manager" },
-		ResolveOwnStaffID: func(*core.Record) string { return "someone-else-entirely" },
+		ResolveOwnRole:      func(*core.Record) string { return "supervisor" },
+		ResolveOwnSubjectID: func(*core.Record) string { return "someone-else-entirely" },
 	}
-	ok, err := a.Authorize(app, "time_entry", "UpdateTimeEntry", "e1", nil, nil)
+	ok, err := a.Authorize(app, "order", "UpdateOrder", "o1", nil, nil)
 	if err != nil || !ok {
 		t.Fatalf("a bypass role should short-circuit the ownership check entirely, got ok=%v err=%v", ok, err)
 	}
@@ -258,52 +257,53 @@ func TestAuthorize_OwnershipBypass(t *testing.T) {
 
 func TestAuthorize_Scope(t *testing.T) {
 	app := newTestApp(t)
-	entries := mustCreateCollection(t, app, "timeEntries", "entryId", "projectId")
-	mustInsertRow(t, app, entries, map[string]string{"entryId": "e1", "projectId": "p1"})
-	pms := mustCreateCollection(t, app, "projectManagers", "projectId", "staffId")
-	mustInsertRow(t, app, pms, map[string]string{"projectId": "p1", "staffId": "pm1"})
+	orders := mustCreateCollection(t, app, "orders", "orderId", "regionId")
+	mustInsertRow(t, app, orders, map[string]string{"orderId": "o1", "regionId": "north"})
+	// addedBy holds an actor id too, so a check comparing the wrong field
+	// would let the person who added a member act as one
+	members := mustCreateCollection(t, app, "regionMembers", "regionId", "memberId", "addedBy")
+	mustInsertRow(t, app, members, map[string]string{"regionId": "north", "memberId": "m1", "addedBy": "admin1"})
 
 	a := &Authorizer{
-		Policies: map[Key]Policy{{"time_entry", "FlagTimeEntry"}: {Scope: &ScopePolicy{
-			ResolveCollection: "timeEntries", ResolveKeyField: "entryId", ResolveSelectField: "projectId",
-			MemberOfCollection: "projectManagers", MemberOfMatchField: "projectId",
-			BypassRoles: []string{"manager"},
+		Policies: map[Key]Policy{{"order", "FlagOrder"}: {Scope: &ScopePolicy{
+			ResolveCollection: "orders", ResolveKeyField: "orderId", ResolveSelectField: "regionId",
+			MemberOfCollection: "regionMembers", MemberOfMatchField: "regionId", MemberOfActorField: "memberId",
+			BypassRoles: []string{"supervisor"},
 		}}},
 	}
 
-	// Manager bypasses unconditionally
-	a.ResolveOwnRole = func(*core.Record) string { return "manager" }
-	a.ResolveOwnStaffID = func(*core.Record) string { return "irrelevant" }
-	ok, err := a.Authorize(app, "time_entry", "FlagTimeEntry", "e1", nil, nil)
+	// a supervisor bypasses unconditionally
+	a.ResolveOwnRole = func(*core.Record) string { return "supervisor" }
+	a.ResolveOwnSubjectID = func(*core.Record) string { return "irrelevant" }
+	ok, err := a.Authorize(app, "order", "FlagOrder", "o1", nil, nil)
 	if err != nil || !ok {
-		t.Fatalf("Manager should bypass the scope check, got ok=%v err=%v", ok, err)
+		t.Fatalf("a supervisor should bypass the scope check, got ok=%v err=%v", ok, err)
 	}
 
-	// the entry's own project's PM may flag it
-	a.ResolveOwnRole = func(*core.Record) string { return "staff" }
-	a.ResolveOwnStaffID = func(*core.Record) string { return "pm1" }
-	ok, err = a.Authorize(app, "time_entry", "FlagTimeEntry", "e1", nil, nil)
+	// a member of the order's own region may flag it
+	a.ResolveOwnRole = func(*core.Record) string { return "member" }
+	a.ResolveOwnSubjectID = func(*core.Record) string { return "m1" }
+	ok, err = a.Authorize(app, "order", "FlagOrder", "o1", nil, nil)
 	if err != nil || !ok {
-		t.Fatalf("the entry's own project's PM should be authorized, got ok=%v err=%v", ok, err)
+		t.Fatalf("a member of the order's region should be authorized, got ok=%v err=%v", ok, err)
 	}
 
-	// a PM of a DIFFERENT project may not
-	a.ResolveOwnStaffID = func(*core.Record) string { return "pm2" }
-	ok, err = a.Authorize(app, "time_entry", "FlagTimeEntry", "e1", nil, nil)
+	// the member is compared through the declared actorField, nothing else
+	a.ResolveOwnSubjectID = func(*core.Record) string { return "admin1" }
+	ok, err = a.Authorize(app, "order", "FlagOrder", "o1", nil, nil)
 	if err != nil || ok {
-		t.Fatalf("a PM of a different project should be refused, got ok=%v err=%v", ok, err)
+		t.Fatalf("an actor found only in another field must be refused, got ok=%v err=%v", ok, err)
 	}
 
-	// a plain staff member (not a PM of anything) may not
-	a.ResolveOwnStaffID = func(*core.Record) string { return "staff1" }
-	ok, err = a.Authorize(app, "time_entry", "FlagTimeEntry", "e1", nil, nil)
+	// someone who is no member of that region may not
+	a.ResolveOwnSubjectID = func(*core.Record) string { return "m2" }
+	ok, err = a.Authorize(app, "order", "FlagOrder", "o1", nil, nil)
 	if err != nil || ok {
-		t.Fatalf("a plain staff member should be refused, got ok=%v err=%v", ok, err)
+		t.Fatalf("a non-member should be refused, got ok=%v err=%v", ok, err)
 	}
 
-	// a nonexistent entry is refused, not an error (resolve hop finds nothing)
-	a.ResolveOwnRole = func(*core.Record) string { return "staff" }
-	ok, err = a.Authorize(app, "time_entry", "FlagTimeEntry", "does-not-exist", nil, nil)
+	// a nonexistent order is refused, not an error (resolve hop finds nothing)
+	ok, err = a.Authorize(app, "order", "FlagOrder", "does-not-exist", nil, nil)
 	if err != nil || ok {
 		t.Fatalf("a nonexistent target should be refused cleanly, got ok=%v err=%v", ok, err)
 	}
@@ -311,67 +311,67 @@ func TestAuthorize_Scope(t *testing.T) {
 
 func TestAuthorize_NilResolversTreatedAsNoActor(t *testing.T) {
 	// Neither resolver set at all -- an Authorizer wired with no
-	// project-specific delegates must not panic, and must refuse a
+	// host-specific delegates must not panic, and must refuse a
 	// role/ownership-gated command (there's no actor to satisfy it with).
 	app := newTestApp(t)
-	a := &Authorizer{Policies: map[Key]Policy{{"rate_override", "SetRateOverride"}: {RequiredRole: []string{"manager"}}}}
-	ok, err := a.Authorize(app, "rate_override", "SetRateOverride", "r1", nil, nil)
+	a := &Authorizer{Policies: map[Key]Policy{{"price", "SetPrice"}: {RequiredRole: []string{"supervisor"}}}}
+	ok, err := a.Authorize(app, "price", "SetPrice", "r1", nil, nil)
 	if err != nil || ok {
 		t.Fatalf("no resolvers configured should mean no role satisfies a requirement, got ok=%v err=%v", ok, err)
 	}
 }
 
-// S2: a command's declarations combine, every one must hold (schema
+// A command's declarations combine, every one must hold (the schema's
 // docs, 2026-10-14; dotnetcqrs 6649745). Evaluation used to return on the
 // first declaration it met, so a role that satisfied requiredRole skipped
 // the ownership check entirely, and a field gate that didn't apply allowed
 // the command before scope was looked at.
 func TestAuthorize_EveryDeclarationMustHold(t *testing.T) {
 	app := newTestApp(t)
-	entries := mustCreateCollection(t, app, "timeEntries", "entryId", "staffId", "projectId")
-	mustInsertRow(t, app, entries, map[string]string{"entryId": "e1", "staffId": "staff1", "projectId": "p1"})
-	pms := mustCreateCollection(t, app, "projectManagers", "projectId", "staffId")
-	mustInsertRow(t, app, pms, map[string]string{"projectId": "p1", "staffId": "pm1"})
+	orders := mustCreateCollection(t, app, "orders", "orderId", "ownerId", "regionId")
+	mustInsertRow(t, app, orders, map[string]string{"orderId": "o1", "ownerId": "u1", "regionId": "north"})
+	members := mustCreateCollection(t, app, "regionMembers", "regionId", "memberId")
+	mustInsertRow(t, app, members, map[string]string{"regionId": "north", "memberId": "m1"})
 
-	ownership := &OwnershipPolicy{Collection: "timeEntries", KeyField: "entryId", OwnerField: "staffId"}
+	ownership := &OwnershipPolicy{Collection: "orders", KeyField: "orderId", OwnerField: "ownerId"}
 	scope := &ScopePolicy{
-		ResolveCollection: "timeEntries", ResolveKeyField: "entryId", ResolveSelectField: "projectId",
-		MemberOfCollection: "projectManagers", MemberOfMatchField: "projectId",
+		ResolveCollection: "orders", ResolveKeyField: "orderId", ResolveSelectField: "regionId",
+		MemberOfCollection: "regionMembers", MemberOfMatchField: "regionId", MemberOfActorField: "memberId",
 	}
-	gate := &FieldGatedRolePolicy{Field: "role", Value: "manager", RequiredRole: []string{"administrator"}}
+	gate := &FieldGatedRolePolicy{Field: "role", Value: "supervisor", RequiredRole: []string{"admin"}}
 
 	cases := []struct {
-		name    string
-		policy  Policy
-		role    string
-		staffID string
-		payload string
-		want    bool
+		name      string
+		policy    Policy
+		role      string
+		subjectID string
+		payload   string
+		want      bool
 	}{
-		// requiredRole + ownership: staff holds the role, but e1 is staff1's
-		{"role held, not the owner", Policy{RequiredRole: []string{"staff"}, Ownership: ownership}, "staff", "staff2", `{}`, false},
-		{"role held, the owner", Policy{RequiredRole: []string{"staff"}, Ownership: ownership}, "staff", "staff1", `{}`, true},
-		{"the owner, role not held", Policy{RequiredRole: []string{"manager"}, Ownership: ownership}, "staff", "staff1", `{}`, false},
-		// requiredRole + an applying field gate: manager holds requiredRole,
-		// but role=manager needs an administrator
-		{"role held, gate applies and fails", Policy{RequiredRole: []string{"manager", "administrator"}, FieldGatedRole: gate}, "manager", "", `{"role":"manager"}`, false},
-		{"role held, gate applies and holds", Policy{RequiredRole: []string{"manager", "administrator"}, FieldGatedRole: gate}, "administrator", "", `{"role":"manager"}`, true},
-		{"role held, gate doesn't apply", Policy{RequiredRole: []string{"manager", "administrator"}, FieldGatedRole: gate}, "manager", "", `{"role":"staff"}`, true},
+		// requiredRole + ownership: member holds the role, but o1 is u1's
+		{"role held, not the owner", Policy{RequiredRole: []string{"member"}, Ownership: ownership}, "member", "u2", `{}`, false},
+		{"role held, the owner", Policy{RequiredRole: []string{"member"}, Ownership: ownership}, "member", "u1", `{}`, true},
+		{"the owner, role not held", Policy{RequiredRole: []string{"supervisor"}, Ownership: ownership}, "member", "u1", `{}`, false},
+		// requiredRole + an applying field gate: a supervisor holds
+		// requiredRole, but role=supervisor needs an admin
+		{"role held, gate applies and fails", Policy{RequiredRole: []string{"supervisor", "admin"}, FieldGatedRole: gate}, "supervisor", "", `{"role":"supervisor"}`, false},
+		{"role held, gate applies and holds", Policy{RequiredRole: []string{"supervisor", "admin"}, FieldGatedRole: gate}, "admin", "", `{"role":"supervisor"}`, true},
+		{"role held, gate doesn't apply", Policy{RequiredRole: []string{"supervisor", "admin"}, FieldGatedRole: gate}, "supervisor", "", `{"role":"member"}`, true},
 		// a field gate that doesn't apply must not end the evaluation: scope
-		// still decides (pm1 manages p1, staff2 doesn't)
-		{"gate doesn't apply, not in scope", Policy{FieldGatedRole: gate, Scope: scope}, "staff", "staff2", `{"role":"staff"}`, false},
-		{"gate doesn't apply, in scope", Policy{FieldGatedRole: gate, Scope: scope}, "staff", "pm1", `{"role":"staff"}`, true},
-		// ownership + scope: the owner who doesn't manage the project
-		{"owner, not in scope", Policy{Ownership: ownership, Scope: scope}, "staff", "staff1", `{}`, false},
+		// still decides (m1 is a member of north, u2 isn't)
+		{"gate doesn't apply, not in scope", Policy{FieldGatedRole: gate, Scope: scope}, "member", "u2", `{"role":"member"}`, false},
+		{"gate doesn't apply, in scope", Policy{FieldGatedRole: gate, Scope: scope}, "member", "m1", `{"role":"member"}`, true},
+		// ownership + scope: the owner who isn't a member of the region
+		{"owner, not in scope", Policy{Ownership: ownership, Scope: scope}, "member", "u1", `{}`, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			a := &Authorizer{
-				Policies:          map[Key]Policy{{"time_entry", "UpdateTimeEntry"}: c.policy},
-				ResolveOwnRole:    func(*core.Record) string { return c.role },
-				ResolveOwnStaffID: func(*core.Record) string { return c.staffID },
+				Policies:            map[Key]Policy{{"order", "UpdateOrder"}: c.policy},
+				ResolveOwnRole:      func(*core.Record) string { return c.role },
+				ResolveOwnSubjectID: func(*core.Record) string { return c.subjectID },
 			}
-			ok, err := a.Authorize(app, "time_entry", "UpdateTimeEntry", "e1", []byte(c.payload), nil)
+			ok, err := a.Authorize(app, "order", "UpdateOrder", "o1", []byte(c.payload), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -223,21 +223,23 @@ type CommandScope struct {
 
 // CommandScopeResolveVia names the read model that resolves a value off the
 // command's own target: the row where KeyField equals the command's own
-// aggregateId, and SelectField is the column collected from it (e.g. a time
-// entry's own projectId).
+// aggregateId, and SelectField is the column collected from it (e.g. an
+// order's own regionId).
 type CommandScopeResolveVia struct {
 	ReadModelID string `json:"readModelId"`
 	KeyField    string `json:"keyField"`
 	SelectField string `json:"selectField"`
 }
 
-// CommandScopeMemberOfVia names the read model that decides membership: the
-// actor's own staffId must appear as a `staffId` in this read model where
-// MatchField equals the value ResolveVia collected (e.g. project-managers
-// where projectId = the resolved project).
+// CommandScopeMemberOfVia names the read model that decides membership:
+// the actor is a member when a row has MatchField equal to the value
+// ResolveVia collected and ActorField (schema 4.0.0) equal to the actor (e.g.
+// region-members where regionId = the order's region and memberId = the
+// actor). The document names the member's field; nothing assumes one.
 type CommandScopeMemberOfVia struct {
 	ReadModelID string `json:"readModelId"`
 	MatchField  string `json:"matchField"`
+	ActorField  string `json:"actorField"`
 }
 
 // ReadModel has no Aggregate by design: read models are cross-cutting, so
@@ -294,9 +296,9 @@ type ReadModelSelfAccess struct {
 }
 
 // ReadModelScope declares how one query param resolves to a set of this
-// read model's own key values via another read model, e.g. `pmStaffId` on
-// `flagged-entries` resolves through `project-managers.staffId` to the
-// `projectId` values a PM may see.
+// read model's own key values via another read model, e.g. `memberId` on
+// `orders` resolves through `region-members.memberId` to the `regionId`
+// values that member may see.
 type ReadModelScope struct {
 	Param string            `json:"param"`
 	Via   ReadModelScopeVia `json:"via"`

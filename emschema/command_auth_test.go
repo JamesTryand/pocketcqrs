@@ -27,16 +27,16 @@ func baseValidDoc() *Document {
 				Fields: []Field{
 					{Name: "thingId", Type: "string", IDAttribute: true},
 					{Name: "ownerId", Type: "string"},
-					{Name: "projectId", Type: "string"},
+					{Name: "regionId", Type: "string"},
 				},
 			},
-			"project-managers": {
-				Name:              "Project Managers",
+			"region-members": {
+				Name:              "Region Members",
 				BuiltFromEventIDs: []string{"thing-created"},
 				Fields: []Field{
 					{Name: "assignmentId", Type: "string", IDAttribute: true},
-					{Name: "projectId", Type: "string"},
-					{Name: "staffId", Type: "string"},
+					{Name: "regionId", Type: "string"},
+					{Name: "memberId", Type: "string"},
 				},
 			},
 		},
@@ -54,22 +54,22 @@ func baseValidDoc() *Document {
 // value back out as a bare string rather than always widening it.
 func TestRequiredRoleRoundTrips(t *testing.T) {
 	var single Command
-	if err := json.Unmarshal([]byte(`{"name":"X","requiredRole":"manager"}`), &single); err != nil {
+	if err := json.Unmarshal([]byte(`{"name":"X","requiredRole":"supervisor"}`), &single); err != nil {
 		t.Fatal(err)
 	}
-	if len(single.RequiredRole) != 1 || single.RequiredRole[0] != "manager" {
-		t.Fatalf("expected [manager], got %v", single.RequiredRole)
+	if len(single.RequiredRole) != 1 || single.RequiredRole[0] != "supervisor" {
+		t.Fatalf("expected [supervisor], got %v", single.RequiredRole)
 	}
 	out, err := json.Marshal(single.RequiredRole)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(out) != `"manager"` {
+	if string(out) != `"supervisor"` {
 		t.Errorf("a single-role list should marshal back to a bare string, got %s", out)
 	}
 
 	var multi Command
-	if err := json.Unmarshal([]byte(`{"name":"X","requiredRole":["manager","administrator"]}`), &multi); err != nil {
+	if err := json.Unmarshal([]byte(`{"name":"X","requiredRole":["supervisor","admin"]}`), &multi); err != nil {
 		t.Fatal(err)
 	}
 	if len(multi.RequiredRole) != 2 {
@@ -82,13 +82,13 @@ func TestRequiredRoleRoundTrips(t *testing.T) {
 	}
 }
 
-// TestFieldGatedRoleLint proves onboard-staff's real shape lints clean, and
+// TestFieldGatedRoleLint proves a field-gated invitation lints clean, and
 // that a missing field/requiredRole is caught.
 func TestFieldGatedRoleLint(t *testing.T) {
 	doc := baseValidDoc()
 	cmd := doc.Commands["create-thing"]
 	cmd.FieldGatedRole = &CommandFieldGatedRole{
-		Field: "role", Value: "manager", RequiredRole: RoleList{"administrator"},
+		Field: "role", Value: "supervisor", RequiredRole: RoleList{"admin"},
 	}
 	doc.Commands["create-thing"] = cmd
 	if err := Lint(doc).Err(); err != nil {
@@ -97,7 +97,7 @@ func TestFieldGatedRoleLint(t *testing.T) {
 
 	bad := baseValidDoc()
 	c := bad.Commands["create-thing"]
-	c.FieldGatedRole = &CommandFieldGatedRole{Value: "manager"} // missing field + requiredRole
+	c.FieldGatedRole = &CommandFieldGatedRole{Value: "supervisor"} // missing field + requiredRole
 	bad.Commands["create-thing"] = c
 	err := Lint(bad).Err()
 	if err == nil {
@@ -134,16 +134,16 @@ func TestRequiredOwnershipLint(t *testing.T) {
 	}
 }
 
-// TestScopeLint proves flag-time-entry's real shape (Manager bypass, two
-// read-model hops) lints clean, and that a dangling memberOfVia.readModelId
-// is caught independently of resolveVia.
+// TestScopeLint proves a scope (a bypass role, two read-model hops) lints
+// clean, that a dangling memberOfVia.readModelId is caught independently of
+// resolveVia, and that a scope must name the member's field (4.0.0).
 func TestScopeLint(t *testing.T) {
 	doc := baseValidDoc()
 	cmd := doc.Commands["create-thing"]
 	cmd.Scope = &CommandScope{
-		BypassRoles: []string{"manager"},
-		ResolveVia:  CommandScopeResolveVia{ReadModelID: "things", KeyField: "thingId", SelectField: "projectId"},
-		MemberOfVia: CommandScopeMemberOfVia{ReadModelID: "project-managers", MatchField: "projectId"},
+		BypassRoles: []string{"supervisor"},
+		ResolveVia:  CommandScopeResolveVia{ReadModelID: "things", KeyField: "thingId", SelectField: "regionId"},
+		MemberOfVia: CommandScopeMemberOfVia{ReadModelID: "region-members", MatchField: "regionId", ActorField: "memberId"},
 	}
 	doc.Commands["create-thing"] = cmd
 	if err := Lint(doc).Err(); err != nil {
@@ -153,13 +153,25 @@ func TestScopeLint(t *testing.T) {
 	bad := baseValidDoc()
 	c := bad.Commands["create-thing"]
 	c.Scope = &CommandScope{
-		ResolveVia:  CommandScopeResolveVia{ReadModelID: "things", KeyField: "thingId", SelectField: "projectId"},
-		MemberOfVia: CommandScopeMemberOfVia{ReadModelID: "nope", MatchField: "projectId"},
+		ResolveVia:  CommandScopeResolveVia{ReadModelID: "things", KeyField: "thingId", SelectField: "regionId"},
+		MemberOfVia: CommandScopeMemberOfVia{ReadModelID: "nope", MatchField: "regionId", ActorField: "memberId"},
 	}
 	bad.Commands["create-thing"] = c
 	err := Lint(bad).Err()
 	if err == nil || !strings.Contains(err.Error(), `scope.memberOfVia references read model "nope", which does not exist`) {
 		t.Fatalf("a dangling scope.memberOfVia.readModelId must be rejected: %v", err)
+	}
+
+	unnamed := baseValidDoc()
+	u := unnamed.Commands["create-thing"]
+	u.Scope = &CommandScope{
+		ResolveVia:  CommandScopeResolveVia{ReadModelID: "things", KeyField: "thingId", SelectField: "regionId"},
+		MemberOfVia: CommandScopeMemberOfVia{ReadModelID: "region-members", MatchField: "regionId"},
+	}
+	unnamed.Commands["create-thing"] = u
+	err = Lint(unnamed).Err()
+	if err == nil || !strings.Contains(err.Error(), "actorField") {
+		t.Fatalf("a scope that doesn't name the member's field must be rejected, naming actorField: %v", err)
 	}
 }
 
@@ -184,7 +196,7 @@ func TestOwnershipFormsAreLinted(t *testing.T) {
 		"stateField":          {&CommandOwnership{StateField: "ownerId"}, true},
 		"both":                {&CommandOwnership{Via: via, StateField: "ownerId"}, false},
 		"neither":             {&CommandOwnership{}, false},
-		"stateField + bypass": {&CommandOwnership{StateField: "ownerId", BypassRoles: []string{"manager"}}, false},
+		"stateField + bypass": {&CommandOwnership{StateField: "ownerId", BypassRoles: []string{"supervisor"}}, false},
 	} {
 		doc := &Document{
 			EventModelingSchemaVersion: SchemaVersion,
