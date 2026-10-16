@@ -1131,7 +1131,9 @@ func jsDerivedOp(a derivedAction) string {
 // PocketBase filter strings, see docs/js-guide.md and the precedent in
 // examples/pb_functions/orders_by_customer.js): this resolves the
 // resolution half of the semi-join — the set of via-model values in scope —
-// and leaves building the actual local IN-filter to the caller.
+// and leaves building the actual local IN-filter to the caller. The via
+// collection is another read model, so project() can't call it (a
+// projection reads only its own collections): it is a query-side helper.
 func writeJSProjectionScopes(b *strings.Builder, rm ReadModel) {
 	for _, sc := range rm.Scopes {
 		fmt.Fprintf(b, "// resolve%s resolves the %q scope: %s on %q selects which\n",

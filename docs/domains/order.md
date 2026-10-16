@@ -32,7 +32,7 @@ JS rollup projection on top.
 | --- | --- | --- | --- |
 | `orders` | Go projection `orders` (`projections/orders.go`) | `orderId` (unique), `customerRef`, `status` (`open`/`confirmed`/`cancelled`), `total`, `lineCount` | totals **recomputed** from lines (idempotent) |
 | `order_lines` | same projection | `lineKey` (`<orderId>:<sku>`, unique), `order` (relation → `orders`, cascade delete), `sku`, `qty`, `price` | one projection owns both so line upsert precedes totals recompute |
-| `orders_by_customer` | JS projection (`pb_functions/orders_by_customer.js`) | `customerRef` (key), `orderCount`, `total` | recompute-style rollup over `orders` |
+| `orders_by_customer` | JS projection (`pb_functions/orders_by_customer.js`) | `customerRef` (key), `orderCount`, `total` | recompute-style rollup over its own `orders_by_customer_orders` and `orders_by_customer_lines` (a projection reads only its own collections) |
 
 ## Flows (reactors/sagas)
 

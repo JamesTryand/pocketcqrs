@@ -334,17 +334,6 @@ func (r *GojaRuntime) newVM(name string) (*goja.Runtime, *time.Timer) {
 	return r.newVMWithReader(name, r.reader)
 }
 
-// newVMIsolated creates a VM whose `pb` binding reads NOTHING.
-//
-// It exists for fixture runs: "given exactly these events, what happens?" is
-// a question a projection reading live collections cannot answer honestly.
-// A read-modify-write projection querying real rows mid-simulation would
-// produce a result that depends on the live database, which is how a
-// fixture assertion passes vacuously.
-func (r *GojaRuntime) newVMIsolated(name string) (*goja.Runtime, *time.Timer) {
-	return r.newVMWithReader(name, nil)
-}
-
 func (r *GojaRuntime) newVMWithReader(name string, reader Reader) (*goja.Runtime, *time.Timer) {
 	vm := goja.New()
 	timer := time.AfterFunc(FunctionTimeout, func() {

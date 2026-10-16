@@ -332,8 +332,9 @@ func (m *mapper) mapAutomation(s Slice) {
 		triggers = append(triggers, m.eventType(id))
 	}
 	if s.ReadModelID != "" {
-		m.rep.warnf("automation %q consults read model %q; the generated reactor does not read it — "+
-			"`pb.findRecord`/`pb.query` are available inside reactTo() if the rule needs it",
+		m.rep.warnf("automation %q consults read model %q; the generated reactor does not read it, and "+
+			"a reactor can't (a read model lags the write side): put the facts the rule needs on the "+
+			"triggering event, and let the target decider refuse what doesn't hold",
 			s.ID, s.ReadModelID)
 	}
 	// Where the command goes (R3, as dotnetcqrs's mapper): an automation on

@@ -141,13 +141,13 @@ func (p *JSProjection) applyOps(ctx context.Context, app core.App, ops []rowOp) 
 // Math.random is replaced by a PRNG seeded from the event position, so
 // replays produce identical sequences. Use event.created for time.
 func (r *GojaRuntime) runProjection(spec *ProjectionSpec, ev events.Event) (result any, err error) {
-	return r.runProjectionWith(spec, ev, false)
+	return r.runProjectionWith(spec, ev, projectionReader{spec: spec, inner: r.reader})
 }
 
-// runProjectionWith runs project(event); isolated cuts the `pb` read binding
-// off from live collections, for fixture runs where reading real rows would
-// make the answer depend on state the fixture does not describe.
-func (r *GojaRuntime) runProjectionWith(spec *ProjectionSpec, ev events.Event, isolated bool) (result any, err error) {
+// runProjectionWith runs project(event) with reader as its `pb`: the live
+// collections it owns (projectionReader), or a dry run's simulated rows
+// (simulatedReader). Either way it reads only its own collections (P1).
+func (r *GojaRuntime) runProjectionWith(spec *ProjectionSpec, ev events.Event, reader Reader) (result any, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			result = nil
@@ -155,11 +155,7 @@ func (r *GojaRuntime) runProjectionWith(spec *ProjectionSpec, ev events.Event, i
 		}
 	}()
 
-	newVM := r.newVM
-	if isolated {
-		newVM = r.newVMIsolated
-	}
-	vm, timer := newVM(spec.Name)
+	vm, timer := r.newVMWithReader(spec.Name, reader)
 	defer timer.Stop()
 	seedRandom(vm, ev.Position)
 
@@ -229,16 +225,15 @@ type rowOp struct {
 	// increment marks a count/sum-derivation op (Finding 3): add delta to
 	// incField rather than set fields verbatim. It exists as its own op
 	// shape, not a fields entry, because a derived count/sum must ACCUMULATE
-	// across events, and neither this project's own read binding (`pb`, a
-	// query-side stub over an isolated fixture — see M7 in dryrun.go) nor a
-	// plain upsert's field-merge can do that: an upsert always sets the
-	// value the caller computed, so a projection that wanted to accumulate
-	// via upsert would need to read the running total back first, which a
-	// fixture verify run must not do (see runProjectionWith's isolation
-	// doc). Increment sidesteps the read entirely — the host adds the
-	// delta, live or in a fixture simulation alike (dryrun.go's
-	// runProjectionOver), so a generated toggle/count/sum projection
-	// verifies against a scenario exactly like a plain merge does.
+	// across events, and a plain upsert's field-merge can't do that: an
+	// upsert always sets the value the caller computed, so a projection
+	// that wanted to accumulate via upsert would read the running total
+	// back first through `pb`. A dry run serves its simulated rows to that
+	// read (projection_reads.go), but only for the filters it can simulate.
+	// Increment sidesteps the read entirely — the host adds the delta, live
+	// or in a fixture simulation alike (dryrun.go's runProjectionOver), so
+	// a generated toggle/count/sum projection verifies against a scenario
+	// exactly like a plain merge does.
 	increment bool
 	incField  string
 	delta     float64

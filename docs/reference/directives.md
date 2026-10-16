@@ -55,7 +55,7 @@ checkpoint key), delivered events of the given types. The file must define
 `project(event)` and declare at least one `//@schema`.
 
 ```
-//@trigger projection orders_by_customer on OrderPlaced OrderConfirmed
+//@trigger projection orders_by_customer on OrderPlaced OrderLineAdded
 ```
 
 ## `//@schema <collection> <field>:<type> ...`
@@ -199,8 +199,9 @@ Registers a **JS reactor** (tier 4): a durable consumer that maps committed
 events to **commands**. The file must define `reactTo(event)`, which returns
 dispatch descriptors.
 
-Bindings are `event`, `console`, `pb`, and `$http` when outbound HTTP is
-enabled — the reactor tier is where "call a third party, then dispatch a
+Bindings are `event`, `console`, and `$http` when outbound HTTP is
+enabled (no `pb`: a read model lags, so the facts come from the event and
+the target decider refuses what doesn't hold) — the reactor tier is where "call a third party, then dispatch a
 command with the answer" belongs, because it is the only tier that can
 dispatch at all.
 

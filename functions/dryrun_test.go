@@ -285,8 +285,8 @@ function project(event) {
 	return { upsert: { key: event.data.customerRef, fields: { n: n + 1 } } };
 }
 `
-	// note: pb binding is inert (no reader) so the query returns nil;
-	// the simulation still exercises ops collection deterministically
+	// pb reads the rows simulated so far; each customer has one order, so
+	// each count is 1
 	spec, err := LoadProjectionFile(rt, nil, writeTempFn(t, "counts.js", src))
 	if err != nil {
 		t.Fatal(err)
@@ -390,9 +390,8 @@ function project(event) {
 		t.Fatalf("a fixture run must not read live collections, got %v", got)
 	}
 
-	// ...and the ordinary whole-log run still reads, because it is
-	// simulating against real history where those rows genuinely exist
-	live, err := rt.runProjectionWith(spec, fixture[0], false)
+	// ...and a live run reads its own live rows
+	live, err := rt.runProjection(spec, fixture[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +400,7 @@ function project(event) {
 		t.Fatal(err)
 	}
 	if len(ops) != 1 || ops[0].fields["seen"] != "live" {
-		t.Fatalf("a non-isolated run should still see the reader: %+v", ops)
+		t.Fatalf("a live run should see the reader: %+v", ops)
 	}
 }
 

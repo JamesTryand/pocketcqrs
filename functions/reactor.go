@@ -211,6 +211,10 @@ func (r *GojaRuntime) runReactor(spec *ReactorSpec, ev events.Event) (result any
 	vm, timer := r.newOutboundVM(spec.Reactor)
 	defer timer.Stop()
 	seedRandom(vm, ev.Position)
+	// no read side (P2): which command to send is a write-side decision, and
+	// a read model lags. The facts come from the event; the target decider
+	// refuses what doesn't hold.
+	vm.Set("pb", goja.Undefined())
 
 	var data any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {

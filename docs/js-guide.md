@@ -18,9 +18,9 @@ for what maps directly and what doesn't.
 | tier | role | triggers | determinism rules | bindings |
 | --- | --- | --- | --- | --- |
 | 1 — effect | integrate, serve HTTP, run on a schedule | `event`, `http`, `cron` | none required (best-effort) | `console`, read-only `pb`, `$http`† (**not** on `http`) |
-| 2 — projection | fold events into collections | `projection` | replay-deterministic: `Math.random` is seeded per event; use `event.created` for time | `console`, read-only `pb` |
+| 2 — projection | fold events into collections | `projection` | replay-deterministic: `Math.random` is seeded per event; use `event.created` for time | `console`, read-only `pb` of **its own** collections |
 | 3 — decider | the write side of an aggregate | `decider` | strict: no `Math.random` (throws), no `Date`, **no `pb`** | `console` only |
-| 4 — reactor | map events to **commands** (sagas, bridges) | `reactor` | `Math.random` seeded per event, so a **redelivery** decides the same thing twice | `console`, read-only `pb`, `$http`† |
+| 4 — reactor | map events to **commands** (sagas, bridges) | `reactor` | `Math.random` seeded per event, so a **redelivery** decides the same thing twice; **no `pb`** | `console`, `$http`† |
 
 † only when the server was started with `--cqrsAllowOutboundHTTP`; absent
 otherwise. Goes to **`event` and `cron` functions and to reactors** — not to
@@ -42,6 +42,18 @@ var rows = pb.query("tasks", "completed = false", 100); // PocketBase filter; li
 ```
 
 Records come back in PocketBase's public-API shape.
+
+**A projection reads only the collections it declares** with `//@schema`; a read of any other
+throws, and the projection blocks at that event. Its own rows are a fold of the events it has seen,
+so reading them back is deterministic. Another read model is someone else's fold, at whatever point
+that fold had reached, so a rebuild could come out different: take those facts from the events they
+come from (declare another `//@schema` to keep them). In a dry run the reads are served from the
+rows simulated so far; there `findRecord` finds nothing (a simulated row has no record id), so read
+your own rows back with `query` on the key, using `field = 'value'` terms joined by `&&`.
+
+**A reactor has no `pb`.** Which command to send is a write-side decision, and a read model lags:
+put the facts the rule needs on the triggering event, and let the target decider refuse what
+doesn't hold.
 
 ## Calling out: `$http` (event, cron and reactor functions)
 
@@ -212,7 +224,7 @@ function project(event) {
 **Determinism**: replays must produce the same rows. `Math.random` is
 replaced by a PRNG seeded from the event position; use `event.created` for
 time. Prefer **recompute-over-increment** (`orders_by_customer.js` recomputes
-from the read side instead of `n+1`) — it keeps replays and dry-run diffs
+from its own rows instead of `n+1`) — it keeps replays and dry-run diffs
 clean. A failing projection **blocks** at the failing event (correctness over
 progress); fix the code and [rebuild](reference/cli.md#projection) or let it
 catch up.

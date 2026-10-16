@@ -214,8 +214,8 @@ type ProjectionDryRun struct {
 }
 
 // DryRunProjection runs a candidate projection over the whole event log
-// in memory — no collections are read (except via the projection's own
-// pb.query calls) and nothing is written.
+// in memory — no collections are read and nothing is written. The
+// projection's `pb` reads the rows simulated so far, as for a fixture.
 func DryRunProjection(store *events.Store, spec *ProjectionSpec) (*ProjectionDryRun, error) {
 	ctx := context.Background()
 	var log []events.Event
@@ -233,27 +233,26 @@ func DryRunProjection(store *events.Store, spec *ProjectionSpec) (*ProjectionDry
 			log = append(log, ev)
 		}
 	}
-	return runProjectionOver(spec, log, false)
+	return runProjectionOver(spec, log)
 }
 
 // DryRunProjectionOver runs a candidate projection over the SUPPLIED events
 // instead of the real log — "given exactly these events, what rows result?".
 //
-// Reads are ISOLATED: the projection's `pb` binding returns nothing. A
-// read-modify-write projection querying live collections mid-simulation
-// would give an answer that depends on the real database, which is how a
-// fixture assertion passes vacuously. That makes this stricter than
-// DryRunProjection, which deliberately keeps live reads because it is
-// simulating against real history.
+// Reads are ISOLATED from the live database: the projection's `pb` reads
+// only its own collections (P1), and here those are the rows simulated so
+// far. A read of live rows mid-simulation would give an answer that depends
+// on the real database, which is how a fixture assertion passes vacuously.
 //
 // Useful well beyond schema work: it reproduces a projection defect from a
 // hand-written log, with no instance state involved at all.
 func DryRunProjectionOver(spec *ProjectionSpec, fixture []events.Event) (*ProjectionDryRun, error) {
-	return runProjectionOver(spec, fixture, true)
+	return runProjectionOver(spec, fixture)
 }
 
-func runProjectionOver(spec *ProjectionSpec, log []events.Event, isolated bool) (*ProjectionDryRun, error) {
+func runProjectionOver(spec *ProjectionSpec, log []events.Event) (*ProjectionDryRun, error) {
 	out := &ProjectionDryRun{Name: spec.Name, Rows: map[string]map[string]map[string]any{}}
+	reader := simulatedReader{spec: spec, rows: out.Rows}
 	for _, ev := range log {
 		out.Position = ev.Position
 		if !contains(spec.EventTypes, ev.Type) {
@@ -261,7 +260,7 @@ func runProjectionOver(spec *ProjectionSpec, log []events.Event, isolated bool) 
 		}
 		out.Events++
 
-		result, err := spec.runtime.runProjectionWith(spec, ev, isolated)
+		result, err := spec.runtime.runProjectionWith(spec, ev, reader)
 		if err != nil {
 			return nil, fmt.Errorf("dryrun: projection %s failed at event %d: %w", spec.Name, ev.Position, err)
 		}

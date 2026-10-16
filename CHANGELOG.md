@@ -30,6 +30,19 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ### Changed
 
+- **A JS projection reads only its own collections (P1); a reactor reads nothing (P2).** **Breaking**
+  for code that did otherwise. A projection's `pb.findRecord`/`pb.query` of a collection it doesn't
+  declare with `//@schema` now throws, so the projection blocks at that event: another read model is
+  a fold at whatever point it had reached, so a rebuild could come out different. Subscribe to the
+  events it is built from instead (`examples/pb_functions/orders_by_customer.js` now keeps its own
+  rows rather than reading `orders`). A dry run, fixture or whole-log, serves the projection's own
+  simulated rows to those reads, so a read-modify-write projection verifies, and `dryrun projection
+  --diff` is clean for one; a filter the simulation can't evaluate (anything beyond `field = value`
+  and `field != value` terms joined by `&&`) is refused rather than answered with nothing. A
+  reactor has no `pb`: which command to send is a write-side decision and a read model lags, so the
+  facts come from the event and the target decider refuses what doesn't hold. The importer's note on
+  an automation that consults a read model says that now, instead of pointing at `pb`.
+
 - **`schema import` fails closed.** It used to drop every key it didn't read, so a document using a
   newer schema feature (a read model's `selfAccess`, a command's `refuseWhen`, a removal) imported
   into code that quietly lacked it. Now every key is checked against what the importer reads, and

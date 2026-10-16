@@ -97,7 +97,7 @@ comment lines declare what a file is. The examples you copied in
 | `heartbeat.js` | cron function, every minute |
 | `note.js` | full write side of a `note` aggregate (JS decider) |
 | `notes.js` | read side of `note` (JS projection, creates its own collection) |
-| `orders_by_customer.js` | JS projection rolling up the Go-maintained `orders` |
+| `orders_by_customer.js` | JS projection rolling up orders per customer from its own rows |
 | `task_completion_note.js` | reactor: on `TaskCompleted`, dispatches `CreateNote` |
 
 Try the note vertical — entirely user-defined, no Go code involved:

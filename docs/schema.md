@@ -292,9 +292,9 @@ its deciders, its hand files (`<aggregate>.hand.js`, so a hook really decides
 and its scenario passes or fails instead of being HAND), and its projections,
 including a hand-written one (3.17.0), whose view scenarios then run. A file
 the host doesn't have is a skip that says so, never the generated code in its
-place. A projection's `pb` reads are isolated in a scenario run as they are in
-any dry run, so a hand projection that joins other rows can't be checked this
-way yet.
+place. A projection's `pb` reads only its own collections, served in a
+scenario run from the rows simulated so far, so a hand projection that keeps
+the rows its join needs is checked like any other.
 
 With `--lang go` the scenarios run against Go code rather than the JS dry run:
 the Go the import generates (hand hooks as stand-ins that report HAND), or,

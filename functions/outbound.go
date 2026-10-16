@@ -94,7 +94,7 @@ func (r *GojaRuntime) Outbound() OutboundDoer {
 //
 // THE INSTALLATION IS ADDITIVE, AND THAT IS THE WHOLE POINT. Every other
 // binding in this package is subtractive — newVMWithReader grants console and
-// pb to everyone, and newDeciderVM then takes capability away. Outbound
+// pb to everyone, and newDeciderVM and runReactor then take pb away. Outbound
 // access cannot work that way: putting $http in the shared constructor would
 // hand it to deciders and projections by default, leaving the purity
 // invariant resting on somebody remembering to remove it in each of the

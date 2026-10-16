@@ -611,9 +611,9 @@ pocketcqrs dryrun projection <file.js> [--diff]
 - **projection** — simulate over the whole log in memory (upsert/delete
   counts, final rows per collection). `--diff` compares the simulation
   against each live collection and prints per-collection differences.
-  Note: projections that read the live read side via `pb.query`
-  (read-modify-write style) are not `--diff`-clean — the simulation reads
-  the already-projected state. Recompute-style projections diff cleanly.
+  A projection's `pb` reads (its own collections only) are served from
+  the rows simulated so far, so a read-modify-write projection diffs
+  cleanly too.
 
 The same checks run over HTTP at
 [`POST /api/cqrs/admin/dryrun`](gateway.md#dry-run) (source in the body

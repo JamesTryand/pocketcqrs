@@ -62,7 +62,7 @@ Decisions taken on the document's behalf (10):
   ! event order-placed.orderId is a uuid and becomes text (no uuid column type here)
   ! event order-placed.items is a list of custom and becomes a json column
   ! event "order-shipped" declares no fields; generated as carrying no payload
-  ! automation "auto-ship-slice" consults read model "pending-shipments"; the generated reactor does not read it — `pb.findRecord`/`pb.query` are available inside reactTo() if the rule needs it
+  ! automation "auto-ship-slice" consults read model "pending-shipments"; the generated reactor does not read it, and a reactor can't (a read model lags the write side): put the facts the rule needs on the triggering event, and let the target decider refuse what doesn't hold
   ! command "notify-shipping-partner" has no `aggregate` tag; using the supplied override "shipmentNotice"
   ! event "shipment-notified" declares no fields; generated as carrying no payload
   ! read model order-summary.orderId is a uuid and becomes text (no uuid column type here)

@@ -22,7 +22,7 @@ on every save.
 | `heartbeat.js` | effect (cron) | `--tutorial` (queries `tasks`; also reads `notes`) |
 | `note.js` | decider | nothing — a self-contained JS aggregate |
 | `notes.js` | projection | `note.js` |
-| `orders_by_customer.js` | projection | `--tutorial` (rolls up the Go-maintained `orders`) |
+| `orders_by_customer.js` | projection | `--tutorial` (the Go `order` aggregate's events) |
 | `task_completion_note.js` | reactor | `--tutorial` **and** `note.js` — it spans both |
 
 Only `note.js` + `notes.js` work without `--tutorial`: they are the fully

@@ -56,7 +56,6 @@ func TestOutboundIsUnreachableFromDecidersAndProjections(t *testing.T) {
 	}{
 		{"decider", rt.newDeciderVM, "undefined"},
 		{"projection", rt.newVM, "undefined"},
-		{"projection (isolated fixture run)", rt.newVMIsolated, "undefined"},
 
 		// Not decoration: without this the test above passes on a build where
 		// $http was never installed anywhere.
@@ -417,5 +416,27 @@ func TestRequestFromJSRejectsWhatItCannotUnderstand(t *testing.T) {
 	}
 	if req.Method != "PUT" || req.Body != "hi" || req.Headers["X-A"] != "1" {
 		t.Fatalf("converted badly: %+v", req)
+	}
+}
+
+// P2 (James, 2026-10-16): a reactor has no `pb`. Which command to send is a
+// write-side decision; a read model lags, so the facts come from the event
+// and the target decider refuses what doesn't hold.
+func TestAReactorCannotReadTheReadSide(t *testing.T) {
+	rt := NewGojaRuntime(nil)
+	rt.SetReader(stubReader{})
+	spec := &ReactorSpec{
+		Reactor:    "probe",
+		EventTypes: []string{"Thing"},
+		Prog:       compile(t, `function reactTo(event) { return [{ saw: typeof pb }]; }`),
+		runtime:    rt,
+	}
+	got, err := rt.runReactor(spec, events.Event{Type: "Thing", Position: 1, Data: []byte(`{}`)})
+	if err != nil {
+		t.Fatalf("runReactor: %v", err)
+	}
+	list, _ := got.([]any)
+	if len(list) != 1 || list[0].(map[string]any)["saw"] != "undefined" {
+		t.Fatalf("a reactor saw pb as %v", got)
 	}
 }
