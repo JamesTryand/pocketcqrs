@@ -415,3 +415,40 @@ func TestReadModelKeyIsAlwaysAColumn(t *testing.T) {
 		t.Errorf("the key column was duplicated:\n%s", files[1].Source)
 	}
 }
+
+// The existence refusals name the aggregate in words, as a document's own
+// error scenarios do ("support ticket does not exist"), in the JS and the Go
+// a domain generates alike; a one-word aggregate reads as it did.
+func TestExistenceMessagesNameTheAggregateInWords(t *testing.T) {
+	d := sampleDomain()
+	d.Aggregate = "supportTicket"
+	js, err := d.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gofiles, err := d.GenerateGo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for lang, src := range map[string]string{"js": js[0].Source, "go": gofiles[0].Source} {
+		for _, want := range []string{"support ticket already exists", "support ticket does not exist"} {
+			if !strings.Contains(src, want) {
+				t.Errorf("%s decider missing %q:\n%s", lang, want, src)
+			}
+		}
+		if strings.Contains(src, "supportTicket already exists") || strings.Contains(src, "supportTicket does not exist") {
+			t.Errorf("%s decider still names the aggregate as an identifier", lang)
+		}
+	}
+}
+
+func TestWords(t *testing.T) {
+	for in, want := range map[string]string{
+		"task": "task", "loanRequest": "loan request", "LoanRequest": "loan request",
+		"orderPDF": "order PDF", "HTTPRequestLog": "HTTP request log", "a": "a",
+	} {
+		if got := Words(in); got != want {
+			t.Errorf("Words(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

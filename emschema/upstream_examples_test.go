@@ -123,44 +123,10 @@ func TestUpstreamRefusalsExample(t *testing.T) {
 // also declares a command scope (approve-loan-request, memberOfVia with
 // actorField and the refusal's message). Verify runs the command's
 // authorization before its decider, so the scope refuses a volunteer at
-// another branch with that message.
-//
-// One of its scenarios does not pass, and this test pins exactly how, so a
-// change shows up here: no-such-loan-request expects "loan request does not
-// exist"; the generated existence check names the aggregate as written
-// ("loanRequest does not exist").
+// another branch with that message, and the existence check names the
+// aggregate in words ("loan request does not exist"). Every scenario passes.
 func TestUpstreamStateOwnershipExample(t *testing.T) {
-	doc, err := Load(fixture(t, "examples/state-ownership.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	mapped, err := Map(doc, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	results, err := Verify(doc, mapped, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	known := map[string]string{
-		"no-such-loan-request": `got "loanRequest does not exist"`,
-	}
-	seen := 0
-	for _, r := range results {
-		if want, ok := known[r.ScenarioID]; ok {
-			seen++
-			if r.Passed || !strings.Contains(r.Detail, want) {
-				t.Errorf("%s: the known failure changed (passed=%v): %s", r.ScenarioID, r.Passed, r.Detail)
-			}
-			continue
-		}
-		if !r.Passed && !r.Hand {
-			t.Errorf("%s/%s (%s): %s", r.SliceID, r.ScenarioID, r.Name, r.Detail)
-		}
-	}
-	if seen != len(known) || len(results) != 7 {
-		t.Fatalf("want 7 scenarios including the %d known failures, got %d (%d known)", len(known), len(results), seen)
-	}
+	verifyExample(t, "examples/state-ownership.json", Options{})
 }
 
 // rows-per-list-item.json (3.16.0): a delivery's parcels as a load per
