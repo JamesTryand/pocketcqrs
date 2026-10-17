@@ -165,3 +165,30 @@ func TestUpstreamHandProjectionExample(t *testing.T) {
 		}
 	}
 }
+
+// Without a declared message, a state owner's refusal names the aggregate in
+// words, as the existence refusals do (dotnetcqrs's default, word for word).
+func TestStateOwnerDefaultMessageNamesTheAggregateInWords(t *testing.T) {
+	doc, err := Load(fixture(t, "examples/state-ownership.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := doc.Commands["change-loan-request"]
+	cmd.RequiredOwnership.Message = ""
+	doc.Commands["change-loan-request"] = cmd
+	mapped, err := Map(doc, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range mapped.Domains {
+		for _, c := range d.Commands {
+			if c.Name == "ChangeLoanRequest" {
+				if want := "only this loan request's own memberId may ChangeLoanRequest"; c.OwnedBy == nil || c.OwnedBy.Message != want {
+					t.Fatalf("want %q, got %+v", want, c.OwnedBy)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("ChangeLoanRequest was not mapped")
+}

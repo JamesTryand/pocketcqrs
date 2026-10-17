@@ -603,7 +603,7 @@ func (m *mapper) mapStateOwnership(agg, id string, own *CommandOwnership) *scaff
 	field := scaffold.SanitizeName(own.StateField)
 	msg := own.Message
 	if msg == "" {
-		msg = fmt.Sprintf("only this %s's own %s may %s", agg, field, m.commandName(id))
+		msg = fmt.Sprintf("only this %s's own %s may %s", scaffold.Words(agg), field, m.commandName(id))
 	}
 	return &scaffold.Ownership{StateField: field, Message: msg}
 }

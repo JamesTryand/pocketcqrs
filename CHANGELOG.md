@@ -47,8 +47,8 @@ All notable changes to PocketCQRS. Format loosely follows
   it with the scenario's message, and the gateway's `403` carries it (an `Authorize` hook returning
   a `*cmdauth.Refusal` is answered with its message).
 - **Generated existence refusals name the aggregate in words.** "loanRequest does not exist" is now "loan
-  request does not exist", as a document's own error scenarios write it (likewise "already exists" and "has
-  ended"; an acronym run stays as written). A one-word aggregate reads as before. A host matching the old text
+  request does not exist", as a document's own error scenarios write it (likewise "already exists", "has
+  ended", and a state owner's default refusal; an acronym run stays as written). A one-word aggregate reads as before. A host matching the old text
   of a multi-word aggregate's refusal must follow it.
 - **A JS projection reads only its own collections; a reactor reads nothing.** **Breaking**
   for code that did otherwise. A projection's `pb.findRecord`/`pb.query` of a collection it doesn't
