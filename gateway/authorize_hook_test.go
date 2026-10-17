@@ -2,10 +2,12 @@ package gateway_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/gateway"
 )
@@ -84,6 +86,28 @@ func TestAuthorizeHookErrorRejectsWith500(t *testing.T) {
 	status, body := postCreate(t, srv, "")
 	if status != 500 {
 		t.Fatalf("expected 500 when the Authorize hook itself errors, got %d: %s", status, body)
+	}
+}
+
+// TestAuthorizeHookRefusalAnswersWithItsMessage proves a refusal naming
+// its own message (a scope's, schema 4.0.0) is a 403 carrying that message,
+// not an error: the caller is told why in the domain's words.
+func TestAuthorizeHookRefusalAnswersWithItsMessage(t *testing.T) {
+	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv := newTestGatewayWithConfig(t, store, gateway.Config{
+		AllowAnonymous: true,
+		Authorize: func(_ *core.RequestEvent, _, _, _ string, _ []byte) (bool, error) {
+			return false, &cmdauth.Refusal{Message: "only a member of this team may do that"}
+		},
+	})
+	status, body := postCreate(t, srv, "")
+	if status != 403 || !strings.Contains(body, "only a member of this team may do that") {
+		t.Fatalf("expected 403 with the refusal's message, got %d: %s", status, body)
 	}
 }
 

@@ -219,6 +219,9 @@ type CommandScope struct {
 	BypassRoles []string                `json:"bypassRoles,omitempty"`
 	ResolveVia  CommandScopeResolveVia  `json:"resolveVia"`
 	MemberOfVia CommandScopeMemberOfVia `json:"memberOfVia"`
+	// Message (schema 4.0.0) is the refusal's message when the actor is not
+	// a member.
+	Message string `json:"message,omitempty"`
 }
 
 // CommandScopeResolveVia names the read model that resolves a value off the

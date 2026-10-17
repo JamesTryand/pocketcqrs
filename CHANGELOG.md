@@ -37,6 +37,15 @@ All notable changes to PocketCQRS. Format loosely follows
   is renamed `ResolveOwnSubjectID` (was `ResolveOwnStaffID`). **Breaking** for a document with a scope and no `actorField`, and for a
   host that set the old resolver. The vendored schema and its examples are upstream's 4.0.0
   (`6f0be44`), `emschema.SchemaVersion` is `4.0.0`, and an export declares it.
+- **Verify runs a command's authorization before its decider.** Verify ran only the decider, so an
+  `error` scenario about a refusal by an ownership `via` or a `scope` was reported as accepted. A
+  command scenario now runs the command's authorization over read models projected from its `given`
+  events, the same evaluation the gateway runs (new package `cmdauth`, which `authorize` now
+  delegates to; `emschema.CommandPolicies` builds the table, `authorize.BuildPolicies` is that). A
+  scenario names an actor, not a role, so it holds the command's required roles and no bypass role.
+  Schema 4.0.0 (upstream `aa14961`) adds `scope.message`: the scope refuses with it, verify compares
+  it with the scenario's message, and the gateway's `403` carries it (an `Authorize` hook returning
+  a `*cmdauth.Refusal` is answered with its message).
 - **A JS projection reads only its own collections; a reactor reads nothing.** **Breaking**
   for code that did otherwise. A projection's `pb.findRecord`/`pb.query` of a collection it doesn't
   declare with `//@schema` now throws, so the projection blocks at that event: another read model is

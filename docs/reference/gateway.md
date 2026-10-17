@@ -26,7 +26,7 @@ resulting event's metadata:
 | `200` | `{ "events": [...] }` — the appended envelopes (empty when the decider returned no events) |
 | `400` | domain/validation rejection from the decider (its thrown message) — **only** an error the decider's `decide` itself returned or threw |
 | `401` | no/invalid auth token |
-| `403` | a configured `Authorize` hook refused the command |
+| `403` | a configured `Authorize` hook refused the command — `{ error }`, the refusing declaration's own message when it names one (a command `scope`'s `message`) |
 | `404` | unknown aggregate |
 | `409` | concurrency conflict (the stream changed between load and append; retry the command) |
 | `422` | the `Idempotency-Key` was already used for a *different* request — see below |

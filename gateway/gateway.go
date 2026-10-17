@@ -17,6 +17,7 @@ import (
 	"github.com/pocketbase/pocketbase/tools/router"
 
 	"github.com/jamestryand/pocketcqrs/batching"
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/idempotency"
@@ -117,8 +118,9 @@ type Config struct {
 	// actor whose role has since changed must be re-evaluated, not served
 	// a stale verdict.
 	//
-	// Returning (false, nil) rejects the request with 403; a non-nil error
-	// rejects with 500 (this package has no logger to report it through, so
+	// Returning (false, nil) rejects the request with 403, as does a
+	// *cmdauth.Refusal error, answered with its own message; any other
+	// non-nil error rejects with 500 (this package has no logger to report it through, so
 	// the error becomes the response body, same posture Config.Mode's own
 	// error path already takes). Nil (the default) means every
 	// authenticated caller may issue every command — today's unchanged
@@ -244,13 +246,17 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 
 		if cfg.Authorize != nil {
 			authorized, err := cfg.Authorize(re, aggregate, cmdName, id, payload)
+			var refusal *cmdauth.Refusal
+			if errors.As(err, &refusal) {
+				return re.JSON(http.StatusForbidden, map[string]string{"error": refusal.Error()})
+			}
 			if err != nil {
 				return re.JSON(http.StatusInternalServerError,
 					map[string]string{"error": "authorization check failed: " + err.Error()})
 			}
 			if !authorized {
 				return re.JSON(http.StatusForbidden, map[string]string{
-					"error": "not authorized to issue " + cmdName + " on " + aggregate,
+					"error": cmdauth.NotAuthorized(cmdName, aggregate),
 				})
 			}
 		}

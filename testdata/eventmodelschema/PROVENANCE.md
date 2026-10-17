@@ -3,7 +3,11 @@
 Fixtures for the eventmodelschema import/export. Copied verbatim, unmodified.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
-- **Commit**: `6f0be44`, *"Schema 4.0.0: scope.memberOfVia requires actorField;
+- **Commit**: `aa14961`, *"4.0.0: optional command.scope.message, the
+  refusal's own message"* (untagged). Copied 2026-10-17: the schema and
+  `state-ownership.json`, whose `approve-loan-request` scope now declares the
+  message its refusal scenario expects; nothing else changed upstream.
+- **Before that**: `6f0be44`, *"Schema 4.0.0: scope.memberOfVia requires actorField;
   examples and notes in neutral domains"* (untagged: upstream's last tag is
   `v3.9.0`). Copied 2026-10-16. 4.0.0 is **breaking**:
   `command.scope.memberOfVia` now requires `actorField`, the field of the

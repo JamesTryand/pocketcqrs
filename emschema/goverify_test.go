@@ -129,6 +129,22 @@ func TestGoVerifyRowsPerListItem(t *testing.T) {
 	}
 }
 
+// Upstream's state-ownership.json through the Go projections: the command's
+// scope reads read models built from the given events, both hops of them,
+// so a volunteer at the request's branch approves and one at another branch
+// is refused with the scope's message.
+func TestGoVerifyCommandScope(t *testing.T) {
+	doc, mapped := loadMapped(t, fixture(t, "examples/state-ownership.json"))
+	results := goVerify(t, doc, mapped, "")
+	if r := results["branch-volunteer-approves"]; !r.Passed {
+		t.Errorf("branch-volunteer-approves: %s", r.Detail)
+	}
+	if r := results["volunteer-at-another-branch-is-refused"]; !r.Passed ||
+		!strings.Contains(r.Detail, "refused by the command's authorization") {
+		t.Errorf("volunteer-at-another-branch-is-refused: passed=%v: %s", r.Passed, r.Detail)
+	}
+}
+
 // A personal-data column through a Go projection holds the envelope's JSON
 // text; the harness reads it back revealed, so the model's plain value
 // matches.

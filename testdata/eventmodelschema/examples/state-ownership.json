@@ -89,7 +89,8 @@
           "readModelId": "branch-volunteers",
           "matchField": "branchId",
           "actorField": "volunteerId"
-        }
+        },
+        "message": "only a volunteer at this loan request's branch may approve it"
       }
     }
   },

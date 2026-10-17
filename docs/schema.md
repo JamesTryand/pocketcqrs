@@ -263,7 +263,13 @@ scenario passes only on **its own** refusal: the decider's message must be
 the scenario's `then.error.message`, so a rule the model declares and the code
 lacks fails even when some other rule refuses first. A command scenario's
 `when.actor` and `when.at` (schema 3.10.0) are passed to the decider as
-`command.actor` and `command.now`. `stateView` scenarios fold the fixture
+`command.actor` and `command.now`. Before the decider, the command's
+authorization runs as the gateway runs it (package `cmdauth`), over read
+models projected from the scenario's `given` events: an ownership `via` or a
+`scope` that refuses the actor refuses the command, with the scope's
+`message` (4.0.0) when it declares one. A command scenario names an actor,
+not a role, so it holds the command's required roles and none of its bypass
+roles. `stateView` scenarios fold the fixture
 through the generated projection and query the resulting rows. A `stateView`
 scenario naming a `when.caller` (3.8.0) reads as that caller: the rows are
 loaded, with the collections a granting scope joins, into a scratch PocketBase

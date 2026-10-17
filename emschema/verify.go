@@ -3,6 +3,7 @@ package emschema
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 	"github.com/jamestryand/pocketcqrs/functions"
@@ -475,7 +477,10 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	if len(ref.Data) > 0 {
 		payload = ref.Data
 	}
-	run, problem, missing := v.decide(sc.ID, aggregate, stream, own, decider.Command{Name: cmdName, Payload: payload}, commandMeta(ref))
+	meta := commandMeta(ref)
+	actor, _ := meta["actor"].(string)
+	refusal, authProblem := v.authorize(sc, ref.CommandID, stream, actor)
+	run, problem, missing := v.decide(sc.ID, aggregate, stream, own, decider.Command{Name: cmdName, Payload: payload}, meta)
 	switch {
 	case missing:
 		res.Skipped = true
@@ -484,7 +489,35 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	case problem != "":
 		res.Detail = problem
 		return
+	case authProblem != "":
+		res.Detail = authProblem
+		return
 	case v.collecting():
+		return
+	}
+
+	// the gateway refuses before the decider is asked
+	if refusal != nil {
+		message := refusal.Message
+		if message == "" {
+			message = cmdauth.NotAuthorized(cmdName, aggregate)
+		}
+		if sc.Kind != KindError {
+			res.Detail = "the command's authorization refused it: " + message
+			return
+		}
+		then, terr := sc.ErrorThen()
+		if terr != nil {
+			res.Detail = terr.Error()
+			return
+		}
+		if message != then.Error.Message {
+			res.Detail = fmt.Sprintf("the command's authorization refused it for another reason: expected %q, got %q",
+				then.Error.Message, message)
+			return
+		}
+		res.Passed = true
+		res.Detail = "refused by the command's authorization: " + message
 		return
 	}
 
@@ -568,6 +601,115 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 			". The generated decider copies only the fields the EVENT declares, from the command payload " +
 			"of the same name; anything else is a rule to write."
 	}
+}
+
+// authorize runs a command scenario's declared authorization before its
+// decider, as the gateway does (cmdauth), over read models built from the
+// scenario's given events.
+//
+// A scenario names its actor, not a role: like a view scenario naming no
+// caller, it runs as a caller holding the command's required roles and none
+// of its bypass roles. So the checks that can refuse are the ones about who
+// the actor is: ownership through a read model, and scope. The problem is a
+// read model that could not be built.
+func (v *verifier) authorize(sc Scenario, commandID, stream, actor string) (*cmdauth.Refusal, string) {
+	policy, declared, err := CommandPolicy(v.doc, commandID)
+	if err != nil {
+		return nil, err.Error()
+	}
+	if !declared {
+		return nil, ""
+	}
+	rows := func(collection string) (map[string]map[string]any, error) {
+		rm := v.readModelOf(collection)
+		got, problem, missing := v.project(sc.ID, collection, v.buildFixture(sc.Given, idAttributeField(rm), stream))
+		switch {
+		case missing:
+			return nil, errors.New(v.missing("projection", collection))
+		case problem != "":
+			return nil, fmt.Errorf("the %s projection %s", v.which(), problem)
+		}
+		return got, nil
+	}
+	if v.collecting() {
+		// the Go check's first pass answers nothing, so a hop that finds no
+		// row would never ask for the next: ask for every one now
+		for _, collection := range policyCollections(policy) {
+			if _, err := rows(collection); err != nil {
+				return nil, ""
+			}
+		}
+		return nil, ""
+	}
+	find := func(collection string, match ...cmdauth.Match) (cmdauth.Row, error) {
+		got, err := rows(collection)
+		if err != nil {
+			return nil, err
+		}
+		return firstMatch(got, match), nil
+	}
+	refusal, err := cmdauth.CheckState(policy, "", actor, stream, find)
+	if err != nil {
+		return nil, "the command's authorization could not be checked: " + err.Error()
+	}
+	return refusal, ""
+}
+
+// policyCollections is every read model a policy's checks read.
+func policyCollections(p cmdauth.Policy) []string {
+	var out []string
+	if p.Ownership != nil {
+		out = append(out, p.Ownership.Collection)
+	}
+	if p.Scope != nil {
+		out = append(out, p.Scope.ResolveCollection, p.Scope.MemberOfCollection)
+	}
+	return out
+}
+
+// readModelOf is the read model a generated collection is named for.
+func (v *verifier) readModelOf(collection string) ReadModel {
+	for id, rm := range v.doc.ReadModels {
+		if scaffold.SanitizeName(ReadModelCollectionName(rm.Name, id)) == collection {
+			return rm
+		}
+	}
+	return ReadModel{}
+}
+
+// projectedRow is a projected row as a cmdauth.Row.
+type projectedRow map[string]any
+
+func (r projectedRow) GetString(field string) string {
+	switch val := r[scaffold.SanitizeName(field)].(type) {
+	case nil:
+		return ""
+	case string:
+		return val
+	default:
+		return fmt.Sprint(val)
+	}
+}
+
+// firstMatch is the first row, in key order, holding every match; nil when
+// none does.
+func firstMatch(rows map[string]map[string]any, match []cmdauth.Match) cmdauth.Row {
+	keys := make([]string, 0, len(rows))
+	for k := range rows {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		row := projectedRow(rows[k])
+		ok := true
+		for _, m := range match {
+			ok = ok && row.GetString(m.Field) == m.Value
+		}
+		if ok {
+			return row
+		}
+	}
+	return nil
 }
 
 // runViewScenario covers stateView: fold the fixture through the generated

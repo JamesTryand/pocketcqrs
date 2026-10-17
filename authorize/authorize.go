@@ -29,157 +29,32 @@ package authorize
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 	"github.com/jamestryand/pocketcqrs/emschema"
-	"github.com/jamestryand/pocketcqrs/scaffold"
 )
 
-// Key identifies one command's policy — the (aggregate, command) pair a
-// gateway request actually names, e.g. ("support_ticket", "EscalateTicket"), not
-// the document's own kebab-case ids.
-type Key struct {
-	Aggregate string
-	Command   string
-}
+// The policy table's types are package cmdauth's, which evaluates them the
+// same way here and in verify (emschema.Verify).
+type (
+	Key                  = cmdauth.Key
+	Policy               = cmdauth.Policy
+	FieldGatedRolePolicy = cmdauth.FieldGatedRolePolicy
+	OwnershipPolicy      = cmdauth.OwnershipPolicy
+	ScopePolicy          = cmdauth.ScopePolicy
+)
 
-// Policy is one command's declared authorization requirement. At most one
-// of the four fields is non-nil/non-empty per command, mirroring
-// emschema.Command's own requiredRole/fieldGatedRole/requiredOwnership/
-// scope one-for-one — a zero Policy (returned for any (aggregate, command)
-// BuildPolicies never saw) means no requirement, same additive-optional
-// posture the source schema documents throughout.
-type Policy struct {
-	RequiredRole   []string
-	FieldGatedRole *FieldGatedRolePolicy
-	Ownership      *OwnershipPolicy
-	Scope          *ScopePolicy
-}
-
-// FieldGatedRolePolicy is command.fieldGatedRole's resolved shape — see
-// emschema.CommandFieldGatedRole.
-type FieldGatedRolePolicy struct {
-	Field        string
-	Value        any
-	RequiredRole []string
-}
-
-// OwnershipPolicy is command.requiredOwnership's resolved shape.
-// Collection is already resolved from Via.ReadModelID to the actual
-// PocketBase collection name (emschema.ReadModelCollectionName) — the
-// same resolution mapScopes/mapFilters already do for read-model scopes
-// and filters, applied here to a command's own read-model reference.
-type OwnershipPolicy struct {
-	Collection  string
-	KeyField    string
-	OwnerField  string
-	BypassRoles []string
-}
-
-// ScopePolicy is command.scope's resolved shape: two read-model hops,
-// both already resolved to their real collection names.
-type ScopePolicy struct {
-	ResolveCollection  string
-	ResolveKeyField    string
-	ResolveSelectField string
-	MemberOfCollection string
-	MemberOfMatchField string
-	// MemberOfActorField is the field of MemberOfCollection holding a
-	// member's actor id: the document names it (schema 4.0.0).
-	MemberOfActorField string
-	BypassRoles        []string
-}
-
-// BuildPolicies reads every command in doc that declares
-// requiredRole/fieldGatedRole/requiredOwnership/scope into a policy table
-// keyed by (aggregate, command) — the SAME (aggregate, PascalCase command
-// name) pair emschema's own importer (mapping.go's commandName/aggregateFor)
-// derives for a decider imported/scaffolded from the SAME document, so a
-// policy built here lines up with a real deployment's routes without this
-// package needing its own separate naming convention.
-//
-// doc should already be lint-clean (emschema.Lint(doc).Err() == nil) —
-// BuildPolicies does not re-check referential integrity itself (Lint
-// already does, including for the four keywords this package reads; see
-// lintCommandAuth), but it DOES require every command declaring one of the
-// four keywords to carry a non-empty Aggregate tag, since a policy with no
-// aggregate to key on is meaningless here (unlike an ordinary command,
-// where aggregateFor can fall back to an operator-supplied override at
-// import time — this package has no such override mechanism, and a command
-// worth authorizing is a command an operator already knows the aggregate
-// of).
+// BuildPolicies is emschema.CommandPolicies: one document's policy table,
+// keyed by the (aggregate, command) pair a gateway request names.
 func BuildPolicies(doc *emschema.Document) (map[Key]Policy, error) {
-	out := make(map[Key]Policy)
-	for id, cmd := range doc.Commands {
-		if len(cmd.RequiredRole) == 0 && cmd.FieldGatedRole == nil &&
-			cmd.RequiredOwnership == nil && cmd.Scope == nil {
-			continue
-		}
-		if cmd.Aggregate == "" {
-			return nil, fmt.Errorf("authorize: command %q declares an authorization requirement but has no "+
-				"aggregate tag — BuildPolicies cannot key a policy on nothing (unlike an ordinary command "+
-				"import, there is no --aggregate override for this)", id)
-		}
-		key := Key{
-			Aggregate: emschema.LowerFirst(scaffold.SanitizeName(cmd.Aggregate)),
-			Command:   emschema.TypeName(cmd.Name, id),
-		}
-		policy := Policy{RequiredRole: append([]string(nil), cmd.RequiredRole...)}
-
-		if fg := cmd.FieldGatedRole; fg != nil {
-			policy.FieldGatedRole = &FieldGatedRolePolicy{
-				Field: fg.Field, Value: fg.Value,
-				RequiredRole: append([]string(nil), fg.RequiredRole...),
-			}
-		}
-		// stateField ownership (schema 3.15.0) is decided by the aggregate
-		// itself, from its own stream: no policy here reads a projection
-		if own := cmd.RequiredOwnership; own != nil && own.Via != nil {
-			collection, err := resolveCollection(doc, id, "requiredOwnership.via", own.Via.ReadModelID)
-			if err != nil {
-				return nil, err
-			}
-			policy.Ownership = &OwnershipPolicy{
-				Collection: collection, KeyField: own.Via.KeyField, OwnerField: own.Via.OwnerField,
-				BypassRoles: append([]string(nil), own.BypassRoles...),
-			}
-		}
-		if sc := cmd.Scope; sc != nil {
-			resolveCol, err := resolveCollection(doc, id, "scope.resolveVia", sc.ResolveVia.ReadModelID)
-			if err != nil {
-				return nil, err
-			}
-			memberCol, err := resolveCollection(doc, id, "scope.memberOfVia", sc.MemberOfVia.ReadModelID)
-			if err != nil {
-				return nil, err
-			}
-			policy.Scope = &ScopePolicy{
-				ResolveCollection: resolveCol, ResolveKeyField: sc.ResolveVia.KeyField,
-				ResolveSelectField: sc.ResolveVia.SelectField,
-				MemberOfCollection: memberCol, MemberOfMatchField: sc.MemberOfVia.MatchField,
-				MemberOfActorField: sc.MemberOfVia.ActorField,
-				BypassRoles:        append([]string(nil), sc.BypassRoles...),
-			}
-		}
-		out[key] = policy
-	}
-	return out, nil
-}
-
-func resolveCollection(doc *emschema.Document, cmdID, field, readModelID string) (string, error) {
-	rm, ok := doc.ReadModels[readModelID]
-	if !ok {
-		return "", fmt.Errorf("authorize: command %q: %s references read model %q, which does not exist "+
-			"(should have been caught by emschema.Lint already — was doc linted before BuildPolicies?)",
-			cmdID, field, readModelID)
-	}
-	return scaffold.SanitizeName(emschema.ReadModelCollectionName(rm.Name, readModelID)), nil
+	return emschema.CommandPolicies(doc)
 }
 
 // Authorizer evaluates a built policy table against a real request. Both
@@ -202,103 +77,54 @@ type Authorizer struct {
 // Authorize evaluates the declared policy for (aggregate, command), if any.
 // No declared policy (the common case for most commands) returns
 // (true, nil) — unchanged behavior for a document declaring none of these
-// four keywords on this command.
+// four keywords on this command. See cmdauth.Evaluate for how the
+// declarations combine.
 //
-// The declarations combine: EVERY one a command declares must hold (the
-// schema's docs say so, and dotnetcqrs's generated evaluator does the
-// same since 6649745). They are checked in a fixed order (RequiredRole,
-// FieldGatedRole, Ownership, Scope) and the first that fails refuses. A
-// bypass role skips only its own declaration's check, and a field gate
-// whose condition doesn't apply adds no requirement but ends nothing.
+// A refusal is (false, nil), or (false, *cmdauth.Refusal) when the refusing
+// declaration names its own message (a scope's), which the gateway answers
+// with in place of its own.
 func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payload []byte, auth *core.Record) (bool, error) {
 	policy, ok := a.Policies[Key{Aggregate: aggregate, Command: command}]
 	if !ok {
 		return true, nil
 	}
-
-	ownRole := ""
+	ownRole, ownSubjectID := "", ""
 	if a.ResolveOwnRole != nil {
 		ownRole = a.ResolveOwnRole(auth)
 	}
-
-	if len(policy.RequiredRole) > 0 && !containsFold(policy.RequiredRole, ownRole) {
-		return false, nil
-	}
-
-	if fg := policy.FieldGatedRole; fg != nil {
-		var obj map[string]any
-		if len(payload) > 0 {
-			if err := json.Unmarshal(payload, &obj); err != nil {
-				return false, fmt.Errorf("authorize: %s/%s: payload is not a JSON object: %w", aggregate, command, err)
-			}
-		}
-		// a payload lacking the field, or carrying another value, means the
-		// gate adds no requirement
-		if actual, present := obj[fg.Field]; present && valuesEqual(actual, fg.Value) &&
-			!containsFold(fg.RequiredRole, ownRole) {
-			return false, nil
-		}
-	}
-
-	ownSubjectID := ""
 	if a.ResolveOwnSubjectID != nil {
 		ownSubjectID = a.ResolveOwnSubjectID(auth)
 	}
-
-	if own := policy.Ownership; own != nil && !containsFold(own.BypassRoles, ownRole) {
-		rec, err := app.FindFirstRecordByFilter(own.Collection, own.KeyField+" = {:id}", dbx.Params{"id": id})
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil // no such target row -- not authorized, same as dotnetcqrs's "owner is null"
-		}
-		if err != nil {
-			return false, fmt.Errorf("authorize: %s/%s: resolving ownership: %w", aggregate, command, err)
-		}
-		if owner := rec.GetString(own.OwnerField); owner == "" || owner != ownSubjectID {
-			return false, nil
-		}
+	refusal, err := cmdauth.Evaluate(policy, ownRole, ownSubjectID, id, payload, records(app))
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("authorize: %s/%s: %w", aggregate, command, err)
+	case refusal == nil:
+		return true, nil
+	case refusal.Message != "":
+		return false, refusal
 	}
-
-	if sc := policy.Scope; sc != nil && !containsFold(sc.BypassRoles, ownRole) {
-		resolved, err := app.FindFirstRecordByFilter(sc.ResolveCollection, sc.ResolveKeyField+" = {:id}", dbx.Params{"id": id})
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
-			return false, fmt.Errorf("authorize: %s/%s: resolving scope: %w", aggregate, command, err)
-		}
-		selected := resolved.GetString(sc.ResolveSelectField)
-		_, err = app.FindFirstRecordByFilter(sc.MemberOfCollection,
-			sc.MemberOfMatchField+" = {:val} && "+sc.MemberOfActorField+" = {:actor}",
-			dbx.Params{"val": selected, "actor": ownSubjectID})
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
-			return false, fmt.Errorf("authorize: %s/%s: resolving scope membership: %w", aggregate, command, err)
-		}
-	}
-
-	return true, nil
+	return false, nil
 }
 
-func containsFold(roles []string, role string) bool {
-	if role == "" {
-		return false
-	}
-	for _, r := range roles {
-		if strings.EqualFold(r, role) {
-			return true
+// records is a cmdauth.Lookup over app's collections.
+func records(app core.App) cmdauth.Lookup {
+	return func(collection string, match ...cmdauth.Match) (cmdauth.Row, error) {
+		sort.Slice(match, func(i, j int) bool { return match[i].Field < match[j].Field })
+		clauses := make([]string, len(match))
+		params := dbx.Params{}
+		for i, m := range match {
+			name := fmt.Sprintf("p%d", i)
+			clauses[i] = m.Field + " = {:" + name + "}"
+			params[name] = m.Value
 		}
+		rec, err := app.FindFirstRecordByFilter(collection, strings.Join(clauses, " && "), params)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return rec, nil
 	}
-	return false
-}
-
-// valuesEqual compares a decoded JSON payload value against a
-// CommandFieldGatedRole.Value the same way — string/bool/number — the
-// generated evaluators everywhere else in this proposal do: a JSON-level
-// literal match, not a type-coercing one. encoding/json decodes both sides'
-// numbers as float64, so a plain == is correct for all three JSON value
-// kinds the schema allows here.
-func valuesEqual(actual, want any) bool {
-	return actual == want
 }

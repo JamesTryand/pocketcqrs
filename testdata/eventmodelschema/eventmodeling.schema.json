@@ -475,6 +475,11 @@
             }
           },
           "additionalProperties": false
+        },
+        "message": {
+          "description": "4.0.0: the refusal's message when the actor is not a member (a bypass role skips the check, and with it the message).",
+          "type": "string",
+          "minLength": 1
         }
       },
       "additionalProperties": false

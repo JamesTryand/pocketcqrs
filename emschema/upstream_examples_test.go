@@ -121,16 +121,14 @@ func TestUpstreamRefusalsExample(t *testing.T) {
 // aggregate deciding who owns it from its own state, refusing anyone else
 // with the declared message; scenarios name their actor. Since 4.0.0 it
 // also declares a command scope (approve-loan-request, memberOfVia with
-// actorField).
+// actorField and the refusal's message). Verify runs the command's
+// authorization before its decider, so the scope refuses a volunteer at
+// another branch with that message.
 //
-// Two of its scenarios do not pass, and this test pins exactly how, so a
-// change to either shows up here:
-//   - no-such-loan-request expects "loan request does not exist"; the
-//     generated existence check names the aggregate as written
-//     ("loanRequest does not exist").
-//   - volunteer-at-another-branch-is-refused expects the scope to refuse;
-//     verify runs only the decider, and a command scope is enforced by
-//     package authorize at the gateway, so the decider accepts.
+// One of its scenarios does not pass, and this test pins exactly how, so a
+// change shows up here: no-such-loan-request expects "loan request does not
+// exist"; the generated existence check names the aggregate as written
+// ("loanRequest does not exist").
 func TestUpstreamStateOwnershipExample(t *testing.T) {
 	doc, err := Load(fixture(t, "examples/state-ownership.json"))
 	if err != nil {
@@ -145,8 +143,7 @@ func TestUpstreamStateOwnershipExample(t *testing.T) {
 		t.Fatal(err)
 	}
 	known := map[string]string{
-		"no-such-loan-request":                   `got "loanRequest does not exist"`,
-		"volunteer-at-another-branch-is-refused": "but the command was accepted",
+		"no-such-loan-request": `got "loanRequest does not exist"`,
 	}
 	seen := 0
 	for _, r := range results {

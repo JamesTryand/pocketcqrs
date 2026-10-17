@@ -1,11 +1,13 @@
 package authorize
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
 
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 	"github.com/jamestryand/pocketcqrs/emschema"
 )
 
@@ -31,6 +33,7 @@ func testDoc() *emschema.Document {
 					BypassRoles: []string{"supervisor"},
 					ResolveVia:  emschema.CommandScopeResolveVia{ReadModelID: "orders", KeyField: "orderId", SelectField: "regionId"},
 					MemberOfVia: emschema.CommandScopeMemberOfVia{ReadModelID: "region-members", MatchField: "regionId", ActorField: "memberId"},
+					Message:     "only a member of the order's region may flag it",
 				}},
 			"place-order": {Name: "Place Order", Aggregate: "order"}, // no declaration at all
 		},
@@ -74,7 +77,8 @@ func TestBuildPolicies(t *testing.T) {
 	if flag.Scope == nil || flag.Scope.ResolveCollection != "orders" || flag.Scope.ResolveKeyField != "orderId" ||
 		flag.Scope.ResolveSelectField != "regionId" || flag.Scope.MemberOfCollection != "regionMembers" ||
 		flag.Scope.MemberOfMatchField != "regionId" || flag.Scope.MemberOfActorField != "memberId" ||
-		len(flag.Scope.BypassRoles) != 1 || flag.Scope.BypassRoles[0] != "supervisor" {
+		len(flag.Scope.BypassRoles) != 1 || flag.Scope.BypassRoles[0] != "supervisor" ||
+		flag.Scope.Message != "only a member of the order's region may flag it" {
 		t.Errorf("FlagOrder: unexpected scope: %+v", flag.Scope)
 	}
 
@@ -306,6 +310,36 @@ func TestAuthorize_Scope(t *testing.T) {
 	ok, err = a.Authorize(app, "order", "FlagOrder", "does-not-exist", nil, nil)
 	if err != nil || ok {
 		t.Fatalf("a nonexistent target should be refused cleanly, got ok=%v err=%v", ok, err)
+	}
+}
+
+// A scope declaring its message (schema 4.0.0) refuses with it, as a
+// *cmdauth.Refusal the gateway answers 403 with; a member is still allowed.
+func TestAuthorize_ScopeRefusesWithItsMessage(t *testing.T) {
+	app := newTestApp(t)
+	orders := mustCreateCollection(t, app, "orders", "orderId", "regionId")
+	mustInsertRow(t, app, orders, map[string]string{"orderId": "o1", "regionId": "north"})
+	members := mustCreateCollection(t, app, "regionMembers", "regionId", "memberId")
+	mustInsertRow(t, app, members, map[string]string{"regionId": "north", "memberId": "m1"})
+
+	const message = "only a member of the order's region may flag it"
+	a := &Authorizer{
+		Policies: map[Key]Policy{{"order", "FlagOrder"}: {Scope: &ScopePolicy{
+			ResolveCollection: "orders", ResolveKeyField: "orderId", ResolveSelectField: "regionId",
+			MemberOfCollection: "regionMembers", MemberOfMatchField: "regionId", MemberOfActorField: "memberId",
+			Message: message,
+		}}},
+		ResolveOwnSubjectID: func(*core.Record) string { return "m2" },
+	}
+	ok, err := a.Authorize(app, "order", "FlagOrder", "o1", nil, nil)
+	var refusal *cmdauth.Refusal
+	if ok || !errors.As(err, &refusal) || refusal.Message != message {
+		t.Fatalf("a non-member should be refused with the scope's message, got ok=%v err=%v", ok, err)
+	}
+
+	a.ResolveOwnSubjectID = func(*core.Record) string { return "m1" }
+	if ok, err := a.Authorize(app, "order", "FlagOrder", "o1", nil, nil); err != nil || !ok {
+		t.Fatalf("a member of the order's region should be authorized, got ok=%v err=%v", ok, err)
 	}
 }
 
