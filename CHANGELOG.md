@@ -3,7 +3,7 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased
+## v0.15.0 — schema 4.0.0, the erasure split, verify runs authorization
 
 ### Security
 
