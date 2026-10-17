@@ -3,7 +3,12 @@
 Fixtures for the eventmodelschema import/export. Copied verbatim, unmodified.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
-- **Commit**: `aa14961`, *"4.0.0: optional command.scope.message, the
+- **Commit**: `f475947`, *"Schema 4.1.0: when.role, the role a command
+  scenario's actor holds"* (untagged). Copied 2026-10-18: the schema,
+  `state-ownership.json` (the approval scope's `bypassRoles: ["coordinator"]`
+  and a scenario of a coordinator approving with `when.role`) and the
+  changelog; nothing else changed upstream. 4.1.0 is additive.
+- **Before that**: `aa14961`, *"4.0.0: optional command.scope.message, the
   refusal's own message"* (untagged). Copied 2026-10-17: the schema and
   `state-ownership.json`, whose `approve-loan-request` scope now declares the
   message its refusal scenario expects; nothing else changed upstream.

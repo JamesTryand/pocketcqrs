@@ -479,7 +479,7 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	}
 	meta := commandMeta(ref)
 	actor, _ := meta["actor"].(string)
-	refusal, authProblem := v.authorize(sc, ref.CommandID, stream, actor)
+	refusal, authProblem := v.authorize(sc, ref.CommandID, stream, actor, ref.Role, payload)
 	run, problem, missing := v.decide(sc.ID, aggregate, stream, own, decider.Command{Name: cmdName, Payload: payload}, meta)
 	switch {
 	case missing:
@@ -607,12 +607,14 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 // decider, as the gateway does (cmdauth), over read models built from the
 // scenario's given events.
 //
-// A scenario names its actor, not a role: like a view scenario naming no
-// caller, it runs as a caller holding the command's required roles and none
-// of its bypass roles. So the checks that can refuse are the ones about who
-// the actor is: ownership through a read model, and scope. The problem is a
-// read model that could not be built.
-func (v *verifier) authorize(sc Scenario, commandID, stream, actor string) (*cmdauth.Refusal, string) {
+// A scenario naming its actor's role (schema 4.1.0 when.role) runs every
+// declaration with it: the role declarations must admit it, and a bypass
+// role skips its own declaration. Without one, like a view scenario naming
+// no caller, it runs as a caller holding the command's required roles and
+// none of its bypass roles, so the checks that can refuse are the ones about
+// who the actor is: ownership through a read model, and scope. The problem
+// is a read model that could not be built.
+func (v *verifier) authorize(sc Scenario, commandID, stream, actor, role string, payload []byte) (*cmdauth.Refusal, string) {
 	policy, declared, err := CommandPolicy(v.doc, commandID)
 	if err != nil {
 		return nil, err.Error()
@@ -648,7 +650,12 @@ func (v *verifier) authorize(sc Scenario, commandID, stream, actor string) (*cmd
 		}
 		return firstMatch(got, match), nil
 	}
-	refusal, err := cmdauth.CheckState(policy, "", actor, stream, find)
+	var refusal *cmdauth.Refusal
+	if role != "" {
+		refusal, err = cmdauth.Evaluate(policy, role, actor, stream, payload, find)
+	} else {
+		refusal, err = cmdauth.CheckState(policy, "", actor, stream, find)
+	}
 	if err != nil {
 		return nil, "the command's authorization could not be checked: " + err.Error()
 	}

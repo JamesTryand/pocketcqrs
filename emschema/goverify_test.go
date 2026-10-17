@@ -132,7 +132,7 @@ func TestGoVerifyRowsPerListItem(t *testing.T) {
 // Upstream's state-ownership.json through the Go projections: the command's
 // scope reads read models built from the given events, both hops of them,
 // so a volunteer at the request's branch approves and one at another branch
-// is refused with the scope's message.
+// is refused with the scope's message, and a coordinator (when.role) bypasses it.
 func TestGoVerifyCommandScope(t *testing.T) {
 	doc, mapped := loadMapped(t, fixture(t, "examples/state-ownership.json"))
 	results := goVerify(t, doc, mapped, "")
@@ -142,6 +142,10 @@ func TestGoVerifyCommandScope(t *testing.T) {
 	if r := results["volunteer-at-another-branch-is-refused"]; !r.Passed ||
 		!strings.Contains(r.Detail, "refused by the command's authorization") {
 		t.Errorf("volunteer-at-another-branch-is-refused: passed=%v: %s", r.Passed, r.Detail)
+	}
+	// schema 4.1.0 when.role: the coordinator's role bypasses the scope
+	if r := results["coordinator-approves-at-any-branch"]; !r.Passed {
+		t.Errorf("coordinator-approves-at-any-branch: %s", r.Detail)
 	}
 }
 

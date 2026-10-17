@@ -267,9 +267,12 @@ lacks fails even when some other rule refuses first. A command scenario's
 authorization runs as the gateway runs it (package `cmdauth`), over read
 models projected from the scenario's `given` events: an ownership `via` or a
 `scope` that refuses the actor refuses the command, with the scope's
-`message` (4.0.0) when it declares one. A command scenario names an actor,
-not a role, so it holds the command's required roles and none of its bypass
-roles. `stateView` scenarios fold the fixture
+`message` (4.0.0) when it declares one. A command scenario may name the
+role its actor holds (`when.role`, 4.1.0): then every declaration runs with
+it, so `requiredRole` and `fieldGatedRole` must admit it (refusing with
+"not authorized to issue <Command> on <aggregate>") and a declaration whose
+`bypassRoles` name it is skipped. Without a role, the actor holds the
+command's required roles and none of its bypass roles. `stateView` scenarios fold the fixture
 through the generated projection and query the resulting rows. A `stateView`
 scenario naming a `when.caller` (3.8.0) reads as that caller: the rows are
 loaded, with the collections a granting scope joins, into a scratch PocketBase

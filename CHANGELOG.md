@@ -3,6 +3,19 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased — schema 4.1.0
+
+### Added
+
+- **A command scenario can name its actor's role (schema 4.1.0 `when.role`).** Verify runs the
+  command's authorization with it, as the gateway runs it with the caller's role: `requiredRole` and
+  `fieldGatedRole` must admit it, and a `requiredOwnership` or `scope` whose `bypassRoles` name it is
+  skipped. Before, a scenario held the command's required roles and none of its bypass roles, so a
+  scenario about a bypassing role (a manager acting on any project's entries) was refused, and one
+  about a refused role could not be written. A scenario without a role means what it did. The
+  importer reads `when.role` (it refused the key before, failing closed), and an export declares
+  4.1.0.
+
 ## v0.15.0 — schema 4.0.0, the erasure split, verify runs authorization
 
 ### Security

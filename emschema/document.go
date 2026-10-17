@@ -541,6 +541,12 @@ type CommandRef struct {
 	// a rule may read them.
 	Actor string `json:"actor,omitempty"`
 	At    string `json:"at,omitempty"`
+	// Role (schema 4.1.0) is the role the actor holds, as the host would
+	// resolve it from the caller: the verifier runs the command's
+	// authorization with it, so its role declarations must admit it and
+	// its bypass roles apply. Empty, the actor holds the command's
+	// required roles and none of its bypass roles.
+	Role string `json:"role,omitempty"`
 }
 
 // ReadModelQuery is a stateView scenario's `when`.
@@ -628,8 +634,12 @@ type Hotspot struct {
 // 4.0.0 (breaking: command.scope.memberOfVia requires actorField, the field
 // of the membership read model compared with the command's actor) was
 // vendored on 2026-10-16, with upstream's examples rewritten in neutral
-// domains. An export declares 4.0.0.
-const SchemaVersion = "4.0.0"
+// domains.
+//
+// 4.1.0 (additive: a command scenario's when.role, the role its actor holds,
+// which verify runs the command's authorization with) was vendored on
+// 2026-10-18. An export declares 4.1.0.
+const SchemaVersion = "4.1.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

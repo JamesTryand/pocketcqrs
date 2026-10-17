@@ -3,6 +3,18 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 4.1.0
+
+**Additive (non-breaking):**
+- `when.role` on a command scenario (`stateChange` or `error`): the role the actor holds when sending the command,
+  as a view scenario's `caller.role` already is for a query. A check runs the command's authorization with it:
+  `requiredRole` and `fieldGatedRole` must admit it, and a `requiredOwnership` or `scope` whose `bypassRoles` name
+  it is skipped. Without it a scenario means what it did: an actor holding the command's required roles and none of
+  its bypass roles. So a scenario can now show a bypassing role at work (a coordinator approving at any branch), and
+  a role being refused.
+- `examples/state-ownership.json`: the approval scope has `bypassRoles: ["coordinator"]`, with a scenario of a
+  coordinator approving at a branch they don't volunteer at.
+
 ## 4.0.0
 
 **Breaking:**
@@ -12,10 +24,14 @@ See `docs/design-notes.md` for the full rationale behind each change.
   field, so which field held the member was left to each generator's convention. A 3.x document with a `scope` must
   add `actorField`; any other 3.x document validates unchanged.
 
+**Additive (non-breaking):**
+- `command.scope.message`: the refusal's message when the actor is not a member. A generator's authorization
+  refuses with it, so a scenario can expect a scope refusal by its message, as it does any other.
+
 **Examples:**
 - The examples describe neutral domains (equipment hire, a support desk, a venue's bookings, a grant fund, delivery
   runs, a tool library). They demonstrate the same features as before.
-- `examples/state-ownership.json` also demonstrates a command `scope` with `actorField`.
+- `examples/state-ownership.json` also demonstrates a command `scope` with `actorField` and `message`.
 
 **Clarified:** a command's authorization declarations (`requiredRole`, `fieldGatedRole`, `requiredOwnership`,
 `scope`) combine: every one declared must hold. See `docs/design-notes.md`.

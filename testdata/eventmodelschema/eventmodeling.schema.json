@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "4.0.0"
+      "default": "4.1.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -808,6 +808,11 @@
         "commandId": { "$ref": "#/$defs/id" },
         "data": { "type": "object" },
         "actor": { "type": "string", "minLength": 1 },
+        "role": {
+          "description": "4.1.0: the role the actor holds when sending the command, as a host resolves it from the caller (a view scenario's caller.role is the same thing). A check runs the command's authorization with it: requiredRole and fieldGatedRole must admit it, and a requiredOwnership or scope whose bypassRoles name it is skipped. Without it, the actor holds the command's required roles and none of its bypass roles, as before 4.1.0.",
+          "type": "string",
+          "minLength": 1
+        },
         "at": { "type": "string", "format": "date-time" }
       },
       "additionalProperties": false

@@ -1,9 +1,9 @@
 {
   "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
-  "eventModelingSchemaVersion": "4.0.0",
+  "eventModelingSchemaVersion": "4.1.0",
   "id": "state-ownership-example",
   "name": "State Ownership Example",
-  "description": "Ownership decided by the aggregate (3.15.0): a tool library's loan request is changed or withdrawn only by the member who made it, which the request's own state knows from its own events. No read model is consulted, so the first change after requesting is never refused while a read model catches up, and the check can't be stale. For contrast, approving a request is scoped (commandScope): the request's branch is resolved from its read-model row, and the approver must be a volunteer at that branch, where memberOfVia's actorField (4.0.0) names the branch-volunteers field compared with the command's actor.",
+  "description": "Ownership decided by the aggregate (3.15.0): a tool library's loan request is changed or withdrawn only by the member who made it, which the request's own state knows from its own events. No read model is consulted, so the first change after requesting is never refused while a read model catches up, and the check can't be stale. For contrast, approving a request is scoped (commandScope): the request's branch is resolved from its read-model row, and the approver must be a volunteer at that branch, where memberOfVia's actorField (4.0.0) names the branch-volunteers field compared with the command's actor. A coordinator's role bypasses the scope, and a scenario says so with when.role (4.1.0).",
   "swimlanes": [
     { "id": "loans", "name": "Loans", "kind": "team" }
   ],
@@ -90,6 +90,7 @@
           "matchField": "branchId",
           "actorField": "volunteerId"
         },
+        "bypassRoles": ["coordinator"],
         "message": "only a volunteer at this loan request's branch may approve it"
       }
     }
@@ -214,6 +215,15 @@
           ],
           "when": { "commandId": "approve-loan-request", "data": {}, "actor": "v2" },
           "then": { "error": { "message": "only a volunteer at this loan request's branch may approve it" } }
+        },
+        {
+          "id": "coordinator-approves-at-any-branch", "name": "A coordinator approves a request at a branch they don't volunteer at: their role bypasses the scope", "kind": "stateChange",
+          "given": [
+            { "eventId": "loan-requested", "data": { "loanRequestId": "r1", "memberId": "m1", "toolId": "t1", "branchId": "b1", "loanDays": 3 } },
+            { "eventId": "volunteer-joined-branch", "data": { "enrolmentId": "b1:v1", "branchId": "b1", "volunteerId": "v1" } }
+          ],
+          "when": { "commandId": "approve-loan-request", "data": {}, "actor": "c1", "role": "coordinator" },
+          "then": { "events": [{ "eventId": "loan-request-approved", "data": { "approvedBy": "c1" } }] }
         }
       ]
     }
