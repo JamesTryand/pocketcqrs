@@ -3,7 +3,7 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased — schema 4.1.0
+## v0.16.0 — schema 4.1.0, a scenario names its actor's role
 
 ### Added
 
