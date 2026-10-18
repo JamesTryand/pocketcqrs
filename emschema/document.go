@@ -50,6 +50,25 @@ type Document struct {
 	Automations                map[string]Chapter   `json:"automations,omitempty"`
 	Slices                     []Slice              `json:"slices"`
 	Hotspots                   map[string]Hotspot   `json:"hotspots,omitempty"`
+	DataSubjects               *DataSubjects        `json:"dataSubjects,omitempty"`
+}
+
+// DataSubjects is the document-wide dataSubjects (schema 3.2.0): rules for
+// the runtime's built-in dataSubject aggregate (package pii), which no
+// document declares as an aggregate of its own.
+type DataSubjects struct {
+	Erasure *ErasureAuthorization `json:"erasure,omitempty"`
+}
+
+// ErasureAuthorization is dataSubjects.erasure: who may REQUEST a subject's
+// erasure (schema 3.7.1). Self lets a caller request their own subject id's
+// (resolved through Via when set: the subject ids, KeyField, of the rows
+// whose OwnerField is the caller); Roles may request any subject's. It never
+// authorises the erasure itself, nor holding or approving a request.
+type ErasureAuthorization struct {
+	Self  bool                 `json:"self,omitempty"`
+	Roles []string             `json:"roles,omitempty"`
+	Via   *CommandOwnershipVia `json:"via,omitempty"`
 }
 
 // Swimlane is a team or system lane. Organisational, NOT an aggregate —

@@ -19,6 +19,8 @@ type Manifest struct {
 	Swimlanes                  []Swimlane        `json:"swimlanes"`
 	Registries                 map[string]string `json:"registries,omitempty"`
 	Slices                     []string          `json:"slices,omitempty"`
+	// DataSubjects is inline in the manifest, not a registry (schema 3.2.0).
+	DataSubjects *DataSubjects `json:"dataSubjects,omitempty"`
 }
 
 // Load reads a document from path, which may be either a single JSON
@@ -78,6 +80,7 @@ func LoadManifest(dir string) (*Document, error) {
 		Name:                       m.Name,
 		Description:                m.Description,
 		Swimlanes:                  m.Swimlanes,
+		DataSubjects:               m.DataSubjects,
 	}
 
 	// registry paths are relative to the manifest's own directory, and a

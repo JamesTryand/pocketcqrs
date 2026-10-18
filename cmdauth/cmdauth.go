@@ -186,6 +186,43 @@ func CheckState(p Policy, role, subjectID, id string, find Lookup) (*Refusal, er
 	return nil, nil
 }
 
+// ErasureRequestPolicy is dataSubjects.erasure's resolved shape (schema
+// 3.2.0, 3.7.1): who may request a subject's erasure. Self admits a caller
+// for their own subject id, or, with Via, for any subject id whose row
+// (Via.KeyField) names them (Via.OwnerField); Roles admit a caller for any
+// subject. Via's BypassRoles are unused.
+type ErasureRequestPolicy struct {
+	Self  bool
+	Roles []string
+	Via   *OwnershipPolicy
+}
+
+// MayRequestErasure says whether a caller holding role, whose own subject id
+// is subjectID, may request the erasure of subject. A nil rule admits no one:
+// erasure can't be undone, so a document that declares nothing lets no one
+// ask through it.
+func MayRequestErasure(rule *ErasureRequestPolicy, role, subjectID, subject string, find Lookup) (bool, error) {
+	if rule == nil {
+		return false, nil
+	}
+	if containsFold(rule.Roles, role) {
+		return true, nil
+	}
+	if !rule.Self || subjectID == "" {
+		return false, nil
+	}
+	if rule.Via == nil {
+		return subjectID == subject, nil
+	}
+	// several rows may name the caller (a returning person has a new subject
+	// id): any of them will do
+	row, err := find(rule.Via.Collection, Match{rule.Via.KeyField, subject}, Match{rule.Via.OwnerField, subjectID})
+	if err != nil {
+		return false, fmt.Errorf("resolving erasure via: %w", err)
+	}
+	return row != nil, nil
+}
+
 func containsFold(roles []string, role string) bool {
 	if role == "" {
 		return false

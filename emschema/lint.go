@@ -97,6 +97,7 @@ func Lint(doc *Document) *Report {
 	for id, c := range doc.Commands {
 		lintCommandAuth(doc, id, c, r)
 	}
+	lintDataSubjects(doc, r)
 
 	checkPII(doc, r)
 	notePII(doc, r)
@@ -351,6 +352,59 @@ func lintCommandAuth(doc *Document, id string, c Command, r *Report) {
 				id, sc.MemberOfVia.ReadModelID)
 		}
 	}
+}
+
+// lintDataSubjects checks dataSubjects.erasure (schema 3.2.0): the read model
+// its via names, which the schema cannot verify, and that the document has
+// a data subject to erase at all.
+func lintDataSubjects(doc *Document, r *Report) {
+	e := doc.DataSubjects.erasureOrNil()
+	if e == nil {
+		return
+	}
+	if !e.Self && len(e.Roles) == 0 {
+		r.errorf("dataSubjects.erasure names neither self nor roles; leave it out to let no one request erasure")
+	}
+	if v := e.Via; v != nil {
+		switch {
+		case !e.Self:
+			r.errorf("dataSubjects.erasure.via goes with self: true only")
+		case v.ReadModelID == "" || v.KeyField == "" || v.OwnerField == "":
+			r.errorf("dataSubjects.erasure.via is missing one of readModelId/keyField/ownerField")
+		default:
+			if _, ok := doc.ReadModels[v.ReadModelID]; !ok {
+				r.errorf("dataSubjects.erasure.via references read model %q, which does not exist", v.ReadModelID)
+			}
+		}
+	}
+	if !hasPIIField(doc) {
+		r.warnf("dataSubjects.erasure is declared but no field is marked pii, so there is no data subject to erase")
+	}
+}
+
+func (d *DataSubjects) erasureOrNil() *ErasureAuthorization {
+	if d == nil {
+		return nil
+	}
+	return d.Erasure
+}
+
+func hasPIIField(doc *Document) bool {
+	for _, e := range doc.Events {
+		for _, f := range e.Fields {
+			if f.PII {
+				return true
+			}
+		}
+	}
+	for _, rm := range doc.ReadModels {
+		for _, f := range rm.Fields {
+			if f.PII {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // notePII names every pii field and what happens to it, so an operator

@@ -60,7 +60,6 @@ func (e *UnsupportedError) Error() string {
 // table: an unknown key is refused whether or not it is listed here.
 var laterFeatures = map[string]string{
 	"via":           "selfAccess.via, a subject id resolved through a read model (schema 3.2.0)",
-	"dataSubjects":  "dataSubjects.erasure, who may request erasure (schema 3.2.0)",
 	"ingresses":     "an ingress (schema 3.4.0)",
 	"ingressId":     "a slice started by an ingress (schema 3.4.0)",
 	"delay":         "an automation started by a delay (schema 3.5.0)",

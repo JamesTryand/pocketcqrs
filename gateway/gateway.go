@@ -125,7 +125,9 @@ type Config struct {
 	// error path already takes). Nil (the default) means every
 	// authenticated caller may issue every command — today's unchanged
 	// behavior for a deployment that wires nothing here, or for any command
-	// a wired Authorizer's own table has no policy for. Not consulted at
+	// a wired Authorizer's own table has no policy for (except the built-in
+	// dataSubject aggregate's, which the gateway refuses with no hook and the
+	// Authorizer refuses unless dataSubjects.erasure admits them). Not consulted at
 	// all when cfg.Forward is set (the destination decides; see the top of
 	// RegisterRoutes's handler).
 	Authorize func(re *core.RequestEvent, aggregate, command, id string, payload []byte) (bool, error)

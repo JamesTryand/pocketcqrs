@@ -3,6 +3,25 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased — who may request erasure, declared in the document
+
+### Added
+
+- **`dataSubjects.erasure` (schema 3.2.0, 3.7.1) is imported and enforced.** It says who may send
+  `RequestErasure`: `self` for a caller's own subject id (or, with `via`, the subject ids a read
+  model says the caller owns), `roles` for any subject's. `authorize.BuildErasureRequest(doc)` reads
+  it into the new `Authorizer.ErasureRequest`; lint checks its `via` and warns when the document has
+  no `pii` field. A split document keeps it from its manifest. The importer refused the key before.
+
+### Changed
+
+- **The `Authorizer` refuses every `dataSubject` command its document doesn't admit.** Before, a
+  command with no policy was allowed, so wiring an `Authorizer` let any caller erase anyone, hold,
+  approve or place a legal hold. Now the declaration admits `RequestErasure` only, and without it no
+  one. A host that lets administrators erase directly, hold or approve decides so in its own
+  `Config.Authorize` before calling the `Authorizer` (`docs/personal-data.md`). Other commands are
+  unchanged.
+
 ## v0.16.0 — schema 4.1.0, a scenario names its actor's role
 
 ### Added

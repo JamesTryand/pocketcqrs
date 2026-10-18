@@ -39,6 +39,7 @@ import (
 
 	"github.com/jamestryand/pocketcqrs/cmdauth"
 	"github.com/jamestryand/pocketcqrs/emschema"
+	"github.com/jamestryand/pocketcqrs/pii"
 )
 
 // The policy table's types are package cmdauth's, which evaluates them the
@@ -68,10 +69,20 @@ func BuildPolicies(doc *emschema.Document) (map[Key]Policy, error) {
 // nil, in which case the corresponding resolved value is "" — the same
 // "no actor" posture an anonymous caller already produces if
 // gateway.Config.AllowAnonymous permits the request through at all.
+//
+// ErasureRequest is the document's dataSubjects.erasure
+// (BuildErasureRequest): who may request a subject's erasure. Nil lets no one.
 type Authorizer struct {
 	Policies            map[Key]Policy
+	ErasureRequest      *cmdauth.ErasureRequestPolicy
 	ResolveOwnRole      func(auth *core.Record) string
 	ResolveOwnSubjectID func(auth *core.Record) string
+}
+
+// BuildErasureRequest is emschema.ErasureRequestPolicy: one document's
+// dataSubjects.erasure, for Authorizer.ErasureRequest.
+func BuildErasureRequest(doc *emschema.Document) (*cmdauth.ErasureRequestPolicy, error) {
+	return emschema.ErasureRequestPolicy(doc)
 }
 
 // Authorize evaluates the declared policy for (aggregate, command), if any.
@@ -80,20 +91,38 @@ type Authorizer struct {
 // four keywords on this command. See cmdauth.Evaluate for how the
 // declarations combine.
 //
+// The built-in dataSubject aggregate (package pii) is the exception: erasure
+// can't be undone, so its commands are refused unless ErasureRequest admits
+// one, and it only ever admits RequestErasure (schema 3.7.1). Erasing
+// directly, holding, approving and legal holds are each host's own policy,
+// never a document's: a host that allows them decides so in its own
+// gateway.Config.Authorize before calling this.
+//
 // A refusal is (false, nil), or (false, *cmdauth.Refusal) when the refusing
 // declaration names its own message (a scope's), which the gateway answers
 // with in place of its own.
 func (a *Authorizer) Authorize(app core.App, aggregate, command, id string, payload []byte, auth *core.Record) (bool, error) {
-	policy, ok := a.Policies[Key{Aggregate: aggregate, Command: command}]
-	if !ok {
-		return true, nil
-	}
 	ownRole, ownSubjectID := "", ""
 	if a.ResolveOwnRole != nil {
 		ownRole = a.ResolveOwnRole(auth)
 	}
 	if a.ResolveOwnSubjectID != nil {
 		ownSubjectID = a.ResolveOwnSubjectID(auth)
+	}
+	if strings.EqualFold(aggregate, pii.SubjectAggregate) {
+		if command != pii.RequestErasureCommand {
+			return false, nil
+		}
+		ok, err := cmdauth.MayRequestErasure(a.ErasureRequest, ownRole, ownSubjectID, id, records(app))
+		if err != nil {
+			return false, fmt.Errorf("authorize: %s/%s: %w", aggregate, command, err)
+		}
+		return ok, nil
+	}
+
+	policy, ok := a.Policies[Key{Aggregate: aggregate, Command: command}]
+	if !ok {
+		return true, nil
 	}
 	refusal, err := cmdauth.Evaluate(policy, ownRole, ownSubjectID, id, payload, records(app))
 	switch {

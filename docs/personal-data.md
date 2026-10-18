@@ -160,8 +160,35 @@ bounded lag** (it is a projection of the event), not instant effect.
 **Erasure is closed until you decide who may do it.** With no `Authorize` hook on the gateway,
 every command is allowed, so the gateway refuses every `dataSubject` command with `403` and records
 nothing. Wire `gateway.Config.Authorize` with a policy saying who may erase whom (an administrator
-role, say). Once a hook is wired, `dataSubject` commands go through it like any other command. A
-document can't declare this yet: schema 3.2.0's `dataSubjects` is refused on import.
+role, say). Once a hook is wired, `dataSubject` commands go through it like any other command.
+
+**Who may ask can be declared in the document.** `dataSubjects.erasure` (schema 3.2.0) says who may
+send `RequestErasure`: `self: true` for a caller's own subject id, `roles` for any subject's, and
+with `via` the subject ids a read model says the caller owns (a person who came back after an
+erasure has a new subject id):
+
+```json
+"dataSubjects": { "erasure": { "self": true, "roles": ["support"] } }
+```
+
+`authorize.BuildErasureRequest(doc)` reads it into `Authorizer.ErasureRequest`. The `Authorizer` is
+the one place "no policy allows it" does not hold: **every `dataSubject` command is refused unless
+the declaration admits it, and it only ever admits `RequestErasure`** (schema 3.7.1). Without the
+declaration, no one may ask, so wiring an `Authorizer` can't open erasure by accident. Holding,
+approving, legal holds and erasing directly are never a document's to declare: a host that allows
+them decides so in its own `Config.Authorize`, before handing the rest to the `Authorizer`:
+
+```go
+rule, err := authorize.BuildErasureRequest(doc)
+az := &authorize.Authorizer{Policies: policies, ErasureRequest: rule,
+	ResolveOwnRole: ownRole, ResolveOwnSubjectID: ownSubjectID}
+cfg.Authorize = func(re *core.RequestEvent, aggregate, command, id string, payload []byte) (bool, error) {
+	if strings.EqualFold(aggregate, pii.SubjectAggregate) && command != pii.RequestErasureCommand {
+		return isAdministrator(re.Auth), nil // your own rule
+	}
+	return az.Authorize(re.App, aggregate, command, id, payload, re.Auth)
+}
+```
 
 ## Requests, and governing them
 

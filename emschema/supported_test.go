@@ -47,7 +47,6 @@ func wantRefused(t *testing.T, got []string, want ...string) {
 func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 	cases := map[string][]string{
 		"examples/order-fulfillment.json": {
-			"/dataSubjects",
 			"/ingresses",
 			"/partitioning",
 			"/slices/5/scenarios/0/given/1/elapsed",
@@ -162,8 +161,9 @@ func TestExampleDataIsNotChecked(t *testing.T) {
 	}
 }
 
-// A split document is checked file by file: the manifest (3.2.0 and 3.7.0
-// put dataSubjects and partitioning inline there) and every slice file.
+// A split document is checked file by file: the manifest and every slice
+// file. (Its inline dataSubjects is supported: see
+// TestSplitDocumentCarriesDataSubjects.)
 func TestSplitDocumentIsCheckedToo(t *testing.T) {
 	dir := t.TempDir()
 	write := func(rel, body string) {
@@ -177,14 +177,12 @@ func TestSplitDocumentIsCheckedToo(t *testing.T) {
 	}
 	write("manifest.json", `{"eventModelingSchemaVersion":"3.17.0","id":"d","name":"D",
 		"swimlanes":[{"id":"s","name":"S","kind":"team"}],
-		"dataSubjects":{"erasure":{"self":true}},
 		"registries":{"commands":"commands.json"},
 		"slices":["slices/a.json"]}`)
 	write("commands.json", `{"c":{"name":"C","partitioned":false}}`)
 	write("slices/a.json", `{"id":"a","name":"A","pattern":"stateChange","swimlaneId":"s","status":"planned",
 		"commandId":"c","eventIds":[],"partitionFrom":"shopId","scenarios":[]}`)
 	wantRefused(t, refusedAt(t, dir),
-		"manifest.json/dataSubjects",
 		"commands.json/c/partitioned",
 		"slices/a.json/partitionFrom")
 }

@@ -97,6 +97,29 @@ func CommandPolicy(doc *Document, id string) (cmdauth.Policy, bool, error) {
 	return policy, true, nil
 }
 
+// ErasureRequestPolicy reads doc's dataSubjects.erasure: who may request a
+// subject's erasure. Nil when the document declares none, and then no one
+// may. doc should already be lint-clean (see lintDataSubjects).
+func ErasureRequestPolicy(doc *Document) (*cmdauth.ErasureRequestPolicy, error) {
+	e := doc.DataSubjects.erasureOrNil()
+	if e == nil {
+		return nil, nil
+	}
+	rule := &cmdauth.ErasureRequestPolicy{Self: e.Self, Roles: append([]string(nil), e.Roles...)}
+	if v := e.Via; v != nil {
+		rm, ok := doc.ReadModels[v.ReadModelID]
+		if !ok {
+			return nil, fmt.Errorf("authorize: dataSubjects.erasure.via references read model %q, which does not exist "+
+				"(should have been caught by emschema.Lint already — was doc linted before BuildPolicies?)", v.ReadModelID)
+		}
+		rule.Via = &cmdauth.OwnershipPolicy{
+			Collection: scaffold.SanitizeName(ReadModelCollectionName(rm.Name, v.ReadModelID)),
+			KeyField:   v.KeyField, OwnerField: v.OwnerField,
+		}
+	}
+	return rule, nil
+}
+
 func policyCollection(doc *Document, cmdID, field, readModelID string) (string, error) {
 	rm, ok := doc.ReadModels[readModelID]
 	if !ok {

@@ -78,7 +78,7 @@ know. Example data (`data`, `queryParams`, a scenario's expected `result`) is
 the domain's own and isn't checked. A split document is checked file by file,
 and the pointer starts with the file's path.
 
-Refused today, from schema 3.2.0 on: `selfAccess.via`, `dataSubjects`,
+Refused today, from schema 3.2.0 on: `selfAccess.via`,
 ingresses, delays, schedules and `elapsed`, automation `effect`,
 and partitioning. Each leaves this list as it is implemented.
 
