@@ -3,7 +3,7 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased — who may request erasure, declared in the document
+## v0.17.0 — who may request erasure, declared in the document
 
 ### Added
 
