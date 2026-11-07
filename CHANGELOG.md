@@ -3,19 +3,6 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased
-
-### Changed
-
-- **Boundary edges are accepted, not refused, and listed.** A document with `ingresses`, a slice's
-  `ingressId`, `delay`, `schedule` or `effect`, or an `elapsed` step in a scenario now imports its
-  domain model. These describe how the outside world meets the system, which surface tooling
-  builds, not this importer. Every one is named in the import report under "Left for surface
-  tooling" (`Report.LeftOut`, `Document.LeftOut`), so nothing is dropped silently. A scenario with an
-  `elapsed` step is left out and not checked, because running it as if no time had passed would
-  report something else. Everything else is still refused: `partitioning`, `partitioned`,
-  `partitionFrom`, `selfAccess.via`, and any key this importer does not read.
-
 ## v0.17.0 — who may request erasure, declared in the document
 
 ### Added

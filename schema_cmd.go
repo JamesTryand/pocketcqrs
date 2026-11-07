@@ -243,12 +243,6 @@ func printReport(cmd *cobra.Command, rep *emschema.Report) {
 			cmd.Printf("  – %s\n", l)
 		}
 	}
-	if len(rep.LeftOut) > 0 {
-		cmd.Printf("Left for surface tooling (%d), accepted and not built:\n", len(rep.LeftOut))
-		for _, l := range rep.LeftOut {
-			cmd.Printf("  > %s\n", l)
-		}
-	}
 	if len(rep.Errors)+len(rep.Warnings)+len(rep.Lossy) == 0 {
 		cmd.Println("Mapped with nothing lost and nothing assumed.")
 	}

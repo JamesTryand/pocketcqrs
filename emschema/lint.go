@@ -21,10 +21,6 @@ type Report struct {
 	Warnings []string
 	// Lossy names what this project cannot represent at all.
 	Lossy []string
-	// LeftOut names the boundary edges (ingresses, timers, effects) the
-	// document declares and this importer accepted without building. They
-	// are surface tooling's, not the domain model's.
-	LeftOut []string
 }
 
 // Err returns a single error describing every problem at once, or nil.
@@ -57,7 +53,7 @@ func (r *Report) lossyf(format string, args ...any) {
 // generation instead of as "slice X references read model Y, which does not
 // exist".
 func Lint(doc *Document) *Report {
-	r := &Report{LeftOut: doc.LeftOut}
+	r := &Report{}
 	checkGeneration(doc, r)
 
 	swimlanes := map[string]bool{}
@@ -212,12 +208,7 @@ func lintSlice(doc *Document, s Slice, swimlanes map[string]bool, r *Report) {
 
 	switch s.Pattern {
 	case PatternStateChange:
-		// a slice started by an ingress has no screen: the outside world, not
-		// a person at a screen, sends its command (a boundary edge, left to
-		// surface tooling). A screen it does name must still exist.
-		if s.IngressID == "" || s.ScreenID != "" {
-			requireScreen()
-		}
+		requireScreen()
 		requireCommand(s.CommandID)
 		requireEvents("eventIds", s.EventIDs)
 		forbid("readModelId", s.ReadModelID != "")
@@ -238,11 +229,7 @@ func lintSlice(doc *Document, s Slice, swimlanes map[string]bool, r *Report) {
 		} else if _, ok := doc.Automations[s.AutomationID]; !ok {
 			r.errorf("slice %q references automation %q, which does not exist", s.ID, s.AutomationID)
 		}
-		// a delay or schedule starts the automation, so it need not name
-		// trigger events; any it does name must still exist
-		if len(s.Delay) == 0 && len(s.Schedule) == 0 || len(s.TriggerEventIDs) > 0 {
-			requireEvents("triggerEventIds", s.TriggerEventIDs)
-		}
+		requireEvents("triggerEventIds", s.TriggerEventIDs)
 		requireCommand(s.CommandID)
 		requireEvents("resultEventIds", s.ResultEventIDs)
 		// readModelId is OPTIONAL here: v2 made it so, because many real

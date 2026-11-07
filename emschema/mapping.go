@@ -347,13 +347,6 @@ func (m *mapper) mapAutomation(s Slice) {
 	if crossAggregate {
 		prefix = DeriveID(TypeName(s.Name, s.ID)) + "-"
 	}
-	// A delay or schedule starts this automation from outside the domain.
-	// A reactor on its trigger events would fire the command at once and
-	// ignore the wait, so none is generated: the command is, and the timer
-	// that calls it is surface tooling's (listed in the report).
-	if len(s.Delay) > 0 || len(s.Schedule) > 0 {
-		return
-	}
 	m.domain(source).Reactors = append(m.domain(source).Reactors, scaffold.Reactor{
 		Name:      LowerFirst(scaffold.SanitizeName(TypeName(s.Name, s.ID))),
 		On:        triggers,
