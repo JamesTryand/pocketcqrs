@@ -49,6 +49,7 @@ func Load(path string) (*Document, error) {
 	if err := c.refuseUnsupported(filepath.Base(path)); err != nil {
 		return nil, err
 	}
+	leaveBoundaryEdges(&doc)
 	return &doc, nil
 }
 
@@ -142,6 +143,7 @@ func LoadManifest(dir string) (*Document, error) {
 	if err := c.refuseUnsupported(filepath.Base(dir)); err != nil {
 		return nil, err
 	}
+	leaveBoundaryEdges(doc)
 	return doc, nil
 }
 

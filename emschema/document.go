@@ -51,6 +51,15 @@ type Document struct {
 	Slices                     []Slice              `json:"slices"`
 	Hotspots                   map[string]Hotspot   `json:"hotspots,omitempty"`
 	DataSubjects               *DataSubjects        `json:"dataSubjects,omitempty"`
+
+	// Ingresses (schema 3.4.0) is a boundary edge: how the outside world
+	// reaches the system. The domain model does not build it, so the contents
+	// stay raw, are not checked, and are listed in LeftOut (see boundary.go).
+	Ingresses map[string]json.RawMessage `json:"ingresses,omitempty"`
+
+	// LeftOut names every boundary edge the importer accepted and did not
+	// build, filled in by Load. It is not part of the document.
+	LeftOut []string `json:"-"`
 }
 
 // DataSubjects is the document-wide dataSubjects (schema 3.2.0): rules for
@@ -531,6 +540,14 @@ type Slice struct {
 	// stateChange + automation: the alternatives the command may produce
 	// (schema 3.3.0; when and set 3.12.0, repeated 3.13.0). See Outcome.
 	Outcomes []Outcome `json:"outcomes,omitempty"`
+
+	// Boundary edges (schema 3.4.0-3.6.0): what starts or completes a slice
+	// from outside the domain. Accepted and left raw; surface tooling meets
+	// them, this importer lists them (see boundary.go).
+	IngressID string          `json:"ingressId,omitempty"`
+	Delay     json.RawMessage `json:"delay,omitempty"`
+	Schedule  json.RawMessage `json:"schedule,omitempty"`
+	Effect    json.RawMessage `json:"effect,omitempty"`
 }
 
 // Scenario is a given/when/then example. The `when` and `then` shapes depend
@@ -548,6 +565,9 @@ type Scenario struct {
 type EventRef struct {
 	EventID string          `json:"eventId"`
 	Data    json.RawMessage `json:"data,omitempty"`
+	// Elapsed (schema 3.5.0) makes this given step the passing of time rather
+	// than an event. A scenario with one is left out (see boundary.go).
+	Elapsed string `json:"elapsed,omitempty"`
 }
 
 // CommandRef names a command and optionally carries example data.
