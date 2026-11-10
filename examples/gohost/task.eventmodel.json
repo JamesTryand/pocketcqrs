@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "2.7.0",
+  "id": "gohost-example",
+  "name": "Go host example",
+  "description": "Who may send the tutorial's task commands, for examples/gohost: creating a task needs the operator role; completing one is open to any signed-in caller.",
+  "swimlanes": [
+    { "id": "work", "name": "Work", "kind": "team" }
+  ],
+  "events": {
+    "task-created": { "name": "Task Created", "swimlaneId": "work" }
+  },
+  "commands": {
+    "create-task": { "name": "Create Task", "aggregate": "task", "requiredRole": ["operator"] }
+  },
+  "screens": {
+    "create-task-screen": { "name": "Create Task" }
+  },
+  "slices": [
+    {
+      "id": "create-task-slice",
+      "name": "Create Task",
+      "pattern": "stateChange",
+      "swimlaneId": "work",
+      "status": "created",
+      "screenId": "create-task-screen",
+      "commandId": "create-task",
+      "eventIds": ["task-created"],
+      "scenarios": []
+    }
+  ]
+}

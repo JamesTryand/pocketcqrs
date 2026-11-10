@@ -1,4 +1,4 @@
-package main
+package host
 
 // This file is the whole of the example wiring in main. Everything it names —
 // the task and order aggregates, their projections, the fulfillment reactor

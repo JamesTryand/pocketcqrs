@@ -185,7 +185,7 @@ curl -s -X POST http://127.0.0.1:8398/api/cqrs/admin/reload -H "Authorization: $
 turn.
 
 **`order` refused to load, on purpose.** `--tutorial` registered this repo's
-example Go `order` aggregate (`aggregates/order.go`) in `main.go`, before any
+example Go `order` aggregate (`aggregates/order.go`) at bootstrap (`host/host.go`), before any
 JS file was read. The document's own `order` aggregate happens to share that
 name, so the generated `order.js` collides with it — and
 [a Go aggregate, once registered, can never be displaced by JS](reference/gateway.md#admin).

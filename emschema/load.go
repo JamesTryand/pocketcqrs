@@ -40,13 +40,19 @@ func Load(path string) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
+	return Parse(filepath.Base(path), raw)
+}
+
+// Parse reads a single JSON document from raw (an embedded document, for
+// example); name is only for messages. It refuses what Load refuses.
+func Parse(name string, raw []byte) (*Document, error) {
 	var doc Document
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, fmt.Errorf("emschema: %s is not a valid document: %w", filepath.Base(path), err)
+		return nil, fmt.Errorf("emschema: %s is not a valid document: %w", name, err)
 	}
 	var c supportChecker
 	c.check(raw, reflect.TypeOf(doc), "")
-	if err := c.refuseUnsupported(filepath.Base(path)); err != nil {
+	if err := c.refuseUnsupported(name); err != nil {
 		return nil, err
 	}
 	return &doc, nil

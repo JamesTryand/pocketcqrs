@@ -1,4 +1,4 @@
-package main
+package host
 
 import (
 	"bytes"
@@ -316,7 +316,7 @@ func TestSchemaImportGoWritesAPackagePerAggregate(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"testdata/eventmodelschema/examples/conditional-outcomes.json", "--skip-scenarios", "--out", outDir, "--lang", "go"})
+	cmd.SetArgs([]string{"../testdata/eventmodelschema/examples/conditional-outcomes.json", "--skip-scenarios", "--out", outDir, "--lang", "go"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}

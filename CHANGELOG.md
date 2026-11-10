@@ -3,6 +3,37 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.19.0 — your own program with compiled-in Go domains
+
+### Added
+
+- **`host.Run(host.Options{...})`: the whole program as a function.** The bootstrap moved from
+  `package main` into the importable `host` package; the stock `main.go` is now one call to it
+  (plus `skill`, whose files are embedded from the repository root). An embedder's own `main.go`
+  adds Go domains through three hooks: `Commands`, `Register(h)` (after the store, registry and
+  engine exist, before the JS functions load) and `Serve(se, h)` (after the platform's routes).
+  `examples/gohost` is the smallest such program; docs/go-guide.md, "Your own program".
+- **`Host.DeclareCommands(doc)`**: a document's command permissions enforced at the gateway beside
+  the JS deciders' `//@authorize`, kept across hot reloads; its `dataSubjects.erasure` admits
+  `RequestErasure`. **`Host.AuthorizeSubjectCommand`** decides the other `dataSubject` commands.
+- **`Host.AddProjection`** (engine, write guard and rebuild, as the platform's own),
+  **`Host.WirePII`** (`pii.Wire` on the platform's registry, engine and checkpoints, with its own
+  outbox), `Host.OwnRole`/`OwnSubjectID`, `Host.Context`, `Host.OnClose`.
+- **`authorize.StockWith(StockConfig)`**: `Stock` plus a fixed policy table and erasure as a host
+  decides. `Stock` is `StockWith` with neither and behaves exactly as in v0.18.0.
+- **`emschema.Parse(name, raw)`**: `Load` for a document already in memory (an embedded one).
+
+### Unchanged, on purpose
+
+- The stock program: same flags, commands, boot order and behaviour. Its tests moved to `host/`
+  with the code; the smoke suite runs the stock binary as before, and `examples/gohost` beside it.
+- Erasure stays refused unless a host declares or wires who may erase.
+
+### Proposal
+
+- `platform/pocketcqrs-futures` `features/host-entry-point-for-go-domains` (accepted 2026-11-10,
+  option 1). Requested by `lab/landing-pages` for its personal-data model.
+
 ## v0.18.0 — the stock server enforces who may send a command
 
 ### Added

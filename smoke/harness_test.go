@@ -81,6 +81,13 @@ func startBackend(t *testing.T, functions map[string]string) *harness {
 // that are about what boot does and does not wire up.
 func startBackendFlags(t *testing.T, functions map[string]string, extra ...string) *harness {
 	t.Helper()
+	return startBackendPkg(t, "github.com/jamestryand/pocketcqrs", functions, extra...)
+}
+
+// startBackendPkg is startBackendFlags for another program built on the host
+// package (an embedder's own main, such as examples/gohost).
+func startBackendPkg(t *testing.T, pkg string, functions map[string]string, extra ...string) *harness {
+	t.Helper()
 
 	dir := t.TempDir()
 	fnDir := filepath.Join(dir, "pb_functions")
@@ -93,7 +100,7 @@ func startBackendFlags(t *testing.T, functions map[string]string, extra ...strin
 		}
 	}
 
-	bin := build(t, "github.com/jamestryand/pocketcqrs", filepath.Join(dir, "pocketcqrs"))
+	bin := build(t, pkg, filepath.Join(dir, "pocketcqrs"))
 	dataDir := filepath.Join(dir, "pb_data")
 
 	// the superuser has to exist before serving: every operational route is

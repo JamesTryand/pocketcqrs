@@ -25,6 +25,7 @@ illustrations of what your own Go domain would look like.
 | `outbound` | the hard-bounded HTTP client behind `$http`; usable from Go too |
 | `functions` | the JS runtime (goja): effects, projections, deciders, schema reconcile, dry-run |
 | `migrations` | PocketBase Go migrations — collections-as-DDL for Go read models (this repo's are the examples', registered under `--tutorial`) |
+| `host` | the whole program as a function, `host.Run(host.Options{...})`: the stock `main.go` is one call to it, and so is yours (see [Your own program](#your-own-program)) |
 
 ## Converting a domain from JS to Go
 
@@ -54,10 +55,10 @@ three, so there's nothing to convert — just write the Go call directly.
 **Register your own domain at bootstrap, not in the example wiring.** The
 platform ships no aggregates or projections of its own:
 `aggregates.RegisterAll` and `allProjections` are the *examples'*
-registration and both are gated behind `--tutorial` (`main.go`,
-`projection_cmd.go`). Adding your decider or projection inside either means
-it only loads when the tutorial flag is set. Register alongside them
-instead.
+registration and both are gated behind `--tutorial` (`host/host.go`,
+`host/projection_cmd.go`). Adding your decider or projection inside either means
+it only loads when the tutorial flag is set. Register yours from your own
+program's `Register` hook instead ([Your own program](#your-own-program)).
 
 **A word of caution on scope**: converting a decider is a rewrite, not a
 migration. There is, deliberately, no automatic JS→Go transpiler — the
@@ -136,10 +137,10 @@ func Task() *decider.Decider[taskState] {
 }
 ```
 
-Register with `decider.Register(registry, "task", Task())` on the registry
-`main.go` builds at bootstrap. (`aggregates.RegisterAll` does exactly this
-for the two example aggregates, but is only called under `--tutorial` — so
-register your own next to that call, not inside it.) The registry
+Register with `decider.Register(h.Registry, "task", Task())` from your
+program's `Register` hook, on the registry the bootstrap builds
+([Your own program](#your-own-program); `aggregates.RegisterAll` does exactly
+this for the two example aggregates, and `examples/gohost` calls it). The registry
 handles concurrency: it loads the stream, folds `Evolve`, calls `Decide`,
 and appends at the expected sequence — a stale fold is retried by the
 caller on `events.ErrConcurrency` (gateway → 409).
@@ -307,7 +308,74 @@ Same rule as JS about **where** it may run: downstream of committed events
 only. A `Decide` or `Evolve` that reaches the network destroys replay
 reproducibility, which is the guarantee everything else rests on.
 
-## Bootstrap order (main.go)
+## Your own program
+
+A Go domain is compiled into the program that registers it, so it needs a
+program of its own. That program is the whole of pocketcqrs (every flag, every
+command, `serve`) plus what you add, through three hooks in `host.Options`:
+
+| hook | runs | for |
+| --- | --- | --- |
+| `Commands` | at start-up | extra commands on the command line |
+| `Register(h *host.Host)` | once per process, after the event store, registry and engine exist and before the JS functions load (step 2 below) | deciders (`h.Registry`), projections (`h.AddProjection`), command permissions (`h.DeclareCommands`), personal data (`h.WirePII`) |
+| `Serve(se, h)` | inside `OnServe`, after the platform's routes, before the node listens (step 8) | read routes (`queryroute.Register`) and anything else served |
+
+`examples/gohost` is the smallest one, and the smoke suite runs it:
+
+```go
+//go:embed task.eventmodel.json
+var model []byte
+
+func main() {
+	migrations.RegisterExamples() // read-model collections: ordinary migrations, before Run
+	host.Run(host.Options{
+		Register: func(h *host.Host) error {
+			doc, err := emschema.Parse("task.eventmodel.json", model)
+			if err != nil {
+				return err
+			}
+			if err := h.DeclareCommands(doc); err != nil { // who may send each command
+				return err
+			}
+			aggregates.RegisterAll(h.Registry)
+			h.AddProjection(projections.NewTasks(h.App)) // engine + write guard + rebuild
+			h.AddProjection(projections.NewOrders(h.App))
+			return nil
+		},
+	})
+}
+```
+
+What it gives you, and what stays yours:
+
+- **Command permissions.** `h.DeclareCommands(doc)` enforces the document's
+  `requiredRole`, `fieldGatedRole`, `requiredOwnership` and `scope` at the
+  gateway beside the JS deciders' `//@authorize` lines, and survives a hot
+  reload (which replaces only the JS table). The Go target writes no
+  permissions into generated code, so this call is how a generated Go domain
+  gets them. A command no document names stays allowed.
+- **Erasure.** The stock program refuses every `dataSubject` command. A
+  document's `dataSubjects.erasure` (through `DeclareCommands`) admits
+  `RequestErasure`; `h.AuthorizeSubjectCommand` decides the rest
+  (`EraseSubject`, a module's holds and approvals). Set neither and erasure
+  stays refused. Either set: a superuser passes.
+- **Personal data.** `h.WirePII()` is `pii.Wire` on the platform's own
+  registry, engine and checkpoints, with key destruction through an outbox
+  of its own (`pii-outbox.db`) and the destroyer only on the writer. It
+  needs `KMS_FACADE_URL`.
+- **Read models' collections** are yours: a PocketBase migration each
+  (`migrations.Register` from `github.com/pocketbase/pocketbase/migrations`,
+  before `Run`). Set `ListRule`/`ViewRule` to `nil` (superusers only) on any
+  collection a read route guards, or PocketBase's own records API serves it
+  past the route's role check.
+- `h.OwnRole`/`h.OwnSubjectID` read the caller as the gateway does, for
+  `queryroute.Config`; `h.Context` lives as long as the process; `h.OnClose`
+  closes something at shutdown.
+- `Register` runs for one-shot commands too (`superuser upsert`, `projection
+  rebuild`), since they bootstrap the app: anything it needs, such as
+  `KMS_FACADE_URL`, must be set for those as well.
+
+## Bootstrap order (host.Run)
 
 1. `RunAppMigrations` — collections-as-DDL before anything touches them
 2. open `events.db` → registry with Go deciders → consumers engine

@@ -190,6 +190,20 @@ cfg.Authorize = func(re *core.RequestEvent, aggregate, command, id string, paylo
 }
 ```
 
+**On `host.Run` (v0.19.0) there is nothing to hand-wire.** In your program's `Register` hook,
+`h.DeclareCommands(doc)` enforces the document's command permissions and its
+`dataSubjects.erasure`, and `h.AuthorizeSubjectCommand` is your own rule for the rest:
+
+```go
+deps, err := h.WirePII() // pii.Wire on the platform's registry and engine; needs KMS_FACADE_URL
+if err := h.DeclareCommands(doc); err != nil { return err }
+h.AuthorizeSubjectCommand = func(re *core.RequestEvent, command, id string, payload []byte) (bool, error) {
+	return h.OwnRole(re.Auth) == "operator", nil // your own rule
+}
+```
+
+See [go-guide.md, "Your own program"](go-guide.md#your-own-program).
+
 ## Requests, and governing them
 
 Besides `EraseSubject`, the core `dataSubject` aggregate has one more command: `RequestErasure`

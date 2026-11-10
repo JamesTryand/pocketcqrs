@@ -1,4 +1,4 @@
-package main
+package host
 
 import (
 	"context"
@@ -17,10 +17,16 @@ import (
 // than a function taking a bool because every call site already holds the
 // components, which makes calling it with the wrong answer impossible.
 func (c *components) allProjections(app core.App) []projections.Projection {
-	if !c.Tutorial {
-		return nil
+	var all []projections.Projection
+	if c.Tutorial {
+		all = exampleProjections(app)
 	}
-	return exampleProjections(app)
+	// an embedder's compiled-in projections (Host.AddProjection), once its
+	// Register hook has run: write-guarded and rebuildable like the rest
+	if c.host != nil {
+		all = append(all, c.host.projections...)
+	}
+	return all
 }
 
 // newProjectionCommand builds the `projection` CLI command group.

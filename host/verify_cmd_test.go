@@ -1,4 +1,4 @@
-package main
+package host
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const conditionalOutcomes = "testdata/eventmodelschema/examples/conditional-outcomes.json"
+const conditionalOutcomes = "../testdata/eventmodelschema/examples/conditional-outcomes.json"
 
 func runVerify(t *testing.T, args ...string) (string, error) {
 	t.Helper()

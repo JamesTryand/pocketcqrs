@@ -1,0 +1,1352 @@
+package host
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/hook"
+
+	"github.com/jamestryand/pocketcqrs/adminapi"
+	"github.com/jamestryand/pocketcqrs/aggregates"
+	"github.com/jamestryand/pocketcqrs/authforward"
+	"github.com/jamestryand/pocketcqrs/authorize"
+	"github.com/jamestryand/pocketcqrs/authverify"
+	"github.com/jamestryand/pocketcqrs/batching"
+	"github.com/jamestryand/pocketcqrs/cmdauth"
+	"github.com/jamestryand/pocketcqrs/commandqueue"
+	"github.com/jamestryand/pocketcqrs/consumers"
+	"github.com/jamestryand/pocketcqrs/decider"
+	"github.com/jamestryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/functions"
+	"github.com/jamestryand/pocketcqrs/gateway"
+	"github.com/jamestryand/pocketcqrs/idempotency"
+	"github.com/jamestryand/pocketcqrs/litefswatch"
+	"github.com/jamestryand/pocketcqrs/migrations"
+	"github.com/jamestryand/pocketcqrs/nodeidentity"
+	"github.com/jamestryand/pocketcqrs/opsport"
+	"github.com/jamestryand/pocketcqrs/outbound"
+	"github.com/jamestryand/pocketcqrs/outbox"
+	"github.com/jamestryand/pocketcqrs/projections"
+	"github.com/jamestryand/pocketcqrs/reactors"
+	"github.com/jamestryand/pocketcqrs/roles"
+	"github.com/jamestryand/pocketcqrs/telemetry"
+	"github.com/jamestryand/pocketcqrs/telemetry/natstransport"
+	"github.com/jamestryand/pocketcqrs/users"
+	"github.com/jamestryand/pocketcqrs/writeguard"
+)
+
+// idempotencyRetention bounds how long a gateway idempotency record is kept
+// before StartPruner deletes it. A client retrying after an ambiguous
+// timeout does so within seconds to minutes, not days; 24h leaves ample
+// margin without letting the table grow unboundedly.
+const idempotencyRetention = 24 * time.Hour
+
+// Node roles for --cqrsRole (see docs/reference/cli.md's "Multi-node"
+// section for the single-writer/multi-reader design). roleMaster is this
+// project's entire behavior before this flag existed; roleSecondary is
+// new and additive.
+const (
+	roleMaster    = "master"
+	roleSecondary = "secondary"
+)
+
+// components is the stock binary's own bootstrap state. It embeds
+// *adminapi.State (the admin/introspection HTTP surface, factored
+// out so a Go embedder can register the same routes in its own main.go)
+// plus the handful of fields that are this binary's own concern and never
+// reach the admin surface: command idempotency, command batching, node
+// role, and remote-verify caching. See adminapi.State's doc comment for
+// why the split lands exactly where it does.
+type components struct {
+	*adminapi.State
+
+	idempotency *idempotency.Store
+
+	// batchWriter backs command batching (on by default), or is
+	// nil when --cqrsCommandBatching=false or this node is a roleSecondary,
+	// which never runs its own writer.
+	batchWriter *batching.Writer
+
+	// eventsPath is the log's file (its name is LiteFS's database name).
+	eventsPath string
+
+	// role mirrors --cqrsRole (roleMaster or roleSecondary), set once
+	// immediately after ParseFlags, same lifecycle as State.Tutorial.
+	role string
+
+	// commandQueue and checkpoints are held only so the termination hook
+	// can close them: the batch writer's intake queue (nil without
+	// batching) and a secondary's local checkpoint store (nil on a master,
+	// whose checkpoints live in events.db).
+	commandQueue *commandqueue.Store
+	checkpoints  *events.Store
+
+	// verifyCache holds --cqrsVerifyAuth's bounded-TTL verdicts.
+	// Nil except on a secondary running verify mode. State.Verifier reads
+	// through this cache; components only holds it to start/stop its
+	// pruner.
+	verifyCache *authverify.Cache
+
+	// identity is who this node is (the node-identity contract), resolved
+	// once at the start of serve, before the node listens. The ops port
+	// reports it through health.
+	identity nodeidentity.Identity
+
+	// health is what the ops port reports (the health/telemetry contract);
+	// nil except under `serve`, the only command that has an ops port.
+	health *opsport.Health
+
+	// host is what an embedder's Options hooks are handed (empty for the
+	// stock program).
+	host *Host
+}
+
+// contractRole is --cqrsRole in the runtime contracts' vocabulary: the
+// master is the writer, a secondary a reader.
+func contractRole(role string) string {
+	if role == roleSecondary {
+		return "reader"
+	}
+	return "writer"
+}
+
+// runsSideEffects reports whether a node of this role registers the
+// side-effecting tiers (reactors, effect functions, cron). Only the master
+// does; the reload path applies the same rule via events.Store.ReadOnly.
+func runsSideEffects(role string) bool { return role != roleSecondary }
+
+// Run is the pocketcqrs program: its command line, `serve` and every other
+// command, with what opts adds. The stock program is Run(Options{...}) with
+// only its `skill` command added; an embedder with compiled-in Go domains
+// calls it from a short main.go of its own (see Options and docs/go-guide.md).
+// Like the stock program, it reads os.Args and exits the process on a fatal
+// error.
+func Run(opts Options) {
+	// the node-identity contract's started_at: process start, not serve
+	processStart := time.Now()
+
+	// `schema import` is a pure file-to-file transformation (see
+	// newSchemaImportCommand's doc comment) with no dependency on a running
+	// platform, so it gets the same short-circuit as the stock program's
+	// `skill` (in its main.go), for the same reason: going through app.Start() bootstraps a full pb_data/
+	// before any RunE runs, with no per-command opt-out, and a refused
+	// import left one behind despite writing nothing itself.
+	// Short-circuiting also fixes the lost exit code for this command: PocketBase's own
+	// pb.Execute() discards RootCmd.Execute()'s return value, so a RunE
+	// error used to print correctly but never reach a non-zero exit code.
+	// Running Execute() directly here lets main() act on it.
+	if len(os.Args) > 2 && os.Args[1] == "schema" && (os.Args[2] == "import" || os.Args[2] == "verify") {
+		ic := newSchemaImportCommand()
+		if os.Args[2] == "verify" {
+			ic = newSchemaVerifyCommand()
+		}
+		ic.SetArgs(os.Args[3:])
+		if err := ic.Execute(); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+
+	app := pocketbase.New()
+	// CommandPolicies: the stock server enforces the command permissions its
+	// JS deciders declare (//@authorize); built after they load, swapped on
+	// every reload that swaps them
+	c := &components{State: &adminapi.State{CommandPolicies: &cmdauth.Live{}}}
+	h := &Host{}
+	c.host = h
+
+	var gatewayCfg gateway.Config
+	app.RootCmd.PersistentFlags().BoolVar(
+		&gatewayCfg.AllowAnonymous,
+		"cqrsAllowAnonymous",
+		false,
+		"allow anonymous CQRS command execution (dev only; no actor metadata is stamped)",
+	)
+	app.RootCmd.PersistentFlags().StringVar(
+		&gatewayCfg.ExternalCallerCollection,
+		"cqrsExternalCallerCollection",
+		"",
+		"name of a PocketBase auth collection whose authenticated records are external service integrations (e.g. pocketcqrs-extensions' extcaller), not end users or reactors; unset (default) leaves actor/causation/correlation handling exactly as before this existed",
+	)
+
+	// Outbound HTTP for the effect/reactor tiers. Off by default: with these
+	// unset, core's posture is exactly what it was before the feature existed.
+	var allowOutboundHTTP bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&allowOutboundHTTP,
+		"cqrsAllowOutboundHTTP",
+		false,
+		"allow event, cron and reactor functions to call out over HTTP via $http; not //@trigger http functions, and never deciders or projections",
+	)
+	var outboundHosts []string
+	app.RootCmd.PersistentFlags().StringArrayVar(
+		&outboundHosts,
+		"cqrsOutboundHost",
+		nil,
+		"a hostname $http may call, repeatable; the list is deployment-wide, not per-function (no entries = nothing permitted)",
+	)
+	var allowPrivateOutbound bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&allowPrivateOutbound,
+		"cqrsAllowPrivateOutbound",
+		false,
+		"let $http reach loopback and private ranges (dev and internal services; link-local stays blocked)",
+	)
+
+	var strictBoot bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&strictBoot,
+		"cqrsStrictBoot",
+		false,
+		"abort startup if a JS decider fails validation (default: skip the decider and keep serving)",
+	)
+
+	var functionsDir string
+	app.RootCmd.PersistentFlags().StringVar(
+		&functionsDir,
+		"functionsDir",
+		"pb_functions",
+		"the directory with the user defined JS functions",
+	)
+	var tutorial bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&tutorial,
+		"tutorial",
+		false,
+		"register this repo's example domains (task, order) and their collections; off by default — pocketcqrs ships empty",
+	)
+
+	// //@schema collections default to public ListRule/ViewRule
+	// (writes stay write-guarded regardless). This flag changes the
+	// deployment-wide default; a //@rule directive in a function file
+	// overrides it per collection. Every reconcile (boot and reload) keeps
+	// an existing collection's rule in step with what is declared, so an
+	// access rule added to the model reaches it.
+	// The caller's role and data-subject id, as fields of their auth
+	// record: what read models' access rules read (@request.auth.<field>;
+	// schema import's --roleField/--subjectField name the same fields).
+	// Core's users collection refuses self-service writes to both, so
+	// nobody can grant themselves a role.
+	var roleField, subjectField string
+	app.RootCmd.PersistentFlags().StringVar(&roleField, "cqrsRoleField", "role",
+		"the auth-record field holding a caller's role; users may not set it on themselves")
+	app.RootCmd.PersistentFlags().StringVar(&subjectField, "cqrsSubjectField", "",
+		"the auth-record field holding a caller's data-subject id (empty: the record's own id); users may not set it on themselves")
+
+	var schemaDefaultRule string
+	app.RootCmd.PersistentFlags().StringVar(
+		&schemaDefaultRule,
+		"cqrsSchemaDefaultRule",
+		"",
+		`default ListRule/ViewRule for //@schema collections: "public" (default), `+
+			`"authenticated", or a raw PocketBase rule expression. A //@rule <collection> <value> `+
+			"directive overrides this per collection. Existing collections follow it on every boot and reload.",
+	)
+
+	// the address entralogin.go's callback handler POSTs to for
+	// the real /api/collections/users/auth-with-oauth2 exchange -- this
+	// node's OWN --http listen address (PocketBase's own default, so an
+	// unconfigured deployment just works). Explicit and operator-supplied
+	// rather than derived from the incoming request's Host/X-Forwarded-*
+	// headers, which are client-controllable and would make the exchange
+	// call an SSRF primitive (see entralogin.go's package doc). Not read
+	// from PocketBase's own --http flag -- that flag belongs to the
+	// `serve` subcommand's own FlagSet, not reachable from here (confirmed
+	// via app.RootCmd.Flags().Lookup("http") returning nil at this point).
+	var selfAddr string
+	app.RootCmd.PersistentFlags().StringVar(
+		&selfAddr,
+		"cqrsSelfAddr",
+		"127.0.0.1:8090",
+		"this node's own --http listen address, used only for the internal Microsoft/Entra "+
+			"OAuth2 exchange call; must match --http (or wherever this node actually "+
+			"listens) for that sign-in flow to work",
+	)
+
+	// Node role for the single-writer/multi-reader deployment
+	// (docs/reference/cli.md's "Multi-node" section): a secondary polls a
+	// replicated events.db read-only instead of appending to it, and
+	// checkpoints its own consumers separately since the read-only store
+	// can't hold them (see consumers.NewEngineWithCheckpoints, and
+	// events.ErrReadOnly below).
+	// What this flag ALONE does NOT do: forward commands or auth traffic
+	// to a master (see --cqrsMasterAddr below, a separate,
+	// already-built flag) — a secondary with no --cqrsMasterAddr set
+	// refuses commands outright (503) rather than silently accepting
+	// ones it can't durably apply.
+	var role string
+	app.RootCmd.PersistentFlags().StringVar(
+		&role,
+		"cqrsRole",
+		roleMaster,
+		"this node's role: "+roleMaster+" (default, appends to events.db) or "+roleSecondary+
+			" (polls a replicated events.db read-only; commands are refused, not forwarded)",
+	)
+	// Node identity (contracts/node-identity.md): an explicitly assigned id
+	// wins over the node-id file in the data dir. The env var always works;
+	// the flag is this binary's own convention for the same setting.
+	var nodeID string
+	app.RootCmd.PersistentFlags().StringVar(
+		&nodeID,
+		"cqrsNodeId",
+		os.Getenv(nodeidentity.EnvNodeID),
+		"this node's id, assigned by an orchestrator (default $"+nodeidentity.EnvNodeID+
+			"; when unset, the id stored in <dir>/"+nodeidentity.FileName+", generated on first boot)",
+	)
+	var instance string
+	app.RootCmd.PersistentFlags().StringVar(
+		&instance,
+		"cqrsInstance",
+		os.Getenv(nodeidentity.EnvInstance),
+		"this node's workload name as identity reports it (default $"+nodeidentity.EnvInstance+
+			"; when unset, the application name from Settings)",
+	)
+	// The ops port (the health/telemetry contract): /healthz and /readyz on a
+	// port of their own, bound by `serve` before anything else. The env var
+	// always works; the flag is this binary's own convention for the same
+	// setting.
+	var opsPort string
+	app.RootCmd.PersistentFlags().StringVar(
+		&opsPort,
+		"cqrsOpsPort",
+		os.Getenv(opsport.EnvPort),
+		"the ops port for /healthz and /readyz (default $"+opsport.EnvPort+", else "+strconv.Itoa(opsport.DefaultPort)+
+			"); several nodes on one machine must each set their own",
+	)
+	var opsBind string
+	app.RootCmd.PersistentFlags().StringVar(
+		&opsBind,
+		"cqrsOpsBind",
+		os.Getenv(opsport.EnvBind),
+		"the address the ops port binds (default $"+opsport.EnvBind+", else every interface, so an "+
+			"orchestrator can reach it); 127.0.0.1 keeps it local",
+	)
+	var opsURLFlag string
+	app.RootCmd.PersistentFlags().StringVar(
+		&opsURLFlag,
+		"cqrsOpsURL",
+		os.Getenv(opsport.EnvURL),
+		"the ops port's base URL as other nodes reach it (default $"+opsport.EnvURL+", else "+
+			"http://<hostname>:<ops port>); a master puts it in its heartbeat so a stale secondary "+
+			"can ask whether the master is up. Set it wherever the hostname is not reachable (NAT, containers)",
+	)
+	var heartbeatInterval time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&heartbeatInterval,
+		"cqrsHeartbeatInterval",
+		opsport.DefaultHeartbeatInterval,
+		"how often a master upserts its heartbeat row beside the event log, and a secondary measures "+
+			"it; keep it well under --cqrsStaleThreshold",
+	)
+	var staleThreshold time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&staleThreshold,
+		"cqrsStaleThreshold",
+		opsport.DefaultStaleThreshold,
+		"how old a secondary's view of the master's heartbeat may be before /readyz reports "+
+			"replication_stale",
+	)
+	var dependencyCheckInterval time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&dependencyCheckInterval,
+		"cqrsDependencyCheckInterval",
+		opsport.DefaultDependencyCheckInterval,
+		"how often /readyz's required dependencies (the event store; the master, on a secondary) are checked",
+	)
+	var dependencyFailures int
+	app.RootCmd.PersistentFlags().IntVar(
+		&dependencyFailures,
+		"cqrsDependencyFailures",
+		opsport.DefaultDependencyFailures,
+		"consecutive failed checks before a required dependency counts as down",
+	)
+	// Readiness thresholds (the contract leaves their values to each stack).
+	var lagThreshold time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&lagThreshold,
+		"cqrsLagThreshold",
+		consumers.DefaultLagThreshold,
+		"how old the oldest event a read model has not yet applied may be before /readyz reports "+
+			"it behind (projection_behind)",
+	)
+	var catchUpDeadline time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&catchUpDeadline,
+		"cqrsCatchUpDeadline",
+		opsport.DefaultCatchUpDeadline,
+		"how long the initial catch-up may take before a master serves anyway, reporting what is "+
+			"still behind as degraded; a secondary keeps catching up (/readyz stays not_ready)",
+	)
+	var drainDeadline time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&drainDeadline,
+		"cqrsDrainDeadline",
+		defaultDrainDeadline,
+		"how long a node may spend draining on shutdown (SIGTERM/Ctrl+C) for in-flight requests and the "+
+			"consumers' event in hand together; /readyz reports draining from the moment shutdown starts",
+	)
+	// The optional telemetry push (contract section 8). Both flags default to the
+	// contract's environment names.
+	var telemetryURL, telemetryInterval string
+	app.RootCmd.PersistentFlags().StringVar(
+		&telemetryURL,
+		"cqrsTelemetryURL",
+		os.Getenv(telemetry.URLName),
+		"push a JSON snapshot of the cqrs_ series to this message bus (env "+telemetry.URLName+"); the scheme "+
+			"selects the transport, e.g. nats://host:4222; empty means no push. Best-effort, never a dependency "+
+			"of /healthz or /readyz",
+	)
+	app.RootCmd.PersistentFlags().StringVar(
+		&telemetryInterval,
+		"cqrsTelemetryInterval",
+		os.Getenv(telemetry.IntervalName),
+		"seconds between telemetry snapshots (env "+telemetry.IntervalName+"), decimals allowed; default 15",
+	)
+	var vfs string
+	app.RootCmd.PersistentFlags().StringVar(
+		&vfs,
+		"cqrsVFS",
+		"",
+		"the SQLite VFS name events.db is opened through when --cqrsRole="+roleSecondary+
+			" (e.g. a Litestream-provided VFS already registered with the driver); empty opens the plain file read-only",
+	)
+	var eventsPathOverride string
+	app.RootCmd.PersistentFlags().StringVar(
+		&eventsPathOverride,
+		"cqrsEventsPath",
+		"",
+		"path to events.db, overriding the default of <dir>/events.db; a "+roleSecondary+
+			" needs this to point at the master's replicated file rather than its own local one",
+	)
+	// Opt-in guard for a master whose events.db lives on a mount (LiteFS):
+	// started before the mount is up, events.Open would create a fresh,
+	// empty log on the bare mount point and serve as if history were empty.
+	// Off by default so a single-node first boot still creates the log.
+	var requireEventLog bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&requireEventLog,
+		"cqrsRequireExistingEventLog",
+		false,
+		"refuse to start a "+roleMaster+" whose events.db does not already exist, instead of creating "+
+			"an empty one (e.g. started before its LiteFS mount is up). Leave off for the first boot "+
+			"that creates the log. A "+roleSecondary+" always requires it",
+	)
+	// Command forwarding: only meaningful on a secondary. Empty
+	// (the default) leaves a secondary refusing commands outright (see
+	// events.ErrReadOnly in gateway.go) -- a deliberate choice, e.g. a
+	// pure reporting replica that should never accept write traffic even
+	// via forwarding.
+	var liteFSEvents string
+	app.RootCmd.PersistentFlags().StringVar(
+		&liteFSEvents,
+		"cqrsLiteFSEvents",
+		"",
+		"on --cqrsRole="+roleSecondary+", LiteFS's event stream (e.g. http://localhost:20202/events): the "+
+			"engine runs as soon as LiteFS has applied the master's transactions to this replica, "+
+			"instead of at its next tick (which stays as the guarantee). No effect on "+roleMaster)
+	var masterAddr string
+	app.RootCmd.PersistentFlags().StringVar(
+		&masterAddr,
+		"cqrsMasterAddr",
+		"",
+		"the master's base URL (e.g. http://master:8090); when set on --cqrsRole="+roleSecondary+
+			", commands are proxied there instead of refused. No effect on "+roleMaster,
+	)
+
+	// Auth-collection forwarding (the auth-collection remainder): deliberately a
+	// SEPARATE opt-in from --cqrsMasterAddr, not bundled with it, found
+	// necessary while wiring this up -- once PocketBase's own login flow
+	// forwards to the master, every token a client gets is signed with the
+	// MASTER's JWT secret, which a secondary's own LOCAL routes cannot
+	// verify (data.db, where the signing secret lives, is never synced
+	// between nodes). That silently breaks every authenticated LOCAL read
+	// on a secondary, which command-forwarding alone does not. An operator
+	// enabling --cqrsMasterAddr for CQRS commands should not unknowingly
+	// also break that just by doing so.
+	var forwardAuth bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&forwardAuth,
+		"cqrsForwardAuth",
+		false,
+		"route PocketBase's own native auth-collection traffic (_users/_superusers/etc, not just "+
+			"CQRS commands) to the master too, since a secondary's copy of those collections is a "+
+			"different table, not a stale replica. Requires --cqrsMasterAddr. WARNING: without "+
+			"--cqrsVerifyAuth, enabling this breaks authenticated LOCAL reads on this secondary -- "+
+			"every token becomes master-signed and unverifiable here; add --cqrsVerifyAuth "+
+			"so this node verifies those tokens against the master instead.",
+	)
+
+	// Remote token verification (the fix): a secondary cannot verify any
+	// token itself -- the key material (record TokenKey + collection secret)
+	// lives only in each node's own, never-replicated data.db. Shape C':
+	// ask the master, cache the verdict for a bounded TTL. Implies
+	// --cqrsForwardAuth, because only master-minted tokens can pass remote
+	// verification -- a coherent multi-node auth mode, not two flags to
+	// mis-combine.
+	var verifyAuth bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&verifyAuth,
+		"cqrsVerifyAuth",
+		false,
+		"verify bearer tokens against the master (with a bounded local verdict cache) so this "+
+			"secondary's own authenticated LOCAL reads work. Requires --cqrsMasterAddr; implies "+
+			"--cqrsForwardAuth (only master-minted tokens can verify remotely). Every mutating or "+
+			"superuser-only ops route re-verifies uncached on every request so an admin revocation "+
+			"bites immediately; the five read-only ops routes cache instead, see "+
+			"--cqrsOpsVerifyCacheTTL.",
+	)
+	var verifyCacheTTL time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&verifyCacheTTL,
+		"cqrsVerifyCacheTTL",
+		5*time.Minute,
+		"how long a --cqrsVerifyAuth verdict is trusted before re-checking with the master, always "+
+			"additionally capped by the token's own exp claim. Also the revocation-lag bound: a "+
+			"token the master has revoked can keep reading here for up to this long.",
+	)
+	var verifyGrace time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&verifyGrace,
+		"cqrsVerifyGrace",
+		0,
+		"how far past a verdict's expiry it may still be served when the master is UNREACHABLE "+
+			"(never past the token's own exp). 0 (the default) fails closed: expired verdict + "+
+			"unreachable master = 503. Opting in trades a bounded revocation lag for reads that "+
+			"keep working through a master outage.",
+	)
+	var opsVerifyCacheTTL time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&opsVerifyCacheTTL,
+		"cqrsOpsVerifyCacheTTL",
+		30*time.Second,
+		"a shorter, independently-tunable --cqrsVerifyCacheTTL for the read-only, capability-gated "+
+			"ops routes (capability-verify-shape-decision.md) — a tighter bound on the "+
+			"revocation-lag/information-disclosure window than reusing the general TTL, since these "+
+			"routes expose topology and internal names once a capability grant has been revoked. "+
+			"Shares --cqrsVerifyGrace's outage policy.",
+	)
+
+	// Command batching: ON by default -- the fix (queue-depth
+	// admission control, --cqrsCommandQueueMaxDepth) is only built on this
+	// path, so making it the default collapses two admission-control
+	// mechanisms (a bounded semaphore for the direct path, plus this
+	// queue's own depth check) down to one. Batching preserves the exact
+	// synchronous (events, error) response contract the direct path always
+	// returned, so this default is not a client-visible contract change --
+	// only variable added latency under load (bounded by
+	// --cqrsBatchTimeout) and, if --cqrsCommandQueueMaxDepth is set, a 503
+	// once that many commands are unfinished. No effect on roleSecondary,
+	// which never runs its own writer (it forwards or refuses; see
+	// --cqrsMasterAddr).
+	var commandBatching bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&commandBatching,
+		"cqrsCommandBatching",
+		true,
+		"accumulate decided commands into batches committed in one transaction, instead of one "+
+			"transaction per command; raises write throughput under load at the cost of variable "+
+			"added latency, bounded by --cqrsBatchTimeout. On by default; pass "+
+			"--cqrsCommandBatching=false for the old one-transaction-per-command path (that path "+
+			"has no admission control of its own).",
+	)
+	var batchTimeout time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&batchTimeout,
+		"cqrsBatchTimeout",
+		10*time.Second,
+		"how long a command waits for its batch to commit when --cqrsCommandBatching is set "+
+			"before returning 504; matches events.db's own busy_timeout by default",
+	)
+	var commandQueueMaxDepth int
+	app.RootCmd.PersistentFlags().IntVar(
+		&commandQueueMaxDepth,
+		"cqrsCommandQueueMaxDepth",
+		0,
+		"shed new commands with 503 (Retry-After: 1) once this many are enqueued and not yet "+
+			"committed. Only takes effect when batching is active (on by default). "+
+			"0 disables shedding.",
+	)
+
+	app.RootCmd.AddCommand(newProjectionCommand(c))
+	app.RootCmd.AddCommand(newDeadletterCommand(c))
+	app.RootCmd.AddCommand(newDryrunCommand(c))
+	app.RootCmd.AddCommand(newSystemCommand(c))
+	app.RootCmd.AddCommand(newCatalogCommand(c))
+	app.RootCmd.AddCommand(newPackCommand(c, &functionsDir))
+	app.RootCmd.AddCommand(newEventsCommand(c, &functionsDir))
+	app.RootCmd.AddCommand(newSchemaCommand(c))
+	for _, cmd := range opts.Commands {
+		app.RootCmd.AddCommand(cmd)
+	}
+	app.RootCmd.ParseFlags(os.Args[1:])
+
+	// opsURL is --cqrsOpsURL resolved once the ops port is bound (its default
+	// needs the bound port); a master writes it into its heartbeat.
+	var opsURL string
+	// telemetryPub is the optional push, built with the ops port so a bad
+	// setting stops the node before anything else starts.
+	var telemetryPub *telemetry.Publisher
+	// The ops port binds first: before any flag is validated or PocketBase
+	// bootstraps (app.Start does that before any cobra hook runs), so a
+	// booting node answers /healthz instead of refusing connections. Only
+	// `serve` has one, and like `skill` and `schema import` above it is
+	// recognised as the first argument. A node that cannot bind it does not
+	// start: several nodes on one machine must each set their own port.
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		port, err := opsport.ParsePort(opsPort)
+		if err != nil {
+			log.Fatal(err)
+		}
+		c.health = opsport.New(nodeidentity.Hostname(log.Printf), processStart)
+		ops, err := opsport.Start(c.health, opsBind, port)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("ops port listening on %s", ops.Addr())
+		boundPort := port
+		if addr, ok := ops.Addr().(*net.TCPAddr); ok {
+			boundPort = addr.Port
+		}
+		if opsURL, err = opsport.AdvertisedURL(opsURLFlag, opsBind, c.health.Host(), boundPort); err != nil {
+			log.Fatal(err)
+		}
+		tsettings, err := telemetry.ParseSettings(telemetryURL, telemetryInterval)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if tsettings.Enabled() {
+			transport, err := natstransport.Register(telemetry.NewTransports()).Open(tsettings.URL, log.Printf)
+			if err != nil {
+				log.Fatal(err)
+			}
+			telemetryPub = telemetry.NewPublisher(c.health, transport, tsettings.Interval, log.Printf)
+		}
+	}
+	c.Tutorial = tutorial
+	c.SchemaDefaultRule = schemaDefaultRule
+	if role != roleMaster && role != roleSecondary {
+		log.Fatalf("invalid --cqrsRole %q (want %q or %q)", role, roleMaster, roleSecondary)
+	}
+	c.role = role
+	if err := nodeidentity.ValidateAssigned(nodeID); err != nil {
+		log.Fatal(err)
+	}
+	if err := nodeidentity.ValidateInstance(instance); err != nil {
+		log.Fatal(err)
+	}
+
+	if role != roleSecondary && app.RootCmd.PersistentFlags().Changed("cqrsVFS") {
+		log.Printf("warning: --cqrsVFS is set but --cqrsRole=%s ignores it (only %s opens events.db through a VFS)", role, roleSecondary)
+	}
+	if role == roleSecondary {
+		for _, name := range []string{"cqrsCommandBatching", "cqrsBatchTimeout", "cqrsCommandQueueMaxDepth"} {
+			if app.RootCmd.PersistentFlags().Changed(name) {
+				log.Printf("warning: --%s is set but --cqrsRole=%s never runs its own writer (a secondary forwards or refuses commands, it does not batch or queue them)", name, roleSecondary)
+			}
+		}
+	}
+
+	if forwardAuth && masterAddr == "" {
+		log.Fatal("invalid flags: --cqrsForwardAuth requires --cqrsMasterAddr")
+	}
+	if verifyAuth && masterAddr == "" {
+		log.Fatal("invalid flags: --cqrsVerifyAuth requires --cqrsMasterAddr")
+	}
+	if verifyAuth && role != roleSecondary {
+		log.Printf("warning: --cqrsVerifyAuth is set but --cqrsRole=%s ignores it (only %s verifies remotely)", role, roleSecondary)
+		verifyAuth = false
+	}
+	if verifyAuth && !forwardAuth {
+		// implied, not required: remote verification only works for
+		// master-minted tokens, so login has to forward too -- and with
+		// verification in place, forwarding no longer breaks local reads,
+		// which was the only reason the flags were ever separate
+		forwardAuth = true
+		log.Print("--cqrsVerifyAuth implies --cqrsForwardAuth: auth flows forward to the master so every token is master-minted and remotely verifiable")
+	}
+	if !verifyAuth {
+		for _, name := range []string{"cqrsVerifyCacheTTL", "cqrsVerifyGrace", "cqrsOpsVerifyCacheTTL"} {
+			if app.RootCmd.PersistentFlags().Changed(name) {
+				log.Printf("warning: --%s has no effect without --cqrsVerifyAuth", name)
+			}
+		}
+	}
+
+	var masterURL *url.URL
+	if masterAddr != "" {
+		if role != roleSecondary {
+			log.Printf("warning: --cqrsMasterAddr is set but --cqrsRole=%s ignores it (only %s forwards)", role, roleSecondary)
+		} else {
+			parsed, err := url.Parse(masterAddr)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				log.Fatalf("invalid --cqrsMasterAddr %q: want a full base URL, e.g. http://master:8090", masterAddr)
+			}
+			masterURL = parsed
+			gatewayCfg.Forward = httputil.NewSingleHostReverseProxy(masterURL)
+		}
+	}
+
+	// Registering the example migrations is a decision, taken here: an
+	// unregistered migration is never applied AND never recorded, so the
+	// examples can be switched off and on again without either direction
+	// being a one-way door. See migrations.RegisterExamples.
+	if c.Tutorial {
+		migrations.RegisterExamples()
+	}
+
+	// the roles collection (capability-based ops/dashboard access,
+	// see adminapi's capOps* constants) is always registered, unlike the
+	// --tutorial examples above -- it's this project's own feature, not
+	// switchable content, so every deployment gets it.
+	roles.RegisterCollection()
+
+	// the users collection is a shipped, app-extensible end-user
+	// auth primitive -- always registered for the same reason roles is:
+	// it's core's own baseline, not example content a consumer opts into.
+	// Unlike roles/service_accounts it carries no special sensitivity or
+	// ops access of any kind (see users.ensureCollection's doc comment) --
+	// registering it here changes nothing about who can reach any existing
+	// route.
+	users.RegisterCollection()
+
+	// background loops share one context, stopped by the termination hook;
+	// built before bootstrap so an embedder's Register can start its own on it
+	bg := newBackground()
+
+	app.OnBootstrap().BindFunc(func(e *core.BootstrapEvent) error {
+		// run the default bootstrap first: it creates the data dir and,
+		// crucially, opens the PocketBase DBs — ReconcileSchemas below
+		// needs a live DB
+		if err := e.Next(); err != nil {
+			return err
+		}
+
+		dataDir := e.App.DataDir()
+		if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
+			return err
+		}
+		c.App = e.App
+
+		// collections-as-DDL: apply the shipped app migrations now. Serve
+		// would run them later (apis.Serve), which is too late for
+		// ReconcileSchemas — relation targets may be migration-created
+		// collections. Idempotent; system migrations already ran in e.Next().
+		//
+		// Runs identically on every role: it only ever touches data.db (via
+		// PocketBase's own migration runner), never events.db. Each node's
+		// data.db is local and always writable regardless of role — that is
+		// not a new risk this flag introduces, it's what a single instance
+		// already does today (docs/reference/cli.md's "Multi-node" section).
+		if err := e.App.RunAppMigrations(); err != nil {
+			return err
+		}
+		if err := users.LockFields(e.App, roleField, subjectField); err != nil {
+			return err
+		}
+
+		// event store (source of truth), next to PocketBase's data.db by
+		// default. roleSecondary polls a replica read-only instead of
+		// appending to it — see events.OpenReadOnly's doc comment for what
+		// that means for every write method on the returned Store — and
+		// needs --cqrsEventsPath to point at the master's file, since a
+		// secondary's own data.db must stay local and independent.
+		eventsPath := eventsPathOverride
+		if eventsPath == "" {
+			eventsPath = filepath.Join(dataDir, "events.db")
+		}
+		c.eventsPath = eventsPath
+		var store *events.Store
+		var err error
+		if c.role == roleSecondary {
+			var opts []events.OpenOption
+			if vfs != "" {
+				opts = append(opts, events.WithVFS(vfs))
+			}
+			store, err = events.OpenReadOnly(eventsPath, opts...)
+		} else if requireEventLog {
+			store, err = events.OpenExisting(eventsPath)
+			if errors.Is(err, events.ErrEventLogMissing) {
+				err = fmt.Errorf("%w (--cqrsRequireExistingEventLog is set: is the events.db mount up? "+
+					"drop the flag only for the first boot that should create the log)", err)
+			}
+		} else {
+			store, err = events.Open(eventsPath)
+		}
+		if err != nil {
+			return err
+		}
+		c.Store = store
+		if c.health != nil {
+			// /metrics: every event this node appends counts toward
+			// cqrs_events_appended_total (a secondary appends none), and the
+			// dead-letter depth is read on each scrape (reads only)
+			metrics := c.health.Metrics()
+			store.Subscribe(func(events.Event) { metrics.EventAppended() })
+			metrics.SetDeadLetterDepth(func(ctx context.Context) (int64, error) {
+				open, err := store.DeadLetters(ctx, false)
+				return int64(len(open)), err
+			})
+			gatewayCfg.Metrics = metrics
+		}
+
+		// idempotency records for the command gateway: a separate small
+		// SQLite file, deliberately off events.db's hot append path.
+		idem, err := idempotency.Open(filepath.Join(dataDir, "idempotency.db"))
+		if err != nil {
+			return err
+		}
+		c.idempotency = idem
+		gatewayCfg.Idempotency = idem
+
+		// remote token verification: the verdict cache is another
+		// small dedicated SQLite file -- and SQLite rather than a map so a
+		// verdict cached before a master outage survives this node
+		// restarting during it (the exact scenario --cqrsVerifyGrace exists
+		// for).
+		if verifyAuth && masterURL != nil {
+			cache, err := authverify.OpenCache(filepath.Join(dataDir, "authverify.db"))
+			if err != nil {
+				return err
+			}
+			c.verifyCache = cache
+			c.Verifier = authverify.New(masterURL, cache, verifyCacheTTL, verifyGrace,
+				authverify.WithOpsTTL(opsVerifyCacheTTL),
+				authverify.WithStaleLogger(func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) }))
+		}
+
+		// write side: deciders + command handling. The platform registers no
+		// aggregates of its own — task and order are example content, and
+		// without --tutorial their names are free for a JS decider to claim.
+		c.Registry = decider.NewRegistry(store)
+		if c.Tutorial {
+			aggregates.RegisterAll(c.Registry)
+		}
+		c.JSDeciders = map[string]*functions.DeciderSpec{}
+
+		// the gateway rejects domain commands while the system is in
+		// maintenance mode (hot reload of schema-bearing functions)
+		gatewayCfg.Mode = store.Mode
+
+		logger := e.App.Logger()
+
+		// durable consumption of the log (projections + functions). A
+		// secondary's store can't hold its own checkpoints (it's read-only —
+		// events.SaveCheckpoint would fail every tick with events.ErrReadOnly),
+		// so it checkpoints to a separate, ordinary, locally writable store
+		// instead — the shape consumers.NewEngineWithCheckpoints exists for.
+		engineLogger := func(msg string, args ...any) { logger.Warn(msg, args...) }
+		if c.role == roleSecondary {
+			checkpoints, err := events.Open(filepath.Join(dataDir, "checkpoints.db"))
+			if err != nil {
+				return err
+			}
+			c.checkpoints = checkpoints
+			c.Engine = consumers.NewEngineWithCheckpoints(store, checkpoints, engineLogger)
+		} else {
+			c.Engine = consumers.NewEngine(store, engineLogger)
+		}
+		c.Engine.LagThreshold = lagThreshold
+		// projection rebuilds are requests this engine consumes between its
+		// passes; the requests live in this node's own data.db
+		rebuilds, err := projections.NewRebuildRequests(e.App.DB())
+		if err != nil {
+			return err
+		}
+		c.Rebuilds = rebuilds
+		c.Engine.Rebuilds = rebuilds
+		c.Engine.Wipe = projections.Wipe(e.App)
+
+		// command batching: on by default, and never on a
+		// secondary -- it has no writable store to enqueue into or commit
+		// against (a secondary forwards or refuses; see --cqrsMasterAddr).
+		if commandBatching && c.role != roleSecondary {
+			queue, err := commandqueue.Open(filepath.Join(dataDir, "commandqueue.db"))
+			if err != nil {
+				return err
+			}
+			c.commandQueue = queue
+			c.batchWriter = batching.NewWriter(store, queue, c.Registry, engineLogger)
+			c.batchWriter.MaxDepth = commandQueueMaxDepth
+			gatewayCfg.Batching = c.batchWriter
+			gatewayCfg.BatchTimeout = batchTimeout
+		}
+
+		// read side: projections into PocketBase collections
+		projs := c.allProjections(e.App)
+		c.GoProjections = projs
+		for _, p := range projs {
+			c.Engine.Register(p)
+		}
+
+		// an embedder's compiled-in Go domains: after the store, registry and
+		// engine exist and before the JS functions load, so a JS decider that
+		// takes one of their names is refused like any other collision
+		h.App, h.Store, h.Registry, h.Engine = e.App, store, c.Registry, c.Engine
+		h.Context, h.DataDir, h.Writer = bg.ctx, dataDir, runsSideEffects(c.role)
+		h.RoleField, h.SubjectField = roleField, subjectField
+		h.checkpoints = consumers.CheckpointStore(store)
+		if c.checkpoints != nil {
+			h.checkpoints = c.checkpoints
+		}
+		if opts.Register != nil {
+			if err := opts.Register(h); err != nil {
+				return fmt.Errorf("host: register: %w", err)
+			}
+		}
+		c.GoProjections = append(c.GoProjections, h.projections...)
+		if n := len(h.policies); n > 0 {
+			logger.Info("command permissions of compiled-in domains enforced at the gateway", "commands", n)
+		}
+
+		// functions (FaaS): JS functions loaded from functionsDir
+		rt := functions.NewGojaRuntime(
+			func(msg string, args ...any) { logger.Info(msg, args...) })
+		rt.SetReader(functions.NewAppReader(e.App))
+		rt.SetStore(store)
+
+		// outbound HTTP, only if asked for. An empty allow-list with the
+		// flag on permits NOTHING and says so — "no entries" is not "no
+		// restriction", which is the reading that made an empty writeguard
+		// list guard everything in v0.4.0.
+		if allowOutboundHTTP {
+			client, err := outbound.New(outbound.Config{
+				AllowedHosts: outboundHosts,
+				AllowPrivate: allowPrivateOutbound,
+				Timeout:      functions.OutboundTimeout,
+				MaxInFlight:  functions.OutboundMaxInFlight,
+				MaxBodyBytes: functions.OutboundMaxBodyBytes,
+			})
+			if err != nil {
+				return fmt.Errorf("outbound HTTP config: %w", err)
+			}
+			c.Outbound = client
+			rt.SetOutbound(client)
+			if len(outboundHosts) == 0 {
+				logger.Warn("outbound HTTP is enabled but no --cqrsOutboundHost was given, " +
+					"so every $http call will be refused")
+			} else {
+				logger.Info("outbound HTTP enabled for effect and reactor functions",
+					"hosts", strings.Join(outboundHosts, ","),
+					"allowPrivate", allowPrivateOutbound)
+			}
+		}
+
+		c.FnRuntime = rt
+		// effect functions' work: recorded on the engine's pass, run off
+		// it by the outbox worker started below; the master only, as every
+		// side effect is (see runsSideEffects)
+		if runsSideEffects(c.role) {
+			box, err := outbox.Open(filepath.Join(dataDir, "outbox.db"))
+			if err != nil {
+				return err
+			}
+			c.Outbox = box
+			rt.SetOutbox(box)
+		}
+		loaded, err := functions.LoadDir(rt, e.App, functionsDir)
+		if err != nil {
+			return err
+		}
+		c.HTTPFns = loaded.HTTP
+
+		// JS deciders (tier 3): dry-run validated against existing history
+		// at boot, then registered alongside the Go deciders. Failures are
+		// refused loudly — the rest of the system keeps serving, unless
+		// --cqrsStrictBoot is set (boot aborts instead).
+		var validatedDeciders []*functions.DeciderSpec
+		// set when a JS decider or reactor is skipped (not under --cqrsStrictBoot)
+		functionsSkipped := false
+		for _, spec := range loaded.Deciders {
+			if c.Registry.Has(spec.Aggregate) {
+				if strictBoot {
+					return fmt.Errorf("strict boot: JS decider aggregate %q collides with an existing decider", spec.Aggregate)
+				}
+				logger.Error("JS decider aggregate collides with an existing decider, skipped",
+					"aggregate", spec.Aggregate)
+				functionsSkipped = true
+				continue
+			}
+			if err := functions.ValidateDeciderSpec(store, spec); err != nil {
+				if strictBoot {
+					return fmt.Errorf("strict boot: JS decider %q failed validation: %w", spec.Aggregate, err)
+				}
+				logger.Error("JS decider failed validation, NOT registered",
+					"aggregate", spec.Aggregate, "error", err)
+				functionsSkipped = true
+				continue
+			}
+			c.Registry.RegisterUntyped(spec.Aggregate, spec.UntypedDecider())
+			c.JSDeciders[spec.Aggregate] = spec
+			validatedDeciders = append(validatedDeciders, spec)
+			logger.Info("JS decider active", "aggregate", spec.Aggregate)
+		}
+		policies := functions.CommandPolicies(c.JSDeciders)
+		c.CommandPolicies.Set(policies)
+		if len(policies) > 0 {
+			logger.Info("command permissions enforced at the gateway", "commands", len(policies))
+		}
+
+		// store-level upcasting: the validated deciders' transform chains
+		// compose into the store's read path, so every consumer (deciders,
+		// projections, functions, reactors) sees events at their latest
+		// schema version. Only validated specs contribute.
+		c.Store.SetUpcaster(functions.BuildUpcaster(validatedDeciders))
+
+		// JS projection schemas are materialized at boot (a restart IS the
+		// maintenance window), additively: create/extend, never drop
+		if err := functions.ReconcileSchemas(e.App, loaded.Projections, c.SchemaDefaultRule); err != nil {
+			return err
+		}
+
+		// Go projections, then JS projections, then reactors and effect
+		// functions. The order is when each runs in a pass, not a guarantee
+		// about what another has seen (see consumers.Engine.Register): no
+		// projection may read another's collections, and no reactor a
+		// projection
+		for _, spec := range loaded.Projections {
+			c.JSProjs = append(c.JSProjs, spec.Consumer())
+		}
+		for _, p := range c.JSProjs {
+			c.Engine.Register(p)
+		}
+
+		// Side-effecting tiers — reactors, effect functions and cron — run on
+		// the master ONLY. A secondary folds the same log into its own read
+		// models (projections above), but re-running effects there would
+		// fire every one of them once per node, their dead-letter writes and
+		// reactor dispatches would bounce off the read-only store, and cron
+		// would tick on every box. See runsSideEffects.
+		sideEffects := runsSideEffects(c.role)
+		if !sideEffects {
+			logger.Info("secondary: reactors, effect functions and cron are not registered on this node (they run on the master)")
+		}
+
+		// sagas: reactors dispatch follow-up commands through the registry.
+		// The fulfillment saga is example content — it wires the example
+		// order aggregate to the example task one, so it only exists when
+		// they do.
+		if c.Tutorial && sideEffects {
+			c.Engine.Register(reactors.AsConsumer(reactors.Fulfillment(), c.Registry,
+				func(msg string, args ...any) { logger.Info(msg, args...) },
+				func(msg string, args ...any) { logger.Warn(msg, args...) }))
+		}
+
+		// JS reactors (tier 4): same dispatch rule as the Go ones, reached
+		// from a function file. The registry must be installed BEFORE they
+		// are registered as consumers — a reactor without one fails loudly
+		// rather than quietly doing nothing.
+		rt.SetRegistry(c.Registry)
+		rt.SetWarn(func(msg string, args ...any) { logger.Warn(msg, args...) })
+		// //@dispatches gate: the registry is complete here — deciders
+		// were registered above — so the live registry IS the right thing to
+		// validate against at boot. A reload cannot say the same; see
+		// adminapi's State.ProspectiveCommands.
+		var activeReactors []*functions.ReactorSpec
+		for _, spec := range loaded.Reactors {
+			if !sideEffects {
+				break
+			}
+			if err := functions.ValidateReactorSpec(c.Registry, spec); err != nil {
+				if strictBoot {
+					return fmt.Errorf("strict boot: JS reactor %q failed validation: %w", spec.Reactor, err)
+				}
+				logger.Error("JS reactor failed validation, NOT registered",
+					"reactor", spec.Reactor, "error", err)
+				functionsSkipped = true
+				continue
+			}
+			activeReactors = append(activeReactors, spec)
+		}
+		// health/telemetry: a node serving with skipped functions reports
+		// degraded, functions_skipped (fixed at boot)
+		if functionsSkipped && c.health != nil {
+			c.health.SetFunctionsPartial(true)
+		}
+		c.JSReactors = activeReactors
+		for _, spec := range activeReactors {
+			c.Engine.Register(spec)
+			logger.Info("JS reactor active", "reactor", spec.Reactor, "on", spec.EventTypes)
+		}
+
+		// write-guard: no out-of-band writes on projection-owned collections
+		guarded := c.allProjections(e.App)
+		for _, p := range c.JSProjs {
+			guarded = append(guarded, p)
+		}
+		cols := projections.GuardedCollections(guarded...)
+
+		// An example collection can outlive its projection: boot once with
+		// --tutorial and then without, and `tasks` is still there with
+		// nothing maintaining it. Keep guarding it — an unmaintained read
+		// model is bad, an unmaintained read model anyone can write to is
+		// worse — but say so, because a collection that quietly stopped
+		// updating is the kind of thing found months later.
+		if !c.Tutorial {
+			var orphaned []string
+			for _, name := range exampleCollections(e.App) {
+				if slices.Contains(cols, name) {
+					continue // something else owns this name now, and maintains it
+				}
+				if _, err := e.App.FindCollectionByNameOrId(name); err != nil {
+					continue // never created, or since dropped
+				}
+				orphaned = append(orphaned, name)
+			}
+			if len(orphaned) > 0 {
+				cols = append(cols, orphaned...)
+				logger.Warn("example collections exist but nothing is projecting into them: "+
+					"they stay write-guarded and read-only, and will not be updated. "+
+					"Start with --tutorial to maintain them again, or delete them.",
+					"collections", strings.Join(orphaned, ", "))
+			}
+		}
+
+		// _authOrigins is PocketBase's own collection, not projection-owned,
+		// but safe to guard alongside them — see writeguard.AuthOrigins.
+		writeguard.Register(e.App, append(cols, writeguard.AuthOrigins)...)
+
+		// effect functions: durable delivery through the consumers engine,
+		// and cron functions: scheduled by PocketBase's cron service.
+		// Master only (see sideEffects above).
+		if sideEffects {
+			for _, fc := range rt.Consumers() {
+				c.Engine.Register(fc)
+			}
+			for _, job := range rt.CronJobs() {
+				id := "fn:" + job.Name
+				if err := e.App.Cron().Add(id, job.Schedule, job.Fire); err != nil {
+					return err
+				}
+				c.CronJobs = append(c.CronJobs, id)
+			}
+		}
+
+		return nil
+	})
+
+	var httpServer atomic.Pointer[http.Server]
+	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		httpServer.Store(e.Server)
+		// Resolve identity before anything else the node serves. The data
+		// dir is node-local and never replicated (only events.db is), so a
+		// secondary never inherits the master's id. `instance` is
+		// --cqrsInstance/CQRS_INSTANCE, else the PocketBase application name
+		// (Settings > Application name), the one per-deployment workload
+		// name this binary has.
+		workload := instance
+		if workload == "" {
+			workload = e.App.Settings().Meta.AppName
+		}
+		identity, err := nodeidentity.Resolve(nodeidentity.Options{
+			Assigned:  nodeID,
+			StateDir:  e.App.DataDir(),
+			Instance:  workload,
+			Role:      contractRole(c.role),
+			StartedAt: processStart,
+			Logf:      log.Printf,
+		})
+		if err != nil {
+			return err
+		}
+		c.identity = identity
+		if c.health != nil {
+			c.health.SetIdentity(identity)
+		}
+		log.Printf("node identity: node_id=%s identity=%s instance=%q host=%s role=%s started_at=%s",
+			identity.NodeID, identity.Kind, identity.Instance, identity.Host, identity.Role, identity.StartedAtRFC3339())
+
+		// Command permissions the model declares hold here with nothing to
+		// wire: a command no //@authorize names is allowed, as before.
+		gatewayCfg.Authorize = authorize.StockWith(authorize.StockConfig{
+			Live: c.CommandPolicies, Fixed: h.policies, RoleField: roleField, SubjectField: subjectField,
+			ErasureRequest: h.erasureRequest, SubjectCommand: h.AuthorizeSubjectCommand})
+		gateway.RegisterRoutes(e, c.Registry, gatewayCfg)
+		// the verify oracle answers on every node (a secondary delegates to
+		// the master), so it is registered unconditionally; the verifying
+		// middleware only exists where there is a verifier
+		authverify.RegisterEndpoint(e, c.Verifier)
+		if c.Verifier != nil {
+			authverify.Register(e, c.Verifier)
+		}
+		if forwardAuth && gatewayCfg.Forward != nil {
+			// auth-collection forwarding: PocketBase's own native auth
+			// traffic (_users/_superusers/etc.) needs the same
+			// forward-to-master treatment as CQRS commands, for a
+			// different reason -- a secondary's copy of those collections
+			// isn't a stale replica, it's a different table, so serving
+			// auth locally would read the wrong data before any write
+			// even happens. Reuses the exact same reverse proxy gatewayCfg
+			// .Forward already is. Deliberately gated on its OWN flag, not
+			// just gatewayCfg.Forward != nil -- see --cqrsForwardAuth's
+			// own help text for why it can't be bundled with
+			// --cqrsMasterAddr automatically.
+			authforward.Register(e, gatewayCfg.Forward)
+		}
+		functions.RegisterHTTPRoutes(e, c.HTTPFns, !gatewayCfg.AllowAnonymous)
+		adminapi.RegisterRoutes(e, c.State, adminapi.Config{FunctionsDir: functionsDir})
+		registerEntraLoginRoutes(e, selfAddr)
+		if opts.Serve != nil {
+			if err := opts.Serve(e, h); err != nil {
+				return fmt.Errorf("host: serve: %w", err)
+			}
+		}
+		// background loops run on bg's shared context so the termination
+		// hook below can stop them and wait for them
+		bg.Go(c.Engine.Run)
+		if telemetryPub != nil {
+			bg.Go(telemetryPub.Run)
+		}
+		// The writer heartbeat (health/telemetry contract section 5): a master
+		// upserts it beside the event log; a secondary measures its age and,
+		// when stale, asks the master's /healthz whether the master is up.
+		if c.health != nil {
+			// required dependencies (contract section 4.6): the event store,
+			// and the master on a secondary; checked once now, so none is
+			// unknown once the node serves, then on a loop. The mode is read
+			// from the (replicated) event store on each /readyz.
+			deps := opsport.NewDependencies(dependencyFailures, log.Printf)
+			deps.Add(opsport.DepEventStore, func(ctx context.Context) error {
+				_, err := c.Store.MaxPosition(ctx)
+				return err
+			})
+			c.health.SetMode(func() string {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				mode, err := c.Store.Mode(ctx)
+				if err != nil {
+					return events.ModeRunning // unreadable: the event store check reports it
+				}
+				return mode
+			})
+			if c.role == roleSecondary && liteFSEvents != "" {
+				// wake on each transaction LiteFS applies to the log
+				watch := litefswatch.Config{URL: liteFSEvents, DB: filepath.Base(c.eventsPath), Notify: c.Engine.Nudge,
+					Logger: func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) }}
+				bg.Go(func(ctx context.Context) { litefswatch.Watch(ctx, watch) })
+			}
+			if c.role == roleSecondary {
+				monitor := opsport.NewReplicationMonitor(c.Store, &http.Client{Timeout: 2 * time.Second}, staleThreshold)
+				c.health.SetReplication(monitor.Current)
+				deps.Add(opsport.DepWriter, monitor.CheckWriter)
+				bg.Go(func(ctx context.Context) { monitor.Run(ctx, heartbeatInterval) })
+			} else {
+				bg.Go(func(ctx context.Context) {
+					opsport.RunWriterHeartbeat(ctx, c.Store, identity.NodeID, opsURL, heartbeatInterval, log.Printf)
+				})
+			}
+			deps.CheckAll(context.Background())
+			c.health.SetDependencies(deps)
+			bg.Go(func(ctx context.Context) { deps.Run(ctx, dependencyCheckInterval) })
+		}
+		if c.batchWriter != nil {
+			bg.Go(c.batchWriter.Run)
+		}
+		if c.Outbox != nil {
+			worker := &outbox.Worker{Store: c.Outbox,
+				Handlers: map[string]outbox.Handler{functions.EffectConsumer: c.State.RunQueuedEffect},
+				Logger:   func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) }}
+			bg.Go(worker.Run)
+		}
+		bg.Go(func(ctx context.Context) {
+			c.idempotency.RunPruner(ctx, time.Hour, idempotencyRetention,
+				func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
+		})
+		if c.verifyCache != nil {
+			bg.Go(func(ctx context.Context) {
+				c.verifyCache.RunPruner(ctx, time.Hour, verifyGrace,
+					func(msg string, args ...any) { e.App.Logger().Warn(msg, args...) })
+			})
+		}
+		// PocketBase binds the traffic port at the end of this hook chain, so
+		// once Next returns the node is listening and its consumers run:
+		// boot is complete (machine 1's BootCompleted), and /readyz moves
+		// from starting to catching_up, opening when every read model is
+		// within --cqrsLagThreshold (or --cqrsCatchUpDeadline passes).
+		if err := e.Next(); err != nil {
+			return err
+		}
+		if c.health != nil {
+			if err := c.health.BeginCatchUp(c.Engine.Status, catchUpDeadline, log.Printf); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	// Draining (health/telemetry contract 4.7), in two hooks around
+	// PocketBase's own graceful-shutdown handler (priority -9999), which
+	// cancels in-flight requests' context and gives the server only 1s.
+	//
+	// First, before it: /readyz closes (not_ready, draining), so the pool
+	// stops routing here, and the HTTP server stops accepting and waits for
+	// in-flight requests up to --cqrsDrainDeadline. PocketBase's handler then
+	// finds the server already shut down. drainStartedAt lets the second hook
+	// spend only what is left of the one deadline.
+	var drainStartedAt atomic.Int64
+	app.OnTerminate().Bind(&hook.Handler[*core.TerminateEvent]{
+		Id:       "cqrsDrain",
+		Priority: -10000,
+		Func: func(e *core.TerminateEvent) error {
+			drainStartedAt.Store(time.Now().UnixNano())
+			if c.health != nil {
+				c.health.BeginDraining(log.Printf)
+			}
+			if telemetryPub != nil {
+				telemetryPub.NotifyDraining() // the final snapshot says draining
+			}
+			if srv := httpServer.Load(); srv != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), drainDeadline)
+				defer cancel()
+				if err := srv.Shutdown(ctx); err != nil {
+					log.Printf("shutdown: in-flight requests still running after %s; cutting them off", drainDeadline)
+				}
+			}
+			return e.Next()
+		},
+	})
+
+	// Second, after it (the traffic port has drained): tell the background
+	// loops to stop — each finishes its in-flight unit (an event delivery,
+	// a batch), checkpoints it and returns — wait for them within what is
+	// left of the drain deadline, then close this binary's own stores.
+	// PocketBase closes its own DBs after this hook chain
+	// (ResetBootstrapState). Also runs after one-shot CLI commands, where
+	// there is nothing to drain and the whole deadline is available.
+	app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
+		left := drainDeadline
+		if started := drainStartedAt.Load(); started != 0 {
+			left -= time.Since(time.Unix(0, started))
+		}
+		if !bg.Stop(max(left, 0)) {
+			log.Printf("shutdown: drain deadline of %s reached with background loops still running "+
+				"(an interrupted event is redone on restart); closing stores anyway", drainDeadline)
+		}
+		if telemetryPub != nil {
+			// the loop has stopped with the others; this waits for the final
+			// snapshot still going out (one second at most) and closes the bus
+			_ = telemetryPub.Close()
+		}
+		c.closeStores()
+		h.close()
+		return e.Next()
+	})
+
+	if err := app.Start(); err != nil {
+		log.Fatal(err)
+	}
+}
