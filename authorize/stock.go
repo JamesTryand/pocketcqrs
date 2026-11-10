@@ -38,8 +38,13 @@ func Stock(live *cmdauth.Live, roleField, subjectField string) func(re *core.Req
 		if re.Auth != nil && re.Auth.IsSuperuser() {
 			return true, nil
 		}
+		policies := live.Policies()
+		// The policy is found whatever the spelling: a decider decides what
+		// a command name means, and one that reads it loosely must not let
+		// "openticket" past the check "OpenTicket" declares.
+		aggregate, command = canonical(policies, aggregate, command)
 		a := &Authorizer{
-			Policies: live.Policies(),
+			Policies: policies,
 			ResolveOwnRole: func(auth *core.Record) string {
 				if auth == nil {
 					return ""
@@ -58,4 +63,18 @@ func Stock(live *cmdauth.Live, roleField, subjectField string) func(re *core.Req
 		}
 		return a.Authorize(re.App, aggregate, command, id, payload, re.Auth)
 	}
+}
+
+// canonical is the table's own spelling of (aggregate, command) when a
+// policy names it in any case, or the request's spelling when none does.
+func canonical(policies map[Key]Policy, aggregate, command string) (string, string) {
+	if _, ok := policies[Key{Aggregate: aggregate, Command: command}]; ok {
+		return aggregate, command
+	}
+	for k := range policies {
+		if strings.EqualFold(k.Aggregate, aggregate) && strings.EqualFold(k.Command, command) {
+			return k.Aggregate, k.Command
+		}
+	}
+	return aggregate, command
 }

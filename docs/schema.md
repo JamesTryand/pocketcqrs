@@ -123,7 +123,9 @@ allowed to every caller the gateway admits, as before; a document with no
 command permissions generates exactly what it did. A superuser passes; the
 caller's role and subject id are the same auth-record fields read models use
 (above). `requiredOwnership.stateField` is decided by the generated decider
-itself (below). On the Go target the host wires `authorize.Authorizer` into
+itself (below). It covers commands sent through the gateway; a command an
+automation's reactor sends goes through the registry in-process and is not
+checked. On the Go target the host wires `authorize.Authorizer` into
 its own `gateway.Config.Authorize`, as before.
 
 ### Refusals

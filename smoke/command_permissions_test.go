@@ -18,8 +18,11 @@ const permTicket = `//@trigger decider ticket
 //@authorize OpenTicket {"RequiredRole":["operator"]}
 function initialState() { return {}; }
 function decide(command, state) {
-  if (command.name === 'OpenTicket') return [{ type: 'TicketOpened', data: {} }];
-  return [{ type: 'TicketNoted', data: {} }];
+  // reads the name loosely on purpose: the policy must hold whatever the spelling
+  const name = String(command.name).toLowerCase();
+  if (name === 'openticket') return [{ type: 'TicketOpened', data: {} }];
+  if (name === 'noteticket') return [{ type: 'TicketNoted', data: {} }];
+  throw new Error('unknown command: ' + command.name);
 }
 function evolve(state, event) { return state; }
 `
@@ -71,6 +74,15 @@ func TestStockServerEnforcesCommandPermissions(t *testing.T) {
 	if status, body := send(nobody, "t1", "OpenTicket"); status != http.StatusForbidden ||
 		!strings.Contains(body, "not authorized to issue OpenTicket on ticket") {
 		t.Fatalf("no role: want 403, got %d %s", status, body)
+	}
+	// spelling the aggregate or the command differently doesn't get round it
+	for _, path := range []string{"/api/cqrs/Ticket/t1b/OpenTicket", "/api/cqrs/ticket/t1c/openticket", "/api/cqrs/ticket/t1d/OPENTICKET"} {
+		resp := h.do(http.MethodPost, h.BackendURL+path, jsonBody(map[string]any{}), map[string]string{"Authorization": nobody})
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			t.Fatalf("%s by a caller without the role was accepted: %s", path, raw)
+		}
 	}
 	if status, body := send(operator, "t2", "OpenTicket"); status != http.StatusOK {
 		t.Fatalf("operator: want 200, got %d %s", status, body)

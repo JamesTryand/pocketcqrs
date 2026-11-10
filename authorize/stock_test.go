@@ -55,6 +55,16 @@ func TestStockEnforcesARequiredRole(t *testing.T) {
 	}
 }
 
+// Spelling the command or aggregate in another case meets the same policy.
+func TestStockIgnoresSpelling(t *testing.T) {
+	hook := stockHook(openNeedsOperator)
+	for _, c := range [][2]string{{"ticket", "openticket"}, {"Ticket", "OpenTicket"}, {"TICKET", "OPENTICKET"}} {
+		if ok, _ := hook(&core.RequestEvent{Auth: caller("users", "")}, c[0], c[1], "t1", nil); ok {
+			t.Fatalf("%s/%s without the role was allowed", c[0], c[1])
+		}
+	}
+}
+
 func TestStockLetsASuperuserThrough(t *testing.T) {
 	hook := stockHook(openNeedsOperator)
 	su := core.NewRecord(core.NewAuthCollection(core.CollectionNameSuperusers))

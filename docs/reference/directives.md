@@ -332,6 +332,9 @@ How it is checked:
   and their subject id is `--cqrsSubjectField` or the record id — the same
   fields read models' `//@rule` reads;
 - a **superuser** passes;
+- the policy is found whatever the case of the aggregate or command in the
+  request, so a decider that reads command names loosely can't be reached
+  around it;
 - an anonymous caller (`--cqrsAllowAnonymous`) holds no role;
 - the built-in `dataSubject` aggregate stays refused, as with no policy: who
   may erase whom is a host's own `gateway.Config.Authorize`.
@@ -340,6 +343,11 @@ Refused at load, never dropped: a line with no JSON, JSON that doesn't parse,
 an unknown key, a policy that declares nothing, a command not in
 `//@commands` (when that is declared), the same command twice, a `Scope` or
 `Ownership` missing a name, and the directive in a file that isn't a decider.
+
+It governs commands that come **through the gateway**. A command a reactor
+sends is dispatched in-process through the registry and is not checked: the
+reactor is the platform's own code, and its target decider still refuses what
+its rules refuse.
 
 It reloads with its decider (maintenance mode), and the reload report's
 `commandPolicies` counts the commands now checked. A Go embedder that sets its
