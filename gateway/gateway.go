@@ -133,6 +133,11 @@ type Config struct {
 	Authorize func(re *core.RequestEvent, aggregate, command, id string, payload []byte) (bool, error)
 }
 
+// ErasureRefused is the answer to a dataSubject command when nothing has
+// decided who may erase whom: with no Authorize hook here, and from the stock
+// server's own hook (authorize.Stock), which keeps the same refusal.
+const ErasureRefused = "erasure commands are refused until the host wires an Authorize policy for them; nothing was recorded"
+
 // RegisterRoutes binds the command endpoint:
 //
 //	POST /api/cqrs/{aggregate}/{id}/{command}
@@ -241,9 +246,7 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		// host wires a policy deciding who may erase whom (E1, as
 		// dotnetcqrs's gateway since 0.19.0). Nothing is recorded.
 		if cfg.Authorize == nil && strings.EqualFold(aggregate, pii.SubjectAggregate) {
-			return re.JSON(http.StatusForbidden, map[string]string{
-				"error": "erasure commands are refused until the host wires an Authorize policy for them; nothing was recorded",
-			})
+			return re.JSON(http.StatusForbidden, map[string]string{"error": ErasureRefused})
 		}
 
 		if cfg.Authorize != nil {

@@ -89,6 +89,11 @@ Each of these produced a real defect in this project.
   the decider. That is the gate working.
 - **Nothing is registered by default.** PocketCQRS ships empty; `--tutorial` opts into the
   example `task`/`order` domains and their collections. Do not assume they exist.
+- **A command with no permission is open to every signed-in caller.** Since v0.18.0 the stock
+  server enforces a decider's `//@authorize <Command> <policy JSON>` lines (written by
+  `schema import` from the model's `requiredRole`/`fieldGatedRole`/`requiredOwnership.via`/
+  `scope`); a command without one is not checked, and `users` allows self-registration. Declare
+  who may send a command in the model; a superuser passes every policy.
 
 ## Calling a third party
 

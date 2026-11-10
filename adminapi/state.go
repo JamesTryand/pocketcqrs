@@ -18,6 +18,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/jamestryand/pocketcqrs/authverify"
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 	"github.com/jamestryand/pocketcqrs/consumers"
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
@@ -89,6 +90,12 @@ type State struct {
 	JSReactors []*functions.ReactorSpec
 	// CronJobs lists the registered cron job ids ("fn:"+name).
 	CronJobs []string
+	// CommandPolicies, when set, is the gateway's live policy table (the
+	// stock server's authorize.Stock reads it). A reload that swaps the JS
+	// deciders rebuilds it from their //@authorize lines, so permissions
+	// change with the code that decides. Nil: an embedder that wires its own
+	// Authorize, untouched by reloads.
+	CommandPolicies *cmdauth.Live
 
 	// reloadMu serializes hot reloads. Unexported deliberately: only this
 	// package's own reload/functions-admin logic ever locks it — an

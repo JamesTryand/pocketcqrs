@@ -307,6 +307,44 @@ than merged.
 The scaffolder and the schema importer emit it automatically — the model knows
 which command produces which events, so it says so.
 
+## `//@authorize <Command> <policy JSON>`
+
+Optional, decider files only. Says who may send `<Command>`; the stock server
+enforces it at the gateway (`403` otherwise). A command no `//@authorize`
+names is not checked, exactly as before this existed, so a decider without
+the directive behaves as it always has.
+
+```
+//@authorize RecordPeriodCheck {"RequiredRole":["operator","period-check"]}
+//@authorize EscalateTicket {"RequiredRole":["supervisor"],"Scope":{"ResolveCollection":"tickets","ResolveKeyField":"ticketId","ResolveSelectField":"teamId","MemberOfCollection":"teamMembers","MemberOfMatchField":"teamId","MemberOfActorField":"memberId","BypassRoles":["admin"],"Message":"only the ticket's team may escalate it"}}
+```
+
+The JSON is the command's resolved policy (package `cmdauth`'s `Policy`):
+`RequiredRole`, `FieldGatedRole`, `Ownership` (ownership through a read model)
+and `Scope`, with real collection and field names. The schema importer writes
+it from the command's `requiredRole`, `fieldGatedRole`, `requiredOwnership.via`
+and `scope` ([schema](../schema.md#who-may-send-a-command)); every declaration
+a command has must hold. `requiredOwnership.stateField` is not here: the
+generated decider decides it from its own state.
+
+How it is checked:
+- the caller's role is their auth record's `--cqrsRoleField` (default `role`),
+  and their subject id is `--cqrsSubjectField` or the record id — the same
+  fields read models' `//@rule` reads;
+- a **superuser** passes;
+- an anonymous caller (`--cqrsAllowAnonymous`) holds no role;
+- the built-in `dataSubject` aggregate stays refused, as with no policy: who
+  may erase whom is a host's own `gateway.Config.Authorize`.
+
+Refused at load, never dropped: a line with no JSON, JSON that doesn't parse,
+an unknown key, a policy that declares nothing, a command not in
+`//@commands` (when that is declared), the same command twice, a `Scope` or
+`Ownership` missing a name, and the directive in a file that isn't a decider.
+
+It reloads with its decider (maintenance mode), and the reload report's
+`commandPolicies` counts the commands now checked. A Go embedder that sets its
+own `gateway.Config.Authorize` is unaffected: only the stock server reads it.
+
 ## `//@transform <Type> <from> <to>`
 
 Declares an upcaster for event `<Type>` from version `<from>` to `<to>`

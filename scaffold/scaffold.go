@@ -30,6 +30,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 )
 
 // identifier matches names that are safe in a file name, a JS identifier,
@@ -107,6 +109,11 @@ type Command struct {
 	// an end is final: the decider refuses to begin an ended stream,
 	// so a deleted record's id can never be created again.
 	CanBeginAgain bool `json:"canBeginAgain,omitempty"`
+	// Authorize is who may send the command (schema requiredRole/
+	// fieldGatedRole/requiredOwnership.via/scope, resolved by the importer).
+	// Emitted as an //@authorize line, which the stock server enforces at
+	// its gateway. Nil: anyone the gateway admits, as before.
+	Authorize *cmdauth.Policy `json:"authorize,omitempty"`
 }
 
 // Event is one event a command may record.
@@ -806,6 +813,22 @@ func (d Domain) decider() string {
 			names = append(names, e.Name)
 		}
 		fmt.Fprintf(&b, "//@produces %s %s\n", c.Name, strings.Join(names, " "))
+	}
+	// //@authorize carries who may send a command into the running server,
+	// which enforces it at its gateway; a command the model declares
+	// nothing for gets no line and is checked as before (not at all)
+	for _, c := range d.Commands {
+		if c.Authorize == nil || !c.Authorize.Declares() {
+			continue
+		}
+		policy, err := c.Authorize.Encode()
+		if err != nil {
+			// a Policy is plain strings, slices and a JSON value from the
+			// document itself: this cannot fail for anything the importer
+			// built, so a failure is a programming error, said in the file
+			panic(fmt.Sprintf("scaffold: encoding the policy of %s: %v", c.Name, err))
+		}
+		fmt.Fprintf(&b, "//@authorize %s %s\n", c.Name, policy)
 	}
 	b.WriteString("//\n")
 	fmt.Fprintf(&b, "// %s — generated slice. The shape is right; the RULES are yours:\n", d.Aggregate)

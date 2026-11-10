@@ -29,11 +29,14 @@ type Key struct {
 // emschema.Command's own requiredRole/fieldGatedRole/requiredOwnership/
 // scope one-for-one. A zero Policy means no requirement, same
 // additive-optional posture the source schema documents throughout.
+//
+// Its JSON (an //@authorize line) uses the Go field names and leaves out
+// what isn't declared.
 type Policy struct {
-	RequiredRole   []string
-	FieldGatedRole *FieldGatedRolePolicy
-	Ownership      *OwnershipPolicy
-	Scope          *ScopePolicy
+	RequiredRole   []string              `json:"RequiredRole,omitempty"`
+	FieldGatedRole *FieldGatedRolePolicy `json:"FieldGatedRole,omitempty"`
+	Ownership      *OwnershipPolicy      `json:"Ownership,omitempty"`
+	Scope          *ScopePolicy          `json:"Scope,omitempty"`
 }
 
 // FieldGatedRolePolicy is command.fieldGatedRole's resolved shape — see

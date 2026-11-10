@@ -9,6 +9,8 @@ import (
 
 	"github.com/dop251/goja"
 	"github.com/pocketbase/pocketbase/core"
+
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 )
 
 // LoadResult bundles everything found in a functions dir.
@@ -152,6 +154,23 @@ func declaration(name string, t triggers) (*Declaration, error) {
 					return nil, fmt.Errorf("functions: %s: //@produces says %q appends %q, which is not in //@handles",
 						name, cmd, ev)
 				}
+			}
+		}
+	}
+
+	if len(t.authorize) > 0 {
+		if t.decider == "" {
+			return nil, fmt.Errorf("functions: %s: //@authorize requires //@trigger decider", name)
+		}
+		// A policy for a command this decider doesn't take would never be
+		// checked: refused, as //@produces refuses the same mistake.
+		known := map[string]bool{}
+		for _, c := range t.commands {
+			known[c] = true
+		}
+		for cmd := range t.authorize {
+			if len(t.commands) > 0 && !known[cmd] {
+				return nil, fmt.Errorf("functions: %s: //@authorize names command %q, which is not in //@commands", name, cmd)
 			}
 		}
 	}
@@ -400,6 +419,7 @@ func buildDeciderSpec(rt *GojaRuntime, filename, src string, t triggers, hand st
 		Produces:   t.produces,
 		Transforms: t.transforms,
 		Hooks:      t.hooks,
+		Authorize:  t.authorize,
 		Prog:       prog,
 		runtime:    rt,
 	}, nil
@@ -430,13 +450,16 @@ type triggers struct {
 	transforms   []TransformSpec
 	hand         string   // //@hand <file>: the decider's hand-written hooks, compiled in
 	hooks        []string // //@hooks <name...>: what the hand file must define
+	// //@authorize <Command> <policy JSON> (optional): who may send the
+	// command, enforced by the stock server's gateway; keyed by command
+	authorize map[string]cmdauth.Policy
 }
 
 func (t triggers) empty() bool {
 	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && len(t.schemas) == 0 &&
 		t.decider == "" && len(t.handles) == 0 && len(t.commands) == 0 && len(t.transforms) == 0 &&
 		len(t.reactor) == 0 && len(t.dispatches) == 0 && len(t.produces) == 0 && len(t.rules) == 0 &&
-		t.hand == "" && len(t.hooks) == 0
+		t.hand == "" && len(t.hooks) == 0 && len(t.authorize) == 0
 }
 
 // parseTriggers scans the leading comment lines for //@ directives.
@@ -531,6 +554,32 @@ func parseTriggers(src string) (triggers, error) {
 				return t, fmt.Errorf("duplicate //@rule for collection %q", collection)
 			}
 			t.rules[collection] = value
+		case "authorize":
+			// //@authorize <Command> <policy JSON> — who may send Command
+			// (the model's requiredRole/fieldGatedRole/requiredOwnership.via/
+			// scope, already resolved to collection and field names by the
+			// importer). Refused when malformed, never dropped: a dropped
+			// line is a check the deployment believes it has.
+			raw := strings.TrimSpace(strings.TrimPrefix(rest, "authorize"))
+			cmd, policyJSON, ok := strings.Cut(raw, " ")
+			policyJSON = strings.TrimSpace(policyJSON)
+			if !ok || cmd == "" || policyJSON == "" {
+				return t, fmt.Errorf("//@authorize wants: authorize <Command> <policy JSON>")
+			}
+			if !validName.MatchString(cmd) {
+				return t, fmt.Errorf("//@authorize: %q is not a command name", cmd)
+			}
+			policy, err := cmdauth.DecodePolicy(policyJSON)
+			if err != nil {
+				return t, fmt.Errorf("//@authorize %s: %w", cmd, err)
+			}
+			if t.authorize == nil {
+				t.authorize = map[string]cmdauth.Policy{}
+			}
+			if _, dup := t.authorize[cmd]; dup {
+				return t, fmt.Errorf("//@authorize declared twice for command %q", cmd)
+			}
+			t.authorize[cmd] = policy
 		case "handles":
 			t.handles = append(t.handles, fields[1:]...)
 		case "commands":

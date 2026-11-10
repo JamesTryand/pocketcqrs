@@ -368,6 +368,13 @@ func (m *mapper) command(agg, id string, c Command, eventIDs []string, once, req
 		Refusals:         m.mapRefusals(id, c.RefuseWhen),
 		OwnedBy:          m.mapStateOwnership(agg, id, c.RequiredOwnership),
 	}
+	// who may send it, enforced by the stock server's gateway (//@authorize);
+	// the same table verify checks scenarios against (CommandPolicy)
+	if policy, declared, err := CommandPolicy(m.doc, id); err != nil {
+		m.rep.errorf("command %q: its authorization can't be generated: %v", id, err)
+	} else if declared && policy.Declares() {
+		out.Authorize = &policy
+	}
 	for _, evID := range eventIDs {
 		ev := m.doc.Events[evID]
 		m.eventAggregate[evID] = agg

@@ -108,6 +108,24 @@ hooks; registering without the hooks a rule needs fails), and a read model with
 any access rule has PocketBase's own record API locked to superusers so the
 route is the only way to read it.
 
+### Who may send a command
+
+A command's `requiredRole`, `fieldGatedRole`, `requiredOwnership.via` and
+`scope` become an [`//@authorize`](reference/directives.md#authorize-command-policy-json)
+line in the generated decider on the JS target, and **the stock server enforces
+it at the gateway** with nothing to wire: a caller the policy refuses gets `403`
+(`not authorized to issue <Command> on <aggregate>`, or a scope's own
+`message`), and nothing is recorded. The policy is the one verify checks
+scenarios against, so a scenario's `when.role` tests what a deployment does.
+
+It is optional. A command that declares none of these gets no line and is
+allowed to every caller the gateway admits, as before; a document with no
+command permissions generates exactly what it did. A superuser passes; the
+caller's role and subject id are the same auth-record fields read models use
+(above). `requiredOwnership.stateField` is decided by the generated decider
+itself (below). On the Go target the host wires `authorize.Authorizer` into
+its own `gateway.Config.Authorize`, as before.
+
 ### Refusals
 
 A command's `refuseWhen` rules (3.10.0, numeric operators 3.11.0) are

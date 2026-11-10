@@ -32,6 +32,9 @@ type ReloadReport struct {
 	DecidersReloaded   []string `json:"decidersReloaded,omitempty"`
 	DecidersRemoved    []string `json:"decidersRemoved,omitempty"`
 	DecidersRefused    []string `json:"decidersRefused,omitempty"`
+	// CommandPolicies is how many commands the reloaded deciders declare a
+	// permission for (//@authorize), now enforced at the gateway.
+	CommandPolicies int `json:"commandPolicies,omitempty"`
 	// SideEffects is set when this node is a read-only replica: effect
 	// functions, reactors and cron are not registered here (they run on the
 	// master), so EffectsReloaded, ReactorsReloaded and CronReloaded stay
@@ -344,6 +347,11 @@ func (s *State) reloadFunctions(ctx context.Context, functionsDir string) (*Relo
 	}
 	s.JSDeciders = newManaged
 	s.Store.SetUpcaster(functions.BuildUpcaster(validated))
+	if s.CommandPolicies != nil {
+		policies := functions.CommandPolicies(newManaged)
+		s.CommandPolicies.Set(policies)
+		report.CommandPolicies = len(policies)
+	}
 
 	// JS projections: swap consumers by checkpoint name
 	for _, p := range s.JSProjs {

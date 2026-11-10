@@ -24,8 +24,10 @@ import (
 	"github.com/jamestryand/pocketcqrs/adminapi"
 	"github.com/jamestryand/pocketcqrs/aggregates"
 	"github.com/jamestryand/pocketcqrs/authforward"
+	"github.com/jamestryand/pocketcqrs/authorize"
 	"github.com/jamestryand/pocketcqrs/authverify"
 	"github.com/jamestryand/pocketcqrs/batching"
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 	"github.com/jamestryand/pocketcqrs/commandqueue"
 	"github.com/jamestryand/pocketcqrs/consumers"
 	"github.com/jamestryand/pocketcqrs/decider"
@@ -170,7 +172,10 @@ func main() {
 	}
 
 	app := pocketbase.New()
-	c := &components{State: &adminapi.State{}}
+	// CommandPolicies: the stock server enforces the command permissions its
+	// JS deciders declare (//@authorize); built after they load, swapped on
+	// every reload that swaps them
+	c := &components{State: &adminapi.State{CommandPolicies: &cmdauth.Live{}}}
 
 	var gatewayCfg gateway.Config
 	app.RootCmd.PersistentFlags().BoolVar(
@@ -971,6 +976,11 @@ func main() {
 			validatedDeciders = append(validatedDeciders, spec)
 			logger.Info("JS decider active", "aggregate", spec.Aggregate)
 		}
+		policies := functions.CommandPolicies(c.JSDeciders)
+		c.CommandPolicies.Set(policies)
+		if len(policies) > 0 {
+			logger.Info("command permissions enforced at the gateway", "commands", len(policies))
+		}
 
 		// store-level upcasting: the validated deciders' transform chains
 		// compose into the store's read path, so every consumer (deciders,
@@ -1142,6 +1152,9 @@ func main() {
 		log.Printf("node identity: node_id=%s identity=%s instance=%q host=%s role=%s started_at=%s",
 			identity.NodeID, identity.Kind, identity.Instance, identity.Host, identity.Role, identity.StartedAtRFC3339())
 
+		// Command permissions the model declares hold here with nothing to
+		// wire: a command no //@authorize names is allowed, as before.
+		gatewayCfg.Authorize = authorize.Stock(c.CommandPolicies, roleField, subjectField)
 		gateway.RegisterRoutes(e, c.Registry, gatewayCfg)
 		// the verify oracle answers on every node (a secondary delegates to
 		// the master), so it is registered unconditionally; the verifying

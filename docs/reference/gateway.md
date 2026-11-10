@@ -19,6 +19,14 @@ resulting event's metadata:
 { "actor": "<record id>", "actorCollection": "<collection>", "now": "<UTC ts>" }
 ```
 
+**Who may send it**: the stock server checks the command's
+[`//@authorize`](directives.md#authorize-command-policy-json) policy, if its
+decider declares one (the schema importer writes it from the model's
+`requiredRole`, `fieldGatedRole`, `requiredOwnership.via` and `scope`). A
+caller it refuses gets `403`. A command with no policy is allowed to every
+caller admitted above, and a superuser passes every policy. A Go host sets
+`gateway.Config.Authorize` itself instead.
+
 **Responses**:
 
 | status | when |

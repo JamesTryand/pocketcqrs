@@ -3,6 +3,36 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.18.0 — the stock server enforces who may send a command
+
+### Added
+
+- **`//@authorize <Command> <policy JSON>`**, a decider directive saying who may send a command.
+  `schema import` writes it from the command's `requiredRole`, `fieldGatedRole`,
+  `requiredOwnership.via` and `scope` (the same table verify checks scenarios against,
+  `emschema.CommandPolicy`). A malformed line, an unknown key, a policy that declares nothing or a
+  command not in `//@commands` is refused at load, never dropped.
+- **The stock server enforces it at the gateway** (`authorize.Stock`), with nothing to wire: a
+  refused caller gets `403` and nothing is recorded. The caller's role and subject id are the
+  `--cqrsRoleField`/`--cqrsSubjectField` fields read rules already use; a superuser passes. The
+  table (`cmdauth.Live`) is rebuilt at boot and on every reload that swaps deciders; the reload
+  report's `commandPolicies` counts it.
+
+### Unchanged, on purpose
+
+- **Optional.** A command no `//@authorize` names is allowed exactly as before, so a document or a
+  hand-written decider declaring no command permission behaves as it did. Before this, a stock
+  server let every signed-in caller send every command even when the model said otherwise; only a
+  Go host that wired `authorize.Authorizer` itself enforced it.
+- **Erasure stays refused** on the stock server (the same message as with no hook,
+  `gateway.ErasureRefused`): who may erase whom is a host's own `Authorize`.
+- A Go embedder that sets its own `gateway.Config.Authorize` is unaffected.
+
+### Fixed
+
+- `docs/js-guide.md` said `//@rule` never changes an existing collection's rule; it has followed
+  the declaration on every reconcile since that changed.
+
 ## v0.17.0 — who may request erasure, declared in the document
 
 ### Added

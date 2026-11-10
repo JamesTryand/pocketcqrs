@@ -9,6 +9,7 @@ import (
 
 	"github.com/dop251/goja"
 
+	"github.com/jamestryand/pocketcqrs/cmdauth"
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/events"
 )
@@ -29,9 +30,26 @@ type DeciderSpec struct {
 	Transforms []TransformSpec
 	// Hooks are the hand-written functions (//@hooks) the decider calls,
 	// compiled in from its //@hand file; loading refuses one not defined.
-	Hooks   []string
-	Prog    *goja.Program
-	runtime *GojaRuntime
+	Hooks []string
+	// Authorize is the optional //@authorize declaration: command -> who
+	// may send it. Nil or empty: no command of this decider is checked.
+	Authorize map[string]cmdauth.Policy
+	Prog      *goja.Program
+	runtime   *GojaRuntime
+}
+
+// CommandPolicies is the gateway policy table the active JS deciders
+// declare, keyed by (aggregate, command) as a request names them. A decider
+// with no //@authorize adds nothing, so a deployment that declares none gets
+// an empty table and every command is allowed, as before.
+func CommandPolicies(deciders map[string]*DeciderSpec) map[cmdauth.Key]cmdauth.Policy {
+	out := map[cmdauth.Key]cmdauth.Policy{}
+	for _, spec := range deciders {
+		for cmd, p := range spec.Authorize {
+			out[cmdauth.Key{Aggregate: spec.Aggregate, Command: cmd}] = p
+		}
+	}
+	return out
 }
 
 // TransformSpec declares an upcaster transform_<Type>_<From>_to_<To>(data).
