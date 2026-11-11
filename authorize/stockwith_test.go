@@ -9,8 +9,8 @@ import (
 	"github.com/jamestryand/pocketcqrs/pii"
 )
 
-var captureNeedsIntake = map[cmdauth.Key]cmdauth.Policy{
-	{Aggregate: "contact", Command: "CaptureContact"}: {RequiredRole: []string{"operator", "intake"}},
+var makeNeedsClerk = map[cmdauth.Key]cmdauth.Policy{
+	{Aggregate: "booking", Command: "MakeBooking"}: {RequiredRole: []string{"operator", "clerk"}},
 }
 
 // A compiled-in domain's policies hold beside the JS deciders', and a reload
@@ -18,16 +18,16 @@ var captureNeedsIntake = map[cmdauth.Key]cmdauth.Policy{
 func TestStockWithKeepsFixedPoliciesAcrossAReload(t *testing.T) {
 	live := &cmdauth.Live{}
 	live.Set(openNeedsOperator)
-	hook := StockWith(StockConfig{Live: live, Fixed: captureNeedsIntake})
+	hook := StockWith(StockConfig{Live: live, Fixed: makeNeedsClerk})
 	check := func(when string) {
 		t.Helper()
-		if ok, _ := hook(&core.RequestEvent{Auth: caller("users", "period-check")}, "contact", "CaptureContact", "c1", nil); ok {
+		if ok, _ := hook(&core.RequestEvent{Auth: caller("users", "auditor")}, "booking", "MakeBooking", "c1", nil); ok {
 			t.Fatalf("%s: a fixed policy let the wrong role through", when)
 		}
-		if ok, err := hook(&core.RequestEvent{Auth: caller("users", "intake")}, "contact", "CaptureContact", "c1", nil); !ok || err != nil {
+		if ok, err := hook(&core.RequestEvent{Auth: caller("users", "clerk")}, "booking", "MakeBooking", "c1", nil); !ok || err != nil {
 			t.Fatalf("%s: the declared role was refused: %v %v", when, ok, err)
 		}
-		if ok, _ := hook(&core.RequestEvent{Auth: caller("users", "")}, "contact", "captureContact", "c1", nil); ok {
+		if ok, _ := hook(&core.RequestEvent{Auth: caller("users", "")}, "booking", "makeBooking", "c1", nil); ok {
 			t.Fatalf("%s: another spelling got past a fixed policy", when)
 		}
 		if ok, err := hook(&core.RequestEvent{Auth: caller("users", "")}, "contact", "Undeclared", "c1", nil); !ok || err != nil {
@@ -48,7 +48,7 @@ func TestStockWithKeepsFixedPoliciesAcrossAReload(t *testing.T) {
 // With no erasure wiring, StockWith is Stock: every dataSubject command is
 // refused, superusers included.
 func TestStockWithWithoutErasureKeepsTheStockRefusal(t *testing.T) {
-	hook := StockWith(StockConfig{Live: &cmdauth.Live{}, Fixed: captureNeedsIntake})
+	hook := StockWith(StockConfig{Live: &cmdauth.Live{}, Fixed: makeNeedsClerk})
 	su := core.NewRecord(core.NewAuthCollection(core.CollectionNameSuperusers))
 	for _, cmd := range []string{pii.RequestErasureCommand, pii.EraseSubjectCommand} {
 		if ok, _ := hook(&core.RequestEvent{Auth: su}, pii.SubjectAggregate, cmd, "s1", nil); ok {
@@ -74,10 +74,10 @@ func TestStockWithErasureAsTheHostDecides(t *testing.T) {
 	if !req("operator", pii.RequestErasureCommand) {
 		t.Fatal("the declared role may request erasure")
 	}
-	if req("intake", pii.RequestErasureCommand) {
+	if req("clerk", pii.RequestErasureCommand) {
 		t.Fatal("a role the declaration does not name may not request erasure")
 	}
-	if !req("operator", pii.EraseSubjectCommand) || req("intake", pii.EraseSubjectCommand) {
+	if !req("operator", pii.EraseSubjectCommand) || req("clerk", pii.EraseSubjectCommand) {
 		t.Fatal("EraseSubject is the host's SubjectCommand to decide")
 	}
 	if len(asked) != 2 {

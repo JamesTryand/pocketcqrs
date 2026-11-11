@@ -13,7 +13,7 @@ import (
 )
 
 // EnvFacadeURL names the facade's base URL (e.g.
-// https://kms.bureau.tryand.uk:8080/), matching the facade's own kms.env
+// https://kms.example:8080/), matching the facade's own kms.env
 // naming and dotnetcqrs's generated hosts. A host that stores personal data
 // and has no facade URL must refuse to start, never fall back to Memory.
 const EnvFacadeURL = "KMS_FACADE_URL"

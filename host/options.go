@@ -14,18 +14,25 @@ import (
 	"github.com/jamestryand/pocketcqrs/decider"
 	"github.com/jamestryand/pocketcqrs/emschema"
 	"github.com/jamestryand/pocketcqrs/events"
+	"github.com/jamestryand/pocketcqrs/functions"
 	"github.com/jamestryand/pocketcqrs/outbox"
 	"github.com/jamestryand/pocketcqrs/pii"
 	"github.com/jamestryand/pocketcqrs/projections"
+	"github.com/jamestryand/pocketcqrs/reactors"
 )
 
 // Options is what an embedder adds to the stock program. The zero value is
 // the stock program without its `skill` command.
 //
-// A host's read-model collections are ordinary PocketBase migrations: register
-// them (github.com/pocketbase/pocketbase/migrations.Register, usually from an
-// init function in the host's own package) before calling Run. They run with
-// the platform's own, in file-name order, before Register is called.
+// A generated domain declares its read models' collections itself
+// (Host.EnsureCollections, from the Register that schema import --lang go
+// writes). Hand-made collections can still be ordinary PocketBase migrations
+// (github.com/pocketbase/pocketbase/migrations.Register, before Run), which
+// run with the platform's own, in file-name order, before Register is called.
+//
+// Options and Host are the extension contract for a program of your own
+// (docs/go-guide.md, "Your own program"): what they export is kept compatible
+// within a minor version, and a change to it is named in the CHANGELOG.
 type Options struct {
 	// Commands are added to the command line, after the platform's own.
 	Commands []*cobra.Command
@@ -82,6 +89,55 @@ type Host struct {
 func (h *Host) AddProjection(p projections.Projection) {
 	h.Engine.Register(p)
 	h.projections = append(h.projections, p)
+}
+
+// Collection is a read model's PocketBase collection, as a generated Go domain
+// declares it: Key is the row identity (a unique index), Fields its columns.
+type Collection struct {
+	Name   string
+	Key    string
+	Fields []Field
+}
+
+// Field is one column: Type is text, number, bool, date or json, the types
+// of a JS projection's //@schema. A personal-data column is text (it holds
+// the encrypted envelope).
+type Field struct {
+	Name string
+	Type string
+}
+
+// EnsureCollections creates each collection that does not exist and adds the
+// columns and key index an existing one lacks, the way a JS projection's
+// //@schema is reconciled: additive only, nothing removed or retyped. Their
+// record API is closed to all but superusers: a compiled-in read model is read
+// through its read route (queryroute), which checks the role the model gives
+// it. Call it from Register, before AddProjection.
+func (h *Host) EnsureCollections(cols ...Collection) error {
+	superuser := functions.RuleSuperuser
+	specs := make([]*functions.SchemaSpec, 0, len(cols))
+	for _, c := range cols {
+		spec := &functions.SchemaSpec{Collection: c.Name, Key: c.Key, RuleOverride: &superuser}
+		for _, f := range c.Fields {
+			spec.Fields = append(spec.Fields, functions.FieldSpec{Name: f.Name, Type: f.Type})
+		}
+		specs = append(specs, spec)
+	}
+	return functions.EnsureSchemas(h.App, specs, "", func(msg string, args ...any) {
+		h.App.Logger().Info(msg, args...)
+	})
+}
+
+// AddReactor registers a compiled-in reactor (saga). It runs only on the node
+// that appends (Writer), as the platform's own reactors do: on a read-only
+// secondary it is not registered.
+func (h *Host) AddReactor(r reactors.Reactor) {
+	if !h.Writer {
+		return
+	}
+	h.Engine.Register(reactors.AsConsumer(r, h.Registry,
+		func(msg string, args ...any) { h.App.Logger().Info(msg, args...) },
+		func(msg string, args ...any) { h.App.Logger().Warn(msg, args...) }))
 }
 
 // DeclareCommands enforces the command permissions an EventModel document

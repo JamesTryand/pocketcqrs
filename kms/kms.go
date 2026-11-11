@@ -1,5 +1,5 @@
 // Package kms is the caller side of the key-management facade
-// (journal.bureau.tryand.uk/kms, docs/facade-api-contract.md): per-subject
+// (a separate service; its facade API contract): per-subject
 // keys for crypto-shredding personal data, and named index keys for blind
 // (HMAC) search indexes. Keys never leave the facade; this package only asks
 // it to encrypt, decrypt, hash and destroy.

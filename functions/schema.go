@@ -166,14 +166,14 @@ func (s *SchemaSpec) uniqueIndexSQL() string {
 func ReconcileSchemas(app core.App, specs []*ProjectionSpec, defaultRule string) error {
 	for _, spec := range specs {
 		for _, s := range spec.Schemas {
-			if err := reconcileBase(app, spec, s, defaultRule); err != nil {
+			if err := reconcileBase(app, specLogger(spec), s, defaultRule); err != nil {
 				return err
 			}
 		}
 	}
 	for _, spec := range specs {
 		for _, s := range spec.Schemas {
-			if err := reconcileRelations(app, spec, s); err != nil {
+			if err := reconcileRelations(app, specLogger(spec), s); err != nil {
 				return err
 			}
 		}
@@ -181,9 +181,70 @@ func ReconcileSchemas(app core.App, specs []*ProjectionSpec, defaultRule string)
 	return nil
 }
 
+// specLogger is the spec's runtime logger, read only when something is
+// logged before (a spec built without a runtime logs nothing).
+func specLogger(spec *ProjectionSpec) func(string, ...any) {
+	return func(msg string, args ...any) {
+		if spec.runtime != nil && spec.runtime.logger != nil {
+			spec.runtime.logger(msg, args...)
+		}
+	}
+}
+
+// EnsureSchemas is ReconcileSchemas for collections declared by compiled-in
+// code (a generated Go domain's read models) rather than by //@schema lines:
+// the same two passes, additive only, the read rule following each
+// declaration (RuleOverride; nil uses defaultRule). logger may be nil.
+func EnsureSchemas(app core.App, schemas []*SchemaSpec, defaultRule string, logger func(string, ...any)) error {
+	if logger == nil {
+		logger = func(string, ...any) {}
+	}
+	for _, s := range schemas {
+		if err := s.validate(); err != nil {
+			return err
+		}
+	}
+	for _, s := range schemas {
+		if err := reconcileBase(app, logger, s, defaultRule); err != nil {
+			return err
+		}
+	}
+	for _, s := range schemas {
+		if err := reconcileRelations(app, logger, s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate checks a SchemaSpec built in code the way parseSchemaDirective
+// checks one read from a directive: names go into index DDL.
+func (s *SchemaSpec) validate() error {
+	if !validName.MatchString(s.Collection) {
+		return fmt.Errorf("invalid collection name %q", s.Collection)
+	}
+	if !validName.MatchString(s.Key) {
+		return fmt.Errorf("collection %s: invalid key field name %q", s.Collection, s.Key)
+	}
+	keySeen := false
+	for _, f := range s.Fields {
+		if !validName.MatchString(f.Name) {
+			return fmt.Errorf("collection %s: invalid field name %q", s.Collection, f.Name)
+		}
+		if _, ok := schemaFieldTypes[f.Type]; !ok && !(f.Type == "relation" && validName.MatchString(f.RelationTarget)) {
+			return fmt.Errorf("collection %s: field %s has an invalid type %q", s.Collection, f.Name, f.Type)
+		}
+		keySeen = keySeen || f.Name == s.Key
+	}
+	if !keySeen {
+		return fmt.Errorf("collection %s: key field %q is not declared", s.Collection, s.Key)
+	}
+	return nil
+}
+
 // reconcileBase is pass 1: the collection exists and carries all declared
 // non-relation fields.
-func reconcileBase(app core.App, spec *ProjectionSpec, s *SchemaSpec, defaultRule string) error {
+func reconcileBase(app core.App, logger func(string, ...any), s *SchemaSpec, defaultRule string) error {
 	col, err := app.FindCollectionByNameOrId(s.Collection)
 	if err != nil {
 		return createCollection(app, s, defaultRule)
@@ -199,7 +260,7 @@ func reconcileBase(app core.App, spec *ProjectionSpec, s *SchemaSpec, defaultRul
 		if want != nil {
 			shown = *want
 		}
-		spec.runtime.logger("schema read rule changed to follow the declaration",
+		logger("schema read rule changed to follow the declaration",
 			"collection", s.Collection, "rule", shown)
 		col.ListRule = want
 		col.ViewRule = want
@@ -216,7 +277,7 @@ func reconcileBase(app core.App, spec *ProjectionSpec, s *SchemaSpec, defaultRul
 			continue
 		}
 		if existing.Type() != f.Type {
-			spec.runtime.logger("schema field type mismatch, keeping existing",
+			logger("schema field type mismatch, keeping existing",
 				"collection", s.Collection, "field", f.Name,
 				"declared", f.Type, "actual", existing.Type())
 		}
@@ -231,7 +292,7 @@ func reconcileBase(app core.App, spec *ProjectionSpec, s *SchemaSpec, defaultRul
 // reconcileRelations is pass 2: missing relation fields are added (the
 // target collection id is resolved by name — every declared collection
 // exists by now) along with the key index.
-func reconcileRelations(app core.App, spec *ProjectionSpec, s *SchemaSpec) error {
+func reconcileRelations(app core.App, logger func(string, ...any), s *SchemaSpec) error {
 	col, err := app.FindCollectionByNameOrId(s.Collection)
 	if err != nil {
 		return fmt.Errorf("schema reconcile: collection %s missing after base pass: %w", s.Collection, err)
@@ -244,7 +305,7 @@ func reconcileRelations(app core.App, spec *ProjectionSpec, s *SchemaSpec) error
 		}
 		if existing := col.Fields.GetByName(f.Name); existing != nil {
 			if existing.Type() != "relation" {
-				spec.runtime.logger("schema field type mismatch, keeping existing",
+				logger("schema field type mismatch, keeping existing",
 					"collection", s.Collection, "field", f.Name,
 					"declared", f.Type, "actual", existing.Type())
 			}

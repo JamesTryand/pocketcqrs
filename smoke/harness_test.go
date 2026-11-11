@@ -88,6 +88,14 @@ func startBackendFlags(t *testing.T, functions map[string]string, extra ...strin
 // package (an embedder's own main, such as examples/gohost).
 func startBackendPkg(t *testing.T, pkg string, functions map[string]string, extra ...string) *harness {
 	t.Helper()
+	return startBackendBin(t, func(dir string) string { return build(t, pkg, filepath.Join(dir, "pocketcqrs")) },
+		functions, extra...)
+}
+
+// startBackendBin is startBackendPkg for a program built some other way (a
+// module outside this one): bin copies or builds it into dir and returns its path.
+func startBackendBin(t *testing.T, bin func(dir string) string, functions map[string]string, extra ...string) *harness {
+	t.Helper()
 
 	dir := t.TempDir()
 	fnDir := filepath.Join(dir, "pb_functions")
@@ -100,20 +108,20 @@ func startBackendPkg(t *testing.T, pkg string, functions map[string]string, extr
 		}
 	}
 
-	bin := build(t, pkg, filepath.Join(dir, "pocketcqrs"))
+	binPath := bin(dir)
 	dataDir := filepath.Join(dir, "pb_data")
 
 	// the superuser has to exist before serving: every operational route is
 	// superuser-scoped, so without one the harness could not authenticate
-	seed := exec.Command(bin, "superuser", "upsert", superuserEmail, superuserPassword, "--dir", dataDir)
+	seed := exec.Command(binPath, "superuser", "upsert", superuserEmail, superuserPassword, "--dir", dataDir)
 	if out, err := seed.CombinedOutput(); err != nil {
 		t.Fatalf("seeding the superuser failed: %v\n%s", err, out)
 	}
 
-	addr, stop := serveOnFreeAddr(t, bin, dir, "backend", "/api/health", func(addr string) []string {
+	addr, stop := serveOnFreeAddr(t, binPath, dir, "backend", "/api/health", func(addr string) []string {
 		return append([]string{"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir}, extra...)
 	})
-	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: bin, client: newClient(t), stop: stop}
+	h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: binPath, client: newClient(t), stop: stop}
 
 	h.Token = h.authenticate()
 	return h

@@ -150,6 +150,15 @@ func Run(opts Options) {
 	// pb.Execute() discards RootCmd.Execute()'s return value, so a RunE
 	// error used to print correctly but never reach a non-zero exit code.
 	// Running Execute() directly here lets main() act on it.
+	// `init` writes a new program's files and touches no platform either.
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		ic := newInitCommand()
+		ic.SetArgs(os.Args[2:])
+		if err := ic.Execute(); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 2 && os.Args[1] == "schema" && (os.Args[2] == "import" || os.Args[2] == "verify") {
 		ic := newSchemaImportCommand()
 		if os.Args[2] == "verify" {
@@ -590,6 +599,7 @@ func Run(opts Options) {
 	app.RootCmd.AddCommand(newPackCommand(c, &functionsDir))
 	app.RootCmd.AddCommand(newEventsCommand(c, &functionsDir))
 	app.RootCmd.AddCommand(newSchemaCommand(c))
+	app.RootCmd.AddCommand(newInitCommand()) // listed for --help; run by the short-circuit above
 	for _, cmd := range opts.Commands {
 		app.RootCmd.AddCommand(cmd)
 	}

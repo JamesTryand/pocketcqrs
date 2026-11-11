@@ -1,0 +1,60 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "3.15.0",
+  "id": "smoke-tickets",
+  "name": "Tickets (smoke)",
+  "description": "A program of one's own for the smoke suite: opening a ticket needs the agent role, and the tickets read model is read through its route.",
+  "swimlanes": [
+    { "id": "desk", "name": "Desk", "kind": "team" }
+  ],
+  "events": {
+    "ticket-opened": {
+      "name": "Ticket Opened", "swimlaneId": "desk", "aggregate": "ticket",
+      "fields": [
+        { "name": "ticketId", "type": "string", "idAttribute": true },
+        { "name": "teamId", "type": "string" },
+        { "name": "estimatedEffort", "type": "decimal" }
+      ]
+    }
+  },
+  "commands": {
+    "open-ticket": {
+      "name": "Open Ticket", "aggregate": "ticket", "requiredRole": ["agent"],
+      "fields": [
+        { "name": "teamId", "type": "string" },
+        { "name": "estimatedEffort", "type": "decimal" }
+      ]
+    }
+  },
+  "readModels": {
+    "tickets": {
+      "name": "Tickets", "question": "Which tickets are open, in which team?",
+      "builtFromEventIds": ["ticket-opened"],
+      "fields": [
+        { "name": "ticketId", "type": "string", "idAttribute": true },
+        { "name": "teamId", "type": "string" },
+        { "name": "estimatedEffort", "type": "decimal" }
+      ]
+    }
+  },
+  "screens": {
+    "desk-screen": { "name": "Desk" }
+  },
+  "slices": [
+    {
+      "id": "open-ticket-slice", "name": "Open Ticket", "pattern": "stateChange", "swimlaneId": "desk", "status": "created",
+      "screenId": "desk-screen", "commandId": "open-ticket", "eventIds": ["ticket-opened"],
+      "scenarios": [
+        {
+          "id": "open-a-ticket", "name": "Open a ticket", "kind": "stateChange", "given": [],
+          "when": { "commandId": "open-ticket", "data": { "teamId": "red", "estimatedEffort": 3 } },
+          "then": { "events": [{ "eventId": "ticket-opened" }] }
+        }
+      ]
+    },
+    {
+      "id": "view-tickets-slice", "name": "View Tickets", "pattern": "stateView", "swimlaneId": "desk", "status": "created",
+      "screenId": "desk-screen", "readModelId": "tickets", "scenarios": []
+    }
+  ]
+}

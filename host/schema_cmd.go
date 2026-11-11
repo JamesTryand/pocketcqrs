@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/modfile"
 
 	"github.com/jamestryand/pocketcqrs/emschema"
 	"github.com/jamestryand/pocketcqrs/scaffold"
@@ -102,7 +103,11 @@ func newSchemaImportCommand() *cobra.Command {
 			}
 
 			if lang == "go" {
-				written, err := writeSliceGo(mapped, outDir, force)
+				raw, err := documentBytes(args[0], doc)
+				if err != nil {
+					return err
+				}
+				written, wired, err := writeSliceGo(mapped, outDir, raw, force)
 				if err != nil {
 					return err
 				}
@@ -110,10 +115,18 @@ func newSchemaImportCommand() *cobra.Command {
 				if docsDir != "" {
 					cmd.Printf("--docs %s was ignored: domain docs are generated only for --lang js.\n", docsDir)
 				}
-				cmd.Println("\nScaffolding, not migration: there is no JS→Go transpiler. Each file is a " +
-					"starting-point skeleton (state shape, Decide/Evolve signatures, Commands metadata) " +
-					"whose actual rules are yours to write — dry-run and test it independently before " +
-					"relying on it.")
+				if wired != "" {
+					cmd.Printf("\nWired: %s registers all of it on pocketcqrs's host. Your program's main.go:\n\n"+
+						"  d := %s.New()\n  host.Run(host.Options{Register: d.Register, Serve: d.Serve})\n\n"+
+						"Regenerate (go generate) rather than editing generated files; a hook's rules go in "+
+						"their own file, from the .go.example beside it (docs/go-guide.md, \"Your own program\").\n",
+						filepath.Join(outDir, scaffold.GoWiringFile), wired)
+					return nil
+				}
+				cmd.Println("\nScaffolding, not migration: there is no JS to Go transpiler. Each file is a " +
+					"starting-point skeleton whose hand-written rules are yours. No go.mod above " + outDir +
+					", so no wiring was written: run this inside your program's module (`pocketcqrs init go` " +
+					"makes one) to get a generated Register.")
 				printGoWiringSuggestions(cmd, mapped.Domains)
 				return nil
 			}
@@ -342,31 +355,102 @@ func writeSlice(mapped *emschema.Mapped, outDir, docsDir string, force bool) (in
 // --lang go is CLI + --out only (docs/go-guide.md's own JS→Go table is the
 // standing documentation for what converting means), and domain docs are a
 // JS-side artifact of the dashboard scaffolder's own workflow.
-func writeSliceGo(mapped *emschema.Mapped, outDir string, force bool) (int, error) {
+//
+// Inside a Go module (a go.mod in outDir or above it) it also writes the
+// wiring package (scaffold.GenerateGoWiring) and the document it embeds, and
+// returns the package's name; outside one, "".
+func writeSliceGo(mapped *emschema.Mapped, outDir string, docRaw []byte, force bool) (int, string, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	written := 0
+	importBase, inModule, err := goImportPath(outDir)
+	if err != nil {
+		return 0, "", err
+	}
+	wired := ""
+	if inModule {
+		abs, err := filepath.Abs(outDir)
+		if err != nil {
+			return 0, "", err
+		}
+		w := scaffold.GoWiring{Package: scaffold.GoWiringPackage(filepath.Base(abs)), ImportBase: importBase,
+			ModelFile: "model.eventmodel.json"}
+		src, err := scaffold.GenerateGoWiring(w, mapped.Domains)
+		if err != nil {
+			return 0, "", err
+		}
+		// the wiring and its document are always rewritten: they are wholly
+		// generated, and a stale copy of the model would enforce old rules
+		for _, f := range []struct{ name, content string }{{w.ModelFile, string(docRaw)}, {scaffold.GoWiringFile, src}} {
+			n, err := writeIfAbsent(filepath.Join(outDir, f.name), f.content, true)
+			if err != nil {
+				return written, "", err
+			}
+			written += n
+		}
+		wired = w.Package
+	}
 	for _, d := range mapped.Domains {
 		files, err := d.GenerateGo()
 		if err != nil {
-			return written, fmt.Errorf("generating %s: %w", d.Aggregate, err)
+			return written, "", fmt.Errorf("generating %s: %w", d.Aggregate, err)
 		}
 		// each aggregate is its own package, so its own directory: two
 		// packages in one directory don't compile
 		pkgDir := filepath.Join(outDir, scaffold.GoPackageName(d.Aggregate))
 		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-			return written, err
+			return written, "", err
 		}
 		for _, f := range files {
 			n, err := writeIfAbsent(filepath.Join(pkgDir, f.Name), f.Source, force)
 			if err != nil {
-				return written, err
+				return written, "", err
 			}
 			written += n
 		}
 	}
-	return written, nil
+	return written, wired, nil
+}
+
+// documentBytes is the document as it will be embedded: the file itself, or,
+// for a split manifest directory, the loaded document written as one.
+func documentBytes(path string, doc *emschema.Document) ([]byte, error) {
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return os.ReadFile(path)
+	}
+	return emschema.Marshal(doc)
+}
+
+// goImportPath finds the go.mod at or above dir and returns dir's import path
+// in that module; false when there is none.
+func goImportPath(dir string) (string, bool, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", false, err
+	}
+	for d := abs; ; {
+		raw, err := os.ReadFile(filepath.Join(d, "go.mod"))
+		if err == nil {
+			module := modfile.ModulePath(raw)
+			if module == "" {
+				return "", false, fmt.Errorf("%s has no module line", filepath.Join(d, "go.mod"))
+			}
+			rel, err := filepath.Rel(d, abs)
+			if err != nil {
+				return "", false, err
+			}
+			if rel == "." {
+				return module, true, nil
+			}
+			return module + "/" + filepath.ToSlash(rel), true, nil
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return "", false, nil
+		}
+		d = parent
+	}
 }
 
 // printGoWiringSuggestions prints the registration line(s) a real deployment

@@ -75,12 +75,9 @@ directly from an EventModeling document, alongside the existing (default)
 JS output — same model, same validation, second output language. It writes
 one file per decider/projection/reactor, each aggregate as its own package
 in its own directory (`<out>/<package>/`, the package named after the
-aggregate) and prints suggested `decider.Register`/`engine.Register`
-lines for `main.go` — printed, not applied, for the same reason
-`aggregates.RegisterAll` isn't patched automatically: a one-line edit isn't
-worth code-mod machinery, and there's no "graduated" bookkeeping to keep in
-sync — the registry's own JS/Go name-collision refusal already makes a
-partial migration visible. This is scaffolding for a document you're
+aggregate). Inside a Go module it also writes `<out>/register.go`, which
+wires all of it into a program of your own ([Your own program](#your-own-program));
+outside one it prints the registration lines instead. This is scaffolding for a document you're
 importing fresh, not a converter for an existing hand-written JS file: the
 same "starting point, not a translation" caveat above applies to its output
 exactly as it does to the JS scaffolder's.
@@ -311,69 +308,140 @@ reproducibility, which is the guarantee everything else rests on.
 ## Your own program
 
 A Go domain is compiled into the program that registers it, so it needs a
-program of its own. That program is the whole of pocketcqrs (every flag, every
-command, `serve`) plus what you add, through three hooks in `host.Options`:
+program of its own. That program lives in **your own repository** and depends
+on pocketcqrs as a module version: never a copy or a checkout of pocketcqrs's
+source, so an upgrade is a version bump. (The tutorial's `task` and `order` are
+the only domains in pocketcqrs's own source.) It is still one binary: the
+whole of pocketcqrs (every flag, every command, `serve`) with your domains
+compiled in.
 
-| hook | runs | for |
-| --- | --- | --- |
-| `Commands` | at start-up | extra commands on the command line |
-| `Register(h *host.Host)` | once per process, after the event store, registry and engine exist and before the JS functions load (step 2 below) | deciders (`h.Registry`), projections (`h.AddProjection`), command permissions (`h.DeclareCommands`), personal data (`h.WirePII`) |
-| `Serve(se, h)` | inside `OnServe`, after the platform's routes, before the node listens (step 8) | read routes (`queryroute.Register`) and anything else served |
+### Start one
 
-`examples/gohost` is the smallest one, and the smoke suite runs it:
+```sh
+pocketcqrs init go example.com/tickets --model tickets.eventmodel.json
+cd tickets
+go mod tidy
+go build
+./tickets serve
+```
+
+`init go` writes a new directory (it refuses one that is not empty):
+
+| file | what it is |
+| --- | --- |
+| `go.mod` | pocketcqrs **required** (the library) and a **tool** (the code generator, Go 1.24's `tool` directive), so one version pins both |
+| `model/<document>.json` | your EventModel document |
+| `generate.go` | `//go:generate go tool pocketcqrs schema import model/... --lang go --out domain --force` |
+| `domain/` | generated from the document: one package per aggregate, and `register.go` with the wiring |
+| `main.go` | `d := domain.New(); host.Run(host.Options{Register: d.Register, Serve: d.Serve})` |
+| `Dockerfile` | a single static binary, data in `/data` |
+
+The version required is the one the `pocketcqrs` that ran `init` was built
+from, or `--version vX.Y.Z`. To try an unreleased pocketcqrs, `--pocketcqrs
+<checkout>` adds a `replace` onto it: remove that before you commit, or your
+repository depends on pocketcqrs's source again.
+
+### Change and upgrade
+
+```sh
+# after editing the document
+go generate ./...
+# a new pocketcqrs: the generator and the library move together
+go get -tool github.com/jamestryand/pocketcqrs@v0.21.0
+go generate ./...
+```
+
+**Commit the generated code** (`domain/`), as Go convention does: the build
+needs no generator, and a review shows what a document or version change did.
+Do not edit it; it is overwritten. A rule the document leaves to you (a hook,
+a hand-written projection) is generated as a `.go.example` beside the file:
+copy it to a `.go` file of its own and write the rule there, where `go
+generate` never touches it. A read model removed from the document leaves its
+old files behind: delete them.
+
+### What the generated wiring does
+
+`schema import --lang go` run inside a Go module (a `go.mod` in the output
+directory or above it) also writes `register.go` and the document it embeds.
+Outside a module it writes only the aggregates and prints the lines instead.
+`Register` (for `host.Options.Register`):
+
+- **Command permissions.** `h.DeclareCommands` enforces the document's
+  `requiredRole`, `fieldGatedRole`, `requiredOwnership` and `scope` at the
+  gateway beside the JS deciders' `//@authorize` lines. A hot reload, which
+  replaces only the JS table, keeps them. A command no document names stays
+  allowed.
+- **Read models' collections.** `h.EnsureCollections` creates them, and adds
+  later columns, the way a JS projection's `//@schema` is reconciled: additive
+  only, typed (`text`, `number`, `bool`, `date`, `json`; a personal-data
+  column is `text`). Their record API is superusers only: a compiled-in read
+  model is read through its read route.
+- **Deciders, projections, reactors.** Each decider is registered (protected,
+  with `h.WirePII`, when it carries personal data; that needs
+  `KMS_FACADE_URL`). Each projection goes through `h.AddProjection`, which
+  write-guards it and makes it rebuildable. Each reactor goes through
+  `h.AddReactor`, which registers it only on the writer.
+- **Searches** by a personal field (`match` filters): a `search.db` in the
+  data directory, keyed by `KMS_INDEX_KEY`.
+
+`Serve` registers every read model's route (`GET /api/cqrs/rm/{collection}`),
+which checks the role the document gives it, and self-access where the
+document declares it. Nothing generated names a source of messages (no
+schedule, URL or credential): those are configured outside the program.
+
+### What stays yours
+
+`main.go` is where your own parts go, around the generated ones:
 
 ```go
-//go:embed task.eventmodel.json
-var model []byte
-
 func main() {
-	migrations.RegisterExamples() // read-model collections: ordinary migrations, before Run
+	d := domain.New()
 	host.Run(host.Options{
 		Register: func(h *host.Host) error {
-			doc, err := emschema.Parse("task.eventmodel.json", model)
-			if err != nil {
+			if err := d.Register(h); err != nil {
 				return err
 			}
-			if err := h.DeclareCommands(doc); err != nil { // who may send each command
-				return err
+			// who may erase whom is the program's own rule
+			h.AuthorizeSubjectCommand = func(re *core.RequestEvent, command, id string, payload []byte) (bool, error) {
+				return h.OwnRole(re.Auth) == "operator", nil
 			}
-			aggregates.RegisterAll(h.Registry)
-			h.AddProjection(projections.NewTasks(h.App)) // engine + write guard + rebuild
-			h.AddProjection(projections.NewOrders(h.App))
 			return nil
 		},
+		Serve: d.Serve,
 	})
 }
 ```
 
-What it gives you, and what stays yours:
+The hooks of `host.Options`:
 
-- **Command permissions.** `h.DeclareCommands(doc)` enforces the document's
-  `requiredRole`, `fieldGatedRole`, `requiredOwnership` and `scope` at the
-  gateway beside the JS deciders' `//@authorize` lines, and survives a hot
-  reload (which replaces only the JS table). The Go target writes no
-  permissions into generated code, so this call is how a generated Go domain
-  gets them. A command no document names stays allowed.
+| hook | runs | for |
+| --- | --- | --- |
+| `Commands` | at start-up | extra commands on the command line |
+| `Register(h *host.Host)` | once per process, after the event store, registry and engine exist and before the JS functions load (step 2 below) | the generated `Register`, and anything else registered |
+| `Serve(se, h)` | inside `OnServe`, after the platform's routes, before the node listens (step 8) | the generated `Serve`, and anything else served |
+
 - **Erasure.** The stock program refuses every `dataSubject` command. A
   document's `dataSubjects.erasure` (through `DeclareCommands`) admits
   `RequestErasure`; `h.AuthorizeSubjectCommand` decides the rest
   (`EraseSubject`, a module's holds and approvals). Set neither and erasure
   stays refused. Either set: a superuser passes.
-- **Personal data.** `h.WirePII()` is `pii.Wire` on the platform's own
-  registry, engine and checkpoints, with key destruction through an outbox
-  of its own (`pii-outbox.db`) and the destroyer only on the writer. It
-  needs `KMS_FACADE_URL`.
-- **Read models' collections** are yours: a PocketBase migration each
-  (`migrations.Register` from `github.com/pocketbase/pocketbase/migrations`,
-  before `Run`). Set `ListRule`/`ViewRule` to `nil` (superusers only) on any
-  collection a read route guards, or PocketBase's own records API serves it
-  past the route's role check.
-- `h.OwnRole`/`h.OwnSubjectID` read the caller as the gateway does, for
-  `queryroute.Config`; `h.Context` lives as long as the process; `h.OnClose`
-  closes something at shutdown.
+- `h.OwnRole`/`h.OwnSubjectID` read the caller as the gateway does;
+  `h.Context` lives as long as the process; `h.OnClose` closes something at
+  shutdown. Hand-made collections can still be PocketBase migrations
+  (`migrations.Register`, before `Run`).
 - `Register` runs for one-shot commands too (`superuser upsert`, `projection
   rebuild`), since they bootstrap the app: anything it needs, such as
   `KMS_FACADE_URL`, must be set for those as well.
+
+`host.Options` and `host.Host` are the extension contract: what they export
+stays compatible within a minor version, and a change is named in the
+CHANGELOG.
+
+`examples/gohost` is the tutorial's version, inside this repository because
+it uses the tutorial's own `task` and `order`: it wires them by hand, as a
+program would without a document to generate from. The smoke suite runs it,
+and also builds a program with `init go` in a directory outside this
+repository.
 
 ## Bootstrap order (host.Run)
 

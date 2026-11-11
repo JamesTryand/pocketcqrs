@@ -731,6 +731,24 @@ pocketcqrs superuser upsert <email> <password>
 
 Create/update a superuser (admin UI + reload endpoint auth).
 
+## init
+
+```sh
+pocketcqrs init go <module> --model <document.json> [--dir dir]
+    [--version vX.Y.Z] [--pocketcqrs checkout]
+```
+
+Starts a program of your own, in its own repository, with a document's Go
+domains compiled in: `go.mod` (pocketcqrs required and as a tool), `main.go`,
+`generate.go`, the document under `model/`, a `Dockerfile`, and the code
+generated under `domain/`. It writes nothing into pocketcqrs, refuses a
+directory that is not empty, and keeps nothing when the document cannot be
+generated. `--dir` defaults to the module path's last element; `--version`
+to the version this binary was built from. `--pocketcqrs` builds against a
+checkout through a `replace`, for trying an unreleased version only. Like
+`schema import` it runs without bootstrapping PocketBase. See
+[the Go guide](../go-guide.md#your-own-program).
+
 ## schema
 
 ```sh
@@ -767,8 +785,10 @@ merge unrelated stream families.
 
 `--lang` picks the output language: `js` (the default, unchanged) or `go` —
 a compiled decider/projection/reactor per [the Go guide](../go-guide.md)'s
-JS→Go table, printing suggested (not applied) registration lines for
-`main.go`. **Scaffolding, not migration**: there is no JS→Go transpiler,
+JS→Go table. Inside a Go module (a `go.mod` in `--out` or above it) it also
+writes `register.go` and the document it embeds: the wiring for a program
+of your own, always rewritten (see `init` below). Outside one it prints
+suggested registration lines instead. **Scaffolding, not migration**: there is no JS→Go transpiler,
 `go` output is exactly as much a starting point as `js` output is — see the
 Go guide for what "converting a domain" actually means per tier. Passing
 `--docs` alongside `--lang go` prints a warning that it was ignored, rather

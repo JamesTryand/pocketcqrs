@@ -3,6 +3,37 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.20.0 — a Go domain in its own repository
+
+A program with compiled-in Go domains now lives in its own repository and depends on pocketcqrs
+as a module version, never its source: the supported workflow (docs/go-guide.md, "Your own
+program"). Only the tutorial's domains are in pocketcqrs's own source.
+
+### Added
+
+- **`pocketcqrs init go <module> --model <document>`**: a new program's directory, with
+  pocketcqrs required and as a Go tool (one version pins the generator and the library),
+  `main.go`, `generate.go`, the document, a `Dockerfile` and the generated code.
+- **The generated wiring.** `schema import --lang go` inside a Go module also writes
+  `register.go` and the document it embeds: `New()`, `Register` (command permissions, the read
+  models' collections, deciders protected where they carry personal data, projections,
+  searches, reactors) and `Serve` (every read route). The hand-written wiring and read-model
+  migrations a program needed before are gone. Outside a module it prints the lines, as before.
+- **`Host.EnsureCollections`**: a compiled-in read model's collection, created and extended like
+  a JS projection's `//@schema` (additive, typed), its record API superusers only.
+  **`Host.AddReactor`**: a compiled-in reactor, registered only on the writer.
+  **`functions.EnsureSchemas`**: the reconcile behind it.
+- A smoke test builds a program with `init go` in a directory outside this repository, runs
+  `go generate` through the tool dependency, and serves it.
+
+### Changed
+
+- `host.Options` and `host.Host` are the extension contract: what they export stays compatible
+  within a minor version, and a change is named here.
+- Tests, docs and comments name no application or private host: neutral fixtures in
+  `authorize`, a neutral example key-service address, and v0.19.0's note on who asked for it
+  removed.
+
 ## v0.19.0 — your own program with compiled-in Go domains
 
 ### Added
@@ -28,11 +59,6 @@ All notable changes to PocketCQRS. Format loosely follows
 - The stock program: same flags, commands, boot order and behaviour. Its tests moved to `host/`
   with the code; the smoke suite runs the stock binary as before, and `examples/gohost` beside it.
 - Erasure stays refused unless a host declares or wires who may erase.
-
-### Proposal
-
-- `platform/pocketcqrs-futures` `features/host-entry-point-for-go-domains` (accepted 2026-11-10,
-  option 1). Requested by `lab/landing-pages` for its personal-data model.
 
 ## v0.18.0 — the stock server enforces who may send a command
 

@@ -315,7 +315,7 @@ names is not checked, exactly as before this existed, so a decider without
 the directive behaves as it always has.
 
 ```
-//@authorize RecordPeriodCheck {"RequiredRole":["operator","period-check"]}
+//@authorize CloseTicket {"RequiredRole":["operator","agent"]}
 //@authorize EscalateTicket {"RequiredRole":["supervisor"],"Scope":{"ResolveCollection":"tickets","ResolveKeyField":"ticketId","ResolveSelectField":"teamId","MemberOfCollection":"teamMembers","MemberOfMatchField":"teamId","MemberOfActorField":"memberId","BypassRoles":["admin"],"Message":"only the ticket's team may escalate it"}}
 ```
 

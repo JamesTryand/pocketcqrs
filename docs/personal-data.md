@@ -5,7 +5,7 @@ encrypted under the key of the data subject it belongs to before it reaches the 
 Erasing the subject destroys that key, so every copy becomes unreadable: in the log, in read
 models, in backups. The log itself is never edited.
 
-The keys live in the key-management facade (`journal.bureau.tryand.uk/kms`). pocketcqrs only ever
+The keys live in a key-management facade (a separate service, named by `KMS_FACADE_URL`). pocketcqrs only ever
 asks it to encrypt, decrypt, hash and destroy, and a key never leaves it. This is the same design
 dotnetcqrs uses, with the same wire format, so the two stacks agree on every stored value.
 
