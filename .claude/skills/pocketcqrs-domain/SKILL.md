@@ -1,6 +1,6 @@
 ---
 name: pocketcqrs-domain
-description: "Build and change domains in a PocketCQRS project: JS deciders, projections, reactors and effect functions, plus Go aggregates. Use when writing or editing files in pb_functions/, working with //@trigger or //@schema directives, adding an aggregate/command/event/read model, hot-reloading functions, dry-running candidate code, importing an event-model schema, or debugging why a function did not load, a projection wrote nothing, or a reload was refused."
+description: "Build and change domains in a PocketCQRS project: JS deciders, projections, reactors and effect functions, plus Go aggregates. Use when writing or editing files in pb_functions/, working with //@trigger or //@schema directives, adding an aggregate/command/event/read model, hot-reloading functions, dry-running candidate code, importing an event-model schema, starting or upgrading a Go program of your own (`init go`, `go generate`), or debugging why a function did not load, a projection wrote nothing, or a reload was refused."
 ---
 
 # Building a domain with PocketCQRS
@@ -17,7 +17,7 @@ authoritative — read it rather than trusting a summary here:
 | --- | --- |
 | tiers, bindings, worked examples | `docs/js-guide.md` |
 | every directive, exactly | `docs/reference/directives.md` |
-| Go aggregates, and JS→Go graduation | `docs/go-guide.md` |
+| Go aggregates, JS→Go graduation, your own program | `docs/go-guide.md` |
 | commands, flags | `docs/reference/cli.md` |
 | HTTP surface, dry-run modes | `docs/reference/gateway.md` |
 | empty dir → running slice | `docs/tutorial.md`, `docs/getting-started.md` |
@@ -63,6 +63,34 @@ writes (`403`, naming the command API).
    refusal here is the system telling you something; do not skip past it.
 6. **Verify with real traffic**, not by reading. Send the command, check the events, check the
    read model.
+
+## A Go domain lives in its own repository (v0.20.0)
+
+An application's Go domain never goes into pocketcqrs's source (its tutorial `task`/`order` are
+the only domains there). It lives in the application's own repository, which depends on
+pocketcqrs as a **module version**, never a copy, a checkout or a `replace`, so an upgrade is a
+version bump. It still ships as one binary: all of pocketcqrs with the domains compiled in.
+`docs/go-guide.md`, "Your own program", is the full workflow.
+
+- **Start:** `pocketcqrs init go <module> --model <document.json>` into an empty directory. It
+  writes `go.mod` (pocketcqrs required **and** as a Go `tool`, so one version pins the generator
+  and the library), `generate.go`, `model/`, `main.go`, a `Dockerfile`, and the generated
+  `domain/`.
+- **Change the model:** edit the document, `go generate ./...`, commit `domain/`.
+- **Upgrade:** `go get -tool github.com/jamestryand/pocketcqrs@vX.Y.Z`, then `go generate ./...`.
+- **The generated `domain/register.go` is the wiring:** `New()`, `Register(h)` (command
+  permissions, the read models' collections, deciders (protected where they carry personal
+  data), projections, reactors, searches) and `Serve` (the read routes). `main.go` is
+  `host.Run(host.Options{Register: d.Register, Serve: d.Serve})`, plus the program's own rules
+  (for example `AuthorizeSubjectCommand`) in a `Register` that calls `d.Register` first.
+- **Never edit generated files.** A rule the document leaves to you comes as a `.go.example`:
+  copy it to a file of your own. A read model removed from the document leaves its old
+  generated files behind: delete them.
+- `--pocketcqrs <checkout>` (on `init go`, and `schema verify --lang go`) is only for trying an
+  unreleased version; a released binary needs neither.
+- **JS-only domains need no Go program:** they run on the stock binary, fetched by version
+  (`go install github.com/jamestryand/pocketcqrs@vX.Y.Z` or a release), never built from a
+  checkout.
 
 ## Traps that have actually cost time
 

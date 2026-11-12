@@ -3,6 +3,13 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.20.1 — the skill knows the workflow
+
+The `pocketcqrs-domain` skill (`pocketcqrs skill install`) now describes a Go domain in its own
+repository: `init go`, pocketcqrs as a Go tool and module version, `go generate`, the generated
+`register.go`, upgrading with `go get -tool`, and that a checkout is only for an unreleased
+version. No code changes.
+
 ## v0.20.0 — a Go domain in its own repository
 
 A program with compiled-in Go domains now lives in its own repository and depends on pocketcqrs
