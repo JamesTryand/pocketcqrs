@@ -20,6 +20,13 @@ All notable changes to PocketCQRS. Format loosely follows
   through its effect functions' calls (`TestEffectOutboxSurvivesRealProcessKills`: every call made,
   no dead letters, the outbox empty). A repeated third-party call is reported, not refused:
   delivery is at-least-once.
+- Kill tests for compiled-in Go consumers, which apply an event and then save their checkpoint in
+  two steps: a Go projection (the tutorial's tasks projection) killed part way through 1,500
+  creates and 500 completions (`TestGoProjectionCatchUpSurvivesRealProcessKills`: one row per
+  task, title and completion right, its checkpoint at the head of the log) and a Go reactor
+  killed part way through 600 reactions (`TestGoReactorCatchUpSurvivesRealProcessKills`: every
+  task has exactly one follow-up). They run in `smoke/gokill`, a program built only under the
+  smoke tag that adds its consumer when `GOKILL_CONSUMER` names it.
 - The batching kill test now kills after the first acknowledged command. Its fixed delay from the
   start of the burst landed before any acknowledgment in 7 of 8 runs.
 

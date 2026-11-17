@@ -239,6 +239,13 @@ func serve(t *testing.T, bin, dir, label string, args ...string) (stop func()) {
 // caller can tell a node that died at boot from one still starting.
 func serveProcess(t *testing.T, bin, dir, label string, args ...string) (stop func(), exited <-chan struct{}) {
 	t.Helper()
+	return serveProcessEnv(t, nil, bin, dir, label, args...)
+}
+
+// serveProcessEnv is serveProcess with extra environment variables for the
+// process.
+func serveProcessEnv(t *testing.T, env []string, bin, dir, label string, args ...string) (stop func(), exited <-chan struct{}) {
+	t.Helper()
 	logPath := filepath.Join(dir, label+".log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -249,7 +256,7 @@ func serveProcess(t *testing.T, bin, dir, label string, args ...string) (stop fu
 	// (several nodes run at once, and only one process can bind the default),
 	// bound to loopback: every interface is what a real node needs, and on
 	// Windows it raises a firewall prompt for each new test binary.
-	cmd.Env = append(os.Environ(), "CQRS_OPS_PORT=0", "CQRS_OPS_BIND=127.0.0.1")
+	cmd.Env = append(append(os.Environ(), "CQRS_OPS_PORT=0", "CQRS_OPS_BIND=127.0.0.1"), env...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting %s: %v", label, err)

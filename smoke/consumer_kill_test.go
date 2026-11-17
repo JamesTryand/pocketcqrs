@@ -266,10 +266,13 @@ if (res.status >= 400) { throw new Error("notify failed: " + res.status); }
 type consumerKill struct {
 	label         string
 	backlog       int
-	serveFlags    []string // extra serve flags, every boot
-	reset         func()   // optional: clears test-side state at the start of each round
-	baseFunctions map[string]string // present from the first boot
-	functions     map[string]string // the consumer under test, added after the backlog
+	serveFlags    []string                       // extra serve flags, every boot
+	reset         func()                         // optional: clears test-side state at the start of each round
+	baseFunctions map[string]string              // present from the first boot
+	functions     map[string]string              // the consumer under test, added after the backlog
+	bin           string                         // optional: the program to run (default: pocketcqrs itself)
+	consumerEnv   []string                       // optional: environment that adds the consumer (a compiled-in one)
+	write         func(t *testing.T, h *harness) // optional: writes the backlog (default: writeNotes)
 	progress      func(h *harness) int
 	check         func(t *testing.T, h *harness)
 }
@@ -277,7 +280,10 @@ type consumerKill struct {
 func consumerSurvivesKill(t *testing.T, k consumerKill) {
 	const iterations = 3
 	rng := rand.New(rand.NewSource(7))
-	bin := build(t, "github.com/jamestryand/pocketcqrs", filepath.Join(t.TempDir(), "pocketcqrs"))
+	bin := k.bin
+	if bin == "" {
+		bin = build(t, "github.com/jamestryand/pocketcqrs", filepath.Join(t.TempDir(), "pocketcqrs"))
+	}
 
 	for iter := 0; iter < iterations; iter++ {
 		iter := iter
@@ -304,10 +310,10 @@ func consumerSurvivesKill(t *testing.T, k consumerKill) {
 			if out, err := seed.CombinedOutput(); err != nil {
 				t.Fatalf("seeding superuser failed: %v\n%s", err, out)
 			}
-			boot := func(name string) (*harness, func()) {
+			boot := func(name string, env []string) (*harness, func()) {
 				addr := freeAddr(t)
 				h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: bin, client: newClient(t)}
-				stop := serve(t, bin, dir, fmt.Sprintf("%s-%s-%d", k.label, name, iter),
+				stop, _ := serveProcessEnv(t, env, bin, dir, fmt.Sprintf("%s-%s-%d", k.label, name, iter),
 					append([]string{"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir}, k.serveFlags...)...)
 				waitFor(t, h.BackendURL+"/api/health")
 				h.Token = h.authenticate()
@@ -315,13 +321,17 @@ func consumerSurvivesKill(t *testing.T, k consumerKill) {
 			}
 
 			// 1. the backlog, with the consumer absent
-			h, stop := boot("backlog")
-			writeNotes(t, h, k.backlog)
+			h, stop := boot("backlog", nil)
+			if k.write != nil {
+				k.write(t, h)
+			} else {
+				writeNotes(t, h, k.backlog)
+			}
 			stop()
 
 			// 2. the consumer arrives; kill the server part way through its catch-up
 			write(k.functions)
-			h, stop = boot("kill")
+			h, stop = boot("kill", k.consumerEnv)
 			var before int
 			deadline := time.Now().Add(30 * time.Second)
 			for {
@@ -343,7 +353,7 @@ func consumerSurvivesKill(t *testing.T, k consumerKill) {
 			t.Logf("killed with at least %d of %d consumed", before, k.backlog)
 
 			// 3. restart on the same data: catch-up resumes and finishes
-			h, _ = boot("restart")
+			h, _ = boot("restart", k.consumerEnv)
 			// catch-up finishing, or the count settling short of the backlog: lost events
 			last, since := -1, time.Now()
 			for {
@@ -375,6 +385,16 @@ func consumerSurvivesKill(t *testing.T, k consumerKill) {
 // t.Fatal, which is only safe on the test's own goroutine.
 func writeNotes(t *testing.T, h *harness, n int) {
 	t.Helper()
+	writeEach(t, h, n, func(i int) (string, any) {
+		id := fmt.Sprintf("n%d", i)
+		return "note/" + id + "/CreateNote", map[string]any{"title": "title " + id}
+	})
+}
+
+// writeEach sends n commands concurrently, the i-th to /api/cqrs/<path> with
+// body as cmd(i) gives them, and requires every one to be acknowledged.
+func writeEach(t *testing.T, h *harness, n int, cmd func(i int) (path string, body any)) {
+	t.Helper()
 	const workers = 16
 	ids := make(chan int)
 	var mu sync.Mutex
@@ -385,9 +405,10 @@ func writeNotes(t *testing.T, h *harness, n int) {
 		go func() {
 			defer wg.Done()
 			for i := range ids {
-				id := fmt.Sprintf("n%d", i)
-				body, _ := json.Marshal(map[string]any{"title": "title " + id})
-				req, err := http.NewRequest(http.MethodPost, h.BackendURL+"/api/cqrs/note/"+id+"/CreateNote", bytes.NewReader(body))
+				path, payload := cmd(i)
+				id := path
+				body, _ := json.Marshal(payload)
+				req, err := http.NewRequest(http.MethodPost, h.BackendURL+"/api/cqrs/"+path, bytes.NewReader(body))
 				if err == nil {
 					req.Header.Set("Content-Type", "application/json")
 					req.Header.Set("Authorization", h.Token)
@@ -414,7 +435,7 @@ func writeNotes(t *testing.T, h *harness, n int) {
 	close(ids)
 	wg.Wait()
 	if len(failures) > 0 {
-		t.Fatalf("%d of %d notes were not written, first: %s", len(failures), n, failures[0])
+		t.Fatalf("%d of %d commands were not acknowledged, first: %s", len(failures), n, failures[0])
 	}
 }
 
