@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "4.1.0"
+      "default": "4.2.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -260,7 +260,18 @@
         "fields": {
           "type": "array",
           "items": { "$ref": "#/$defs/field" }
-        }
+        },
+        "public": { "$ref": "#/$defs/publicMarker" }
+      },
+      "additionalProperties": false
+    },
+
+    "publicMarker": {
+      "description": "Since 4.2.0. Marks an event or command as part of this system's public contract, at a version: another system may use it through a coordinating document's edge (architecture.schema.json), and nothing else may. A public event changes only by a new version; anything without this marker is private to the system and free to change. It says nothing about how a message is carried.",
+      "type": "object",
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 }
       },
       "additionalProperties": false
     },
@@ -293,7 +304,8 @@
           "items": { "$ref": "#/$defs/commandRefusal" },
           "minItems": 1
         },
-        "partitioned": { "type": "boolean", "default": true }
+        "partitioned": { "type": "boolean", "default": true },
+        "public": { "$ref": "#/$defs/publicMarker" }
       },
       "additionalProperties": false
     },

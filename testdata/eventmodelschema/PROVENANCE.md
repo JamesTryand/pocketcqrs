@@ -3,7 +3,13 @@
 Fixtures for the eventmodelschema import/export. Copied verbatim, unmodified.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
-- **Commit**: `f475947`, *"Schema 4.1.0: when.role, the role a command
+- **Commit**: `e53fa6a`, *"Schema 4.2.0: public events and commands; the
+  coordinating document (architecture 0.1.0)"* (untagged; committed locally
+  2026-11-17, on GitHub once the user pushes it). Copied 2026-11-17: the schema
+  and the changelog. 4.2.0 is additive: `public` on an event or command, read
+  by `emschema` and generating nothing. The coordinating document's own schema
+  and checker stay upstream (they check several documents, not one import).
+- **Before that**: `f475947`, *"Schema 4.1.0: when.role, the role a command
   scenario's actor holds"* (untagged). Copied 2026-10-18: the schema,
   `state-ownership.json` (the approval scope's `bypassRoles: ["coordinator"]`
   and a scenario of a coordinator approving with `when.role`) and the

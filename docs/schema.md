@@ -422,13 +422,17 @@ lower-camel convention (`Order` → `order`).
 
 ## Schema version
 
-This project reads **schema 4.0.0** documents, and an export declares it.
+This project reads **schema 4.2.0** documents, and an export declares it
+(this paragraph said 4.0.0 through 4.1.0; corrected 2026-11-17).
 Import refuses by name anything it cannot apply (above). 4.0.0 is breaking
 in one place: a command `scope`'s `memberOfVia` must name its `actorField`,
 the field of the membership read model compared with the command's actor;
 lint refuses a scope without it. Every other change since 3.1.1 is
-additive, so an export, which uses only what import reads, is a valid 4.0.0
-document.
+additive, so an export, which uses only what import reads, is a valid 4.2.0
+document. 4.2.0's `public` marker on an event or command (the contract
+another system may use, checked across systems by eventmodelschema's
+coordinating document and its `architecture-check`) is read and generates
+nothing.
 
 **Import reports a document's declared version but does not branch on it**,
 which is deliberate rather than left over: the 2.0.0 bump fixed the signal

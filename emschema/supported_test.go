@@ -105,6 +105,34 @@ func TestUnknownKeysAreRefusedAtAnyDepth(t *testing.T) {
 	wantRefused(t, refusedAt(t, p), "/readModels/r/fields/0/subfields/0/futureThing")
 }
 
+// Schema 4.2.0's public marker is read, on events and commands, and changes
+// nothing generated; a key beside it that this importer does not read is
+// still refused.
+func TestPublicMarkerIsReadAndUnknownKeysBesideItStillRefused(t *testing.T) {
+	body := `{"eventModelingSchemaVersion":"4.2.0","id":"d","name":"D",
+		"swimlanes":[{"id":"s","name":"S","kind":"team"}],
+		"events":{"e":{"name":"E","swimlaneId":"s","public":{"version":2}%s}},
+		"commands":{"c":{"name":"C","public":{"version":1}}},
+		"screens":{"sc":{"name":"Sc"}},
+		"slices":[{"id":"w","name":"W","pattern":"stateChange","swimlaneId":"s","status":"planned",
+			"screenId":"sc","commandId":"c","eventIds":["e"],"scenarios":[]}]}`
+	plain := strings.Replace(body, "%s", "", 1)
+	doc, err := Load(writeDoc(t, plain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Events["e"].Public == nil || doc.Events["e"].Public.Version != 2 {
+		t.Errorf("the event's public marker was not read: %+v", doc.Events["e"].Public)
+	}
+	if doc.Commands["c"].Public == nil || doc.Commands["c"].Public.Version != 1 {
+		t.Errorf("the command's public marker was not read: %+v", doc.Commands["c"].Public)
+	}
+	p := writeDoc(t, strings.Replace(body, "%s", `,"publishedVia":"a-bus"`, 1))
+	wantRefused(t, refusedAt(t, p), "/events/e/publishedVia")
+	p = writeDoc(t, strings.Replace(plain, `"public":{"version":1}`, `"public":{"version":1,"channel":"x"}`, 1))
+	wantRefused(t, refusedAt(t, p), "/commands/c/public/channel")
+}
+
 // A derivation kind this importer doesn't know carries a
 // meaning the projection generator would otherwise skip without a word.
 func TestUnknownDerivationKindIsRefused(t *testing.T) {

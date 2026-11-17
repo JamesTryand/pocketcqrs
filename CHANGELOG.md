@@ -5,6 +5,13 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ## Unreleased
 
+### Added
+
+- Schema 4.2.0: an event or command may carry `public` (`{"version": n}`), marking it part of its system's public
+  contract, which eventmodelschema's new coordinating document checks across systems. The importer reads it (before,
+  it refused the key, as it refuses every key it does not read) and generates nothing from it; an export declares
+  4.2.0. A key beside it that the importer does not read is still refused.
+
 ### Fixed
 
 - A secondary no longer stalls Litestream. `events.OpenReadOnly` kept idle connections open on the events file; on a

@@ -101,6 +101,19 @@ type Event struct {
 	// false instead of true, so a later create-shaped command on the same
 	// stream is legal again. Added in schema 2.2.0.
 	EndsStream bool `json:"endsStream,omitempty"`
+	// Public (schema 4.2.0) marks the event part of its system's public
+	// contract, at a version: what a coordinating document's edge may use.
+	// Read so a document carrying it imports (the importer refuses keys it
+	// does not read). Nothing generated depends on it, and an export (made
+	// from a running catalog) has none to give.
+	Public *PublicMarker `json:"public,omitempty"`
+}
+
+// PublicMarker (schema 4.2.0) is an event's or command's public contract
+// version. It is checked across systems by eventmodelschema's
+// architecture-check, not by this importer.
+type PublicMarker struct {
+	Version int `json:"version"`
 }
 
 // Command is a command definition. Reason is methodology prose with no
@@ -112,6 +125,9 @@ type Command struct {
 	Reason      string  `json:"reason,omitempty"`
 	Aggregate   string  `json:"aggregate,omitempty"`
 	Fields      []Field `json:"fields,omitempty"`
+	// Public (schema 4.2.0): as Event.Public, for a command another system
+	// may send. Nothing generated depends on it.
+	Public *PublicMarker `json:"public,omitempty"`
 	// RequiredRole names the role(s) whose actor may issue this command
 	// outright — a single role id, or a list (any one satisfies it). Absent
 	// means no role requirement, the default for every command before this.
@@ -657,8 +673,13 @@ type Hotspot struct {
 //
 // 4.1.0 (additive: a command scenario's when.role, the role its actor holds,
 // which verify runs the command's authorization with) was vendored on
-// 2026-10-18. An export declares 4.1.0.
-const SchemaVersion = "4.1.0"
+// 2026-10-18.
+//
+// 4.2.0 (additive: public on an event or command, the contract another
+// system may use, checked across systems by eventmodelschema's
+// architecture-check) was vendored on 2026-11-17. It is read and kept, and
+// changes nothing generated. An export declares 4.2.0.
+const SchemaVersion = "4.2.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

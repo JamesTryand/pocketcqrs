@@ -3,6 +3,22 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 4.2.0
+
+**Additive (non-breaking):**
+- `public` on an event or a command: `{ "version": <integer ≥ 1> }`, marking it part of the system's public contract
+  at that version. Only a public event or command may be used by another system, through a coordinating document's
+  edge; anything unmarked is private and free to change. A public event changes only by a new version. It changes
+  nothing a generator makes.
+- **A second schema, `architecture.schema.json` (`architectureSchemaVersion` 0.1.0): the coordinating document.**
+  The systems that work together (each an EventModel document, or a placeholder for one not written yet), the edges
+  between them and across the edge of the whole (`internal`; `external` as `input`, `output` or `call`), and named
+  flows through the edges. An edge never says how it is carried. `scripts/architecture-check.js` checks the
+  cross-references and four rules (the receiver owns the translation; the target id comes from the source event;
+  only public events and commands, at their version; personal data only into a system with erasure), and reports
+  coupling per system. `examples/architecture/` is a worked example; `npm run test:architecture` breaks it one way
+  at a time and expects each to be refused. See `docs/design-notes.md`.
+
 ## 4.1.0
 
 **Additive (non-breaking):**
