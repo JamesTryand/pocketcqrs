@@ -31,11 +31,42 @@ import (
 // iterations. Enough to exercise a real spread of kill timings without
 // making the smoke suite prohibitively slow.
 func TestBatchingSurvivesRealProcessKills(t *testing.T) {
+	commandsSurviveRealProcessKills(t, "batching", "--cqrsCommandBatching")
+}
+
+// TestUnbatchedWritesSurviveRealProcessKills is the same kill test on the
+// write path a node takes with batching switched off: each command decided
+// and appended in its own transaction. Batching is the default, so this is
+// the opt-out, but it is a separate code path and needs its own proof
+// (decision 0003 in the venture-overview hub: fault injection is the floor).
+func TestUnbatchedWritesSurviveRealProcessKills(t *testing.T) {
+	commandsSurviveRealProcessKills(t, "unbatched", "--cqrsCommandBatching=false")
+}
+
+// commandsSurviveRealProcessKills fires bursts of commands at a real server,
+// kills it mid-burst, restarts it on the same data and checks every
+// acknowledged command is there exactly once and nothing is doubled.
+func commandsSurviveRealProcessKills(t *testing.T, label string, serveFlags ...string) {
 	const iterations = 8
-	const commandsPerIteration = 60
+	const commandsPerIteration = 200
 	rng := rand.New(rand.NewSource(1))
 
 	bin := build(t, "github.com/jamestryand/pocketcqrs", filepath.Join(t.TempDir(), "pocketcqrs"))
+	serveArgs := func(addr, dataDir, fnDir string) []string {
+		return append([]string{"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir, "--tutorial"},
+			serveFlags...)
+	}
+
+	// iterations whose kill landed part way through the burst (some commands
+	// acknowledged, not all); with none, every iteration was vacuous
+	midBurst := 0
+	defer func() {
+		if !t.Failed() && midBurst == 0 {
+			t.Fatalf("no kill landed part way through a burst of %d commands; the timings need adjusting",
+				commandsPerIteration)
+		}
+		t.Logf("%d of %d kills landed part way through a burst", midBurst, iterations)
+	}()
 
 	for iter := 0; iter < iterations; iter++ {
 		iter := iter
@@ -54,9 +85,7 @@ func TestBatchingSurvivesRealProcessKills(t *testing.T) {
 
 			addr := freeAddr(t)
 			h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: bin, client: newClient(t)}
-			stop := serve(t, bin, dir, fmt.Sprintf("batching-kill-%d", iter),
-				"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir, "--tutorial",
-				"--cqrsCommandBatching")
+			stop := serve(t, bin, dir, fmt.Sprintf("%s-kill-%d", label, iter), serveArgs(addr, dataDir, fnDir)...)
 			waitFor(t, h.BackendURL+"/api/health")
 			h.Token = h.authenticate()
 
@@ -69,6 +98,8 @@ func TestBatchingSurvivesRealProcessKills(t *testing.T) {
 			var wg sync.WaitGroup
 			var mu sync.Mutex
 			succeeded := map[string]bool{}
+			firstAck := make(chan struct{})
+			var firstOnce sync.Once
 			for i := 0; i < commandsPerIteration; i++ {
 				wg.Add(1)
 				go func(i int) {
@@ -91,22 +122,35 @@ func TestBatchingSurvivesRealProcessKills(t *testing.T) {
 						mu.Lock()
 						succeeded[id] = true
 						mu.Unlock()
+						firstOnce.Do(func() { close(firstAck) })
 					}
 				}(i)
 			}
 
-			// kill at a randomized short delay -- somewhere in the middle
-			// of the burst landing, not reliably before or after it
-			time.Sleep(time.Duration(rng.Intn(30)+2) * time.Millisecond)
+			// kill at a randomized short delay after the first command is
+			// acknowledged -- somewhere in the middle of the burst landing.
+			// A fixed delay from the start of the burst landed before any
+			// acknowledgment in most runs (measured 17 Nov 2026: 7 of 8), so
+			// those runs proved little.
+			select {
+			case <-firstAck:
+			case <-time.After(10 * time.Second):
+				t.Fatal("no command was acknowledged within 10s")
+			}
+			time.Sleep(time.Duration(rng.Intn(20)) * time.Millisecond)
 			stop()
 			wg.Wait()
+			t.Logf("%d of %d commands acknowledged before the kill", len(succeeded), commandsPerIteration)
+			if len(succeeded) > 0 && len(succeeded) < commandsPerIteration {
+				mu.Lock()
+				midBurst++
+				mu.Unlock()
+			}
 
 			// restart against the SAME data dir
 			addr2 := freeAddr(t)
 			h2 := &harness{t: t, BackendURL: "http://" + addr2, FunctionsDir: fnDir, DataDir: dataDir, Bin: bin, client: newClient(t)}
-			serve(t, bin, dir, fmt.Sprintf("batching-restart-%d", iter),
-				"serve", "--http", addr2, "--dir", dataDir, "--functionsDir", fnDir, "--tutorial",
-				"--cqrsCommandBatching")
+			serve(t, bin, dir, fmt.Sprintf("%s-restart-%d", label, iter), serveArgs(addr2, dataDir, fnDir)...)
 			waitFor(t, h2.BackendURL+"/api/health")
 			h2.Token = h2.authenticate()
 
