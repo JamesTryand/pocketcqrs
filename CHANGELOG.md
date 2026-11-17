@@ -3,6 +3,19 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased
+
+### Tests
+
+- Kill tests for more of the platform (the fault-injection floor): the write path with batching
+  switched off (`TestUnbatchedWritesSurviveRealProcessKills`), a JS projection killed part way
+  through catching up (`TestProjectionCatchUpSurvivesRealProcessKills`: every row present and
+  right, its position at the head of the log) and a reactor killed the same way
+  (`TestReactorCatchUpSurvivesRealProcessKills`: every reaction exactly once, no dead letters).
+  Each run checks its kill landed part way through, so a run cannot pass without testing anything.
+- The batching kill test now kills after the first acknowledged command. Its fixed delay from the
+  start of the burst landed before any acknowledgment in 7 of 8 runs.
+
 ## v0.20.1 — the skill knows the workflow
 
 The `pocketcqrs-domain` skill (`pocketcqrs skill install`) now describes a Go domain in its own
