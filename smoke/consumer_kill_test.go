@@ -364,7 +364,8 @@ func consumerSurvivesKill(t *testing.T, k consumerKill) {
 				if got != last {
 					last, since = got, time.Now()
 				} else if time.Since(since) > 10*time.Second {
-					t.Fatalf("after the restart the consumer stopped at %d of %d: %d events lost to the kill",
+					t.Fatalf("after the restart the consumer stopped at %d of %d: %d events lost to the kill, "+
+						"or the consumer is stuck on one (a replay it could not take: see the restart log)",
 						got, k.backlog, k.backlog-got)
 				}
 				time.Sleep(200 * time.Millisecond)
