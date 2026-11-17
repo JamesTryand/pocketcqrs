@@ -27,6 +27,14 @@ All notable changes to PocketCQRS. Format loosely follows
   killed part way through 600 reactions (`TestGoReactorCatchUpSurvivesRealProcessKills`: every
   task has exactly one follow-up). They run in `smoke/gokill`, a program built only under the
   smoke tag that adds its consumer when `GOKILL_CONSUMER` names it.
+- Kill tests for replication, in the same-host shape (a secondary reading the master's
+  `events.db`): a secondary killed part way through catching up on the master's log
+  (`TestSecondaryCatchUpSurvivesRealProcessKills`: its Go and JS projections each end with one
+  right row per task, at the head of the log, while the master's own projection was at the head
+  throughout), and the master killed while commands are forwarded to it through a secondary
+  (`TestForwardedCommandsSurviveMasterKills`: every command the secondary acknowledged has
+  exactly one event on the master, and the secondary's read model catches up). The Litestream and
+  LiteFS transports are not killed: they need their own binaries (and LiteFS needs Linux).
 - The batching kill test now kills after the first acknowledged command. Its fixed delay from the
   start of the burst landed before any acknowledgment in 7 of 8 runs.
 
