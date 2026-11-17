@@ -4,10 +4,12 @@ package smoke
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jamestryand/pocketcqrs/outbox"
 )
 
 // The consumer half of the fault-injection floor (decision 0003 in the
@@ -184,9 +188,86 @@ function reactTo(event) {
 	})
 }
 
+// TestEffectOutboxSurvivesRealProcessKills: an effect function's work is
+// recorded in the server's outbox on the engine's pass and run off it by the
+// outbox worker (functions.Apply, outbox.Worker). Killed part way through a
+// backlog of calls, the server must make every call after the restart:
+// none lost, nothing dead-lettered, the outbox empty. A call may be made
+// twice (a kill after the call and before its entry is taken off repeats
+// it: effects are at-least-once), so repeats are reported, not refused.
+func TestEffectOutboxSurvivesRealProcessKills(t *testing.T) {
+	var mu sync.Mutex
+	calls := map[string]int{}
+	third := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Millisecond) // a call takes time, so the kill can land inside one
+		mu.Lock()
+		calls[r.URL.Query().Get("id")]++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer third.Close()
+	seen := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls)
+	}
+
+	notifyJS := `//@trigger event NoteCreated
+const res = $http.get("` + third.URL + `/hit?id=" + encodeURIComponent(event.aggregateId));
+if (res.status >= 400) { throw new Error("notify failed: " + res.status); }
+`
+	const backlog = 600
+	consumerSurvivesKill(t, consumerKill{
+		label:      "effect",
+		backlog:    backlog,
+		functions:  map[string]string{"notify.js": notifyJS},
+		serveFlags: []string{"--cqrsAllowOutboundHTTP", "--cqrsOutboundHost", "127.0.0.1", "--cqrsAllowPrivateOutbound"},
+		progress:   func(*harness) int { return seen() },
+		reset: func() {
+			mu.Lock()
+			calls = map[string]int{}
+			mu.Unlock()
+		},
+		check: func(t *testing.T, h *harness) {
+			mu.Lock()
+			repeated := 0
+			for i := 0; i < backlog; i++ {
+				id := fmt.Sprintf("n%d", i)
+				if calls[id] == 0 {
+					mu.Unlock()
+					t.Fatalf("note %s was never called for", id)
+				}
+				if calls[id] > 1 {
+					repeated++
+				}
+			}
+			mu.Unlock()
+			var dl struct {
+				DeadLetters []any `json:"deadLetters"`
+			}
+			h.apiOK(http.MethodGet, "/api/cqrs/deadletters", nil, &dl)
+			if len(dl.DeadLetters) != 0 {
+				t.Fatalf("%d dead letters after the restart, want none: %+v", len(dl.DeadLetters), dl.DeadLetters)
+			}
+			eventually(t, "the server's outbox to empty", func() bool {
+				box, err := outbox.Open(filepath.Join(h.DataDir, "outbox.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer box.Close()
+				pending, err := box.Pending(context.Background())
+				return err == nil && len(pending) == 0
+			})
+			t.Logf("calls repeated for %d notes (allowed: effects are at-least-once)", repeated)
+		},
+	})
+}
+
 type consumerKill struct {
 	label         string
 	backlog       int
+	serveFlags    []string // extra serve flags, every boot
+	reset         func()   // optional: clears test-side state at the start of each round
 	baseFunctions map[string]string // present from the first boot
 	functions     map[string]string // the consumer under test, added after the backlog
 	progress      func(h *harness) int
@@ -201,6 +282,9 @@ func consumerSurvivesKill(t *testing.T, k consumerKill) {
 	for iter := 0; iter < iterations; iter++ {
 		iter := iter
 		t.Run(fmt.Sprintf("iter-%d", iter), func(t *testing.T) {
+			if k.reset != nil {
+				k.reset()
+			}
 			dir := t.TempDir()
 			fnDir := filepath.Join(dir, "pb_functions")
 			dataDir := filepath.Join(dir, "pb_data")
@@ -224,7 +308,7 @@ func consumerSurvivesKill(t *testing.T, k consumerKill) {
 				addr := freeAddr(t)
 				h := &harness{t: t, BackendURL: "http://" + addr, FunctionsDir: fnDir, DataDir: dataDir, Bin: bin, client: newClient(t)}
 				stop := serve(t, bin, dir, fmt.Sprintf("%s-%s-%d", k.label, name, iter),
-					"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir)
+					append([]string{"serve", "--http", addr, "--dir", dataDir, "--functionsDir", fnDir}, k.serveFlags...)...)
 				waitFor(t, h.BackendURL+"/api/health")
 				h.Token = h.authenticate()
 				return h, stop

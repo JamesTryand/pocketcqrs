@@ -171,6 +171,14 @@ func goBuild(t *testing.T, pkg, out string) string {
 
 func serveProcess(t *testing.T, bin, dir, label string, args ...string) {
 	t.Helper()
+	serveProcessEnv(t, nil, bin, dir, label, args...)
+}
+
+// serveProcessEnv is serveProcess with extra environment variables, and it
+// returns an idempotent stop that kills the process (a real kill, for the
+// kill tests).
+func serveProcessEnv(t *testing.T, env []string, bin, dir, label string, args ...string) (stop func()) {
+	t.Helper()
 	logPath := filepath.Join(dir, label+".log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -181,13 +189,13 @@ func serveProcess(t *testing.T, bin, dir, label string, args ...string) {
 	// (several nodes run at once, and only one process can bind the default),
 	// bound to loopback: every interface is what a real node needs, and on
 	// Windows it raises a firewall prompt for each new test binary.
-	cmd.Env = append(os.Environ(), "CQRS_OPS_PORT=0", "CQRS_OPS_BIND=127.0.0.1")
+	cmd.Env = append(append(os.Environ(), "CQRS_OPS_PORT=0", "CQRS_OPS_BIND=127.0.0.1"), env...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting %s: %v", label, err)
 	}
 	var once sync.Once
-	stop := func() {
+	stop = func() {
 		once.Do(func() {
 			_ = cmd.Process.Kill()
 			_, _ = cmd.Process.Wait()
@@ -202,6 +210,7 @@ func serveProcess(t *testing.T, bin, dir, label string, args ...string) {
 			}
 		}
 	})
+	return stop
 }
 
 func freeAddr(t *testing.T) string {

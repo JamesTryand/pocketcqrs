@@ -13,6 +13,13 @@ All notable changes to PocketCQRS. Format loosely follows
   right, its position at the head of the log) and a reactor killed the same way
   (`TestReactorCatchUpSurvivesRealProcessKills`: every reaction exactly once, no dead letters).
   Each run checks its kill landed part way through, so a run cannot pass without testing anything.
+- Kill tests for the outbox, both places it runs: an external caller (a real process, built
+  from `smoke/extcaller/killcaller` under the smoke tag) killed part way through a backlog of
+  third-party calls and follow-up commands (`TestOutboxSurvivesRealProcessKills`: every source
+  has exactly one follow-up, no dead letters, the outbox empty), and the server killed part way
+  through its effect functions' calls (`TestEffectOutboxSurvivesRealProcessKills`: every call made,
+  no dead letters, the outbox empty). A repeated third-party call is reported, not refused:
+  delivery is at-least-once.
 - The batching kill test now kills after the first acknowledged command. Its fixed delay from the
   start of the burst landed before any acknowledgment in 7 of 8 runs.
 
