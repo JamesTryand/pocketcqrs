@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -203,7 +204,13 @@ func TestSecondaryReplicatesViaLitestream(t *testing.T) {
 	}
 }
 
-// TestLitestreamFollowStallsUnderConcurrentReader is a minimal,
+// TestLitestreamFollowsUnderConcurrentReader (RESOLVED 2026-11-17; it was skipped as a known issue until then): the
+// stall below was a reader keeping an idle connection open on the followed copy. On Linux with Litestream 0.5.17 the
+// copy is in WAL mode, where an open connection holds a shared lock on the file for its whole life, and restore -f
+// needs an exclusive one to apply each transaction, so it stalled for good. events.OpenReadOnly now keeps no idle
+// connections. The original notes follow.
+//
+// It was a minimal,
 // pocketcqrs-independent reproduction of a real bug found while building
 // litestream-replication-plan.md's Steps 2-4, 2026-08-19: `litestream
 // restore -f`'s follow loop can stall for tens of seconds -- far past its
@@ -228,8 +235,7 @@ func TestSecondaryReplicatesViaLitestream(t *testing.T) {
 // (Litestream restore -f's follow loop stalls under a concurrent reader)
 // rather than a wiring bug this suite should gate on. Remove the
 // Skip to reproduce or to verify a fix.
-func TestLitestreamFollowStallsUnderConcurrentReader(t *testing.T) {
-	t.Skip("known issue, not yet resolved; remove this Skip to reproduce")
+func TestLitestreamFollowsUnderConcurrentReader(t *testing.T) {
 
 	bin := litestreamBin(t)
 	dir := t.TempDir()
@@ -241,7 +247,7 @@ func TestLitestreamFollowStallsUnderConcurrentReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := seedStore.Append(nil, "task", "seed", 0, []events.NewEvent{{Type: "Created"}}); err != nil {
+	if _, err := seedStore.Append(context.Background(), "task", "seed", 0, []events.NewEvent{{Type: "Created"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -269,7 +275,7 @@ func TestLitestreamFollowStallsUnderConcurrentReader(t *testing.T) {
 				return
 			default:
 			}
-			reader.Poll(nil, 0, 100)
+			reader.Poll(context.Background(), 0, 100)
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
@@ -283,17 +289,17 @@ func TestLitestreamFollowStallsUnderConcurrentReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.Append(nil, "task", "late", 0, []events.NewEvent{{Type: "Created"}}); err != nil {
+	if _, err := writer.Append(context.Background(), "task", "late", 0, []events.NewEvent{{Type: "Created"}}); err != nil {
 		t.Fatal(err)
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		evs, _ := reader.Poll(nil, 1, 100)
+		evs, _ := reader.Poll(context.Background(), 1, 100)
 		if len(evs) > 0 {
 			return // fixed: replicated within a reasonable window
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatal("the late append did not replicate within 10s under a concurrent reader -- known issue")
+	t.Fatal("the late append did not replicate within 10s under a concurrent reader: is a read-only connection kept idle on the followed copy? (events.OpenReadOnly)")
 }

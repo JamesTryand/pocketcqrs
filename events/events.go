@@ -251,6 +251,17 @@ func OpenReadOnly(path string, opts ...OpenOption) (*Store, error) {
 	}
 	// no SetMaxOpenConns(1): there is no writer to keep happy, and readers
 	// benefit from concurrent connections in WAL mode.
+	//
+	// No idle connections are kept. A connection to a WAL-mode file holds a
+	// shared lock on it for as long as it is open, not only while it reads,
+	// and `litestream restore -f` needs an exclusive lock to apply each new
+	// transaction to its followed copy: one idle connection here stalled it
+	// for good (found by the Litestream kill test on Linux, 2026-11-17, with
+	// Litestream 0.5.17, whose followed copy is in WAL mode, not the DELETE
+	// mode described above). Closing each connection after use leaves the
+	// gaps it needs; a secondary's reads are polls, so the cost is an open per
+	// poll.
+	db.SetMaxIdleConns(0)
 	return &Store{db: db, readOnly: true}, nil
 }
 

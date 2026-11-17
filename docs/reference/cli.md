@@ -231,6 +231,16 @@ master by configuration, deliberately no automatic failover (see "Manual promoti
 `static` needs no extra infrastructure. `consul` lease remains a real option if automatic failover
 is ever actually taken up as its own project — not something to reach for by default.
 
+**CORRECTED 2026-11-17:** the Litestream stall above was pocketcqrs's own doing. A secondary kept an idle read-only
+connection open on the followed copy; with Litestream 0.5.17 that copy is in WAL mode, where an open connection holds
+a shared lock on the file for its whole life, and `restore -f` needs an exclusive lock to apply each transaction, so on
+Linux it stalled for good. `events.OpenReadOnly` now keeps no idle connections, and a live secondary follows through
+Litestream in about a second (`TestLitestreamFollowsUnderConcurrentReader`, skipped as a known issue until then, and
+`TestLitestreamSurvivesRealProcessKills`). LiteFS stays the documented choice; the reason above no longer holds.
+If you run Litestream anyway: a `restore -f` killed early often cannot resume ("cannot resume follow mode: saved TXID
+... is ahead of latest snapshot"). Its supervisor must then delete the copy and its saved position (every file named
+like the copy), restore again, and restart the secondary, which still has the deleted file open.
+
 LiteFS is a FUSE filesystem: it intercepts writes to a mounted directory and replicates them to
 other nodes, transparently to whatever opens files inside that directory. **The master's own
 `events.db` has to be opened from inside the FUSE mount, not a plain path** — this is the one real
@@ -291,6 +301,13 @@ actually become primary or finished syncing — starting them as two separately-
 is ready, folding both processes into one unit — a real option, not yet exercised by this project's
 own testing, which deliberately keeps `litefs mount` and `pocketcqrs serve` as two separate,
 independently-inspectable processes.
+
+**Restarting a killed `litefs mount`** (found by `TestLiteFSSurvivesRealProcessKills`, 2026-11-17): the node reading
+through the mount still holds files on it, so a plain unmount fails and LiteFS then refuses to mount again ("mkdir
+...: file exists"). The supervisor clears it with a lazy unmount, `fusermount3 -uz <dir>`, starts `litefs mount`, waits
+for it as above, and restarts the node, whose open files belonged to the old mount. With that, a master, a primary
+`litefs mount` or a secondary's, killed part way through a burst, loses no acknowledged command and the secondary ends
+holding exactly what the master holds.
 
 Backstop for the master: pass `--cqrsRequireExistingEventLog` once the log exists. Started before
 the mount is up, a master otherwise creates a fresh, empty `events.db` on the bare mount point and

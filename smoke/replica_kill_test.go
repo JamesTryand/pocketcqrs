@@ -19,8 +19,8 @@ import (
 // The replication half of the fault-injection floor (decision 0003 in the
 // venture-overview hub), in the same-host shape the rest of replica_test.go
 // uses: a secondary reads the master's events.db file directly. (The
-// Litestream and LiteFS transports need their own binaries, and LiteFS needs
-// Linux; neither is killed here.)
+// Litestream and LiteFS transports are killed in lite_replica_kill_test.go,
+// which needs their binaries, and LiteFS needs Linux.)
 //
 // A secondary keeps its own progress: Go consumers' checkpoints in its own
 // checkpoints.db, a JS projection's position in its own data.db. The master

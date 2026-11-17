@@ -5,7 +5,23 @@ All notable changes to PocketCQRS. Format loosely follows
 
 ## Unreleased
 
+### Fixed
+
+- A secondary no longer stalls Litestream. `events.OpenReadOnly` kept idle connections open on the events file; on a
+  copy followed by `litestream restore -f` (WAL mode with Litestream 0.5.17) an open connection holds a shared lock,
+  so Litestream could never take the exclusive lock it needs to apply a transaction, and the secondary saw nothing new
+  for good (on Linux). Read-only stores now keep no idle connections. The long-skipped
+  `TestLitestreamFollowsUnderConcurrentReader` is the regression test, and passes.
+
 ### Tests
+
+- Kill tests for the real replication transports, in `smoke/lite_replica_kill_test.go`: Litestream (`replicate` on
+  the master, `restore -f` for the secondary, and the master, each killed twice part way through a burst of 600
+  commands) and LiteFS (the secondary's `litefs mount`, the master, and the primary's `litefs mount`, each killed
+  twice). Every acknowledged command has exactly one event on the master and the secondary ends holding exactly what
+  the master holds. They found the stall above, and two restarts a supervisor must handle (in
+  `docs/reference/cli.md`): a Litestream follow that cannot resume, and a LiteFS mount that needs a lazy unmount.
+  `smoke/linux/Containerfile` is a Linux environment with both tools (Litestream 0.5.17, LiteFS 0.5.14).
 
 - Kill tests for more of the platform (the fault-injection floor): the write path with batching
   switched off (`TestUnbatchedWritesSurviveRealProcessKills`), a JS projection killed part way

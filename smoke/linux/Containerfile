@@ -1,0 +1,20 @@
+# A Linux environment for the smoke tests that need real Litestream and LiteFS binaries (and FUSE, for LiteFS).
+# Build and run from the repository root:
+#
+#   podman build -t pocketcqrs-smoke-linux smoke/linux
+#   podman run --rm --privileged -v "$PWD":/src -v pocketcqrs-gocache:/root/go pocketcqrs-smoke-linux \
+#     go test -tags smoke -count=1 -run 'Litestream|LiteFS' ./smoke/
+#
+# --privileged gives the container /dev/fuse and the right to mount it (LiteFS). The versions are the newest releases
+# at least two weeks old when this was written (2026-11-17).
+FROM docker.io/library/golang:1.25-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends fuse3 ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+ARG LITESTREAM=0.5.17
+ARG LITEFS=0.5.14
+RUN curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM}/litestream-${LITESTREAM}-linux-x86_64.tar.gz" \
+      | tar -xz -C /usr/local/bin litestream \
+    && curl -fsSL "https://github.com/superfly/litefs/releases/download/v${LITEFS}/litefs-v${LITEFS}-linux-amd64.tar.gz" \
+      | tar -xz -C /usr/local/bin litefs \
+    && litestream version && litefs version
+WORKDIR /src
