@@ -438,7 +438,9 @@ that field with `idAttribute: true`. The generated reactor sends to
 `event.data[<field>]`, and nothing else: the target used to be derived (the
 trigger's own stream, or a prefix plus the trigger event's id), which could
 never reach an existing stream named by a field. Import refuses an
-automation without it, or whose field a trigger event or the command lacks.
+automation without it, or whose field a trigger event or the command lacks,
+and (v0.24.0) one whose trigger and command declare a field of the same
+name with different types: the reactor copies fields by name.
 Verify runs an automation scenario on the stream its trigger names, and
 fails one whose command carries another value for the field, or that shows
 no trigger event: before, such a scenario passed with its command going to

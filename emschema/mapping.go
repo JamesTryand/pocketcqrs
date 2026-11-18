@@ -376,7 +376,37 @@ func (m *mapper) checkTarget(s Slice, cmd Command) bool {
 			"stream it acts on (the automation's targetIdField)", s.ID, s.CommandID, f)
 		ok = false
 	}
+	// The reactor copies the trigger's fields into the command by name, so a field both declare must be
+	// the same type and cardinality on both: a date string copied into a yyyymmdd integer was found in
+	// a real model, and no scenario could show it (none crosses from the trigger to the command).
+	for _, id := range s.TriggerEventIDs {
+		for _, cf := range cmd.Fields {
+			ef, found := docField(m.doc.Events[id].Fields, cf.Name)
+			if !found {
+				continue
+			}
+			if ef.Type != cf.Type || cardinality(ef) != cardinality(cf) {
+				m.rep.errorf("automation %q: %q is %s on trigger event %q but %s on command %q; the reactor "+
+					"copies it by name, so they must match", s.ID, cf.Name, fieldShape(ef), id, fieldShape(cf), s.CommandID)
+				ok = false
+			}
+		}
+	}
 	return ok
+}
+
+func cardinality(f Field) string {
+	if f.Cardinality == "" {
+		return "single"
+	}
+	return f.Cardinality
+}
+
+func fieldShape(f Field) string {
+	if cardinality(f) == "list" {
+		return "a list of " + f.Type
+	}
+	return f.Type
 }
 
 func docField(fields []Field, name string) (Field, bool) {

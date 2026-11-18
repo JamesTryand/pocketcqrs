@@ -191,6 +191,10 @@ func TestVerifyChecksWhereAnAutomationsCommandGoes(t *testing.T) {
 // trigger or the command lacks, is refused at import, by name.
 func TestAutomationTargetIsRequiredAndChecked(t *testing.T) {
 	cases := []struct{ name, old, new, want string }{
+		{"a copied field of another type",
+			`"record-customer-order":{"name":"Record Customer Order","aggregate":"customer","fields":[{"name":"customerId","type":"string","idAttribute":true},{"name":"orderId","type":"string"}`,
+			`"record-customer-order":{"name":"Record Customer Order","aggregate":"customer","fields":[{"name":"customerId","type":"string","idAttribute":true},{"name":"orderId","type":"integer"}`,
+			`"orderId" is string on trigger event "order-placed" but integer on command "record-customer-order"`},
 		{"no targetIdField", `"targetIdField":"customerId",`, ``,
 			`/slices/5: missing property 'targetIdField'`},
 		{"not on the trigger", `"targetIdField":"customerId",`, `"targetIdField":"buyerId",`,

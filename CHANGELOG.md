@@ -3,6 +3,16 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.24.0 — an automation's copied fields must fit its command
+
+### Changed
+
+- **Import refuses an automation whose trigger and command declare one field name with different types** (or one a
+  list and the other not). The reactor copies the trigger's fields into the command by name, so a mismatch reaches the
+  decider as the wrong type, and no scenario can show it: none crosses from the trigger to the command. Found in a
+  real model: a payment's `paidUntil` was a date string, the entitlement's a `yyyymmdd` integer. Fields only one side
+  declares are not compared.
+
 ## v0.23.0 — an automation's command goes where the model says
 
 ### Changed (breaking)
