@@ -746,7 +746,12 @@ type Hotspot struct {
 // are added. This importer now reads ingresses, outputs, delays and effects:
 // it generates their commands, and nothing that would fire or carry them.
 // An export declares 6.0.0.
-const SchemaVersion = "6.0.0"
+//
+// 6.1.0 (additive) was vendored on 2026-11-18: a stateChange slice may name
+// neither a screen nor an ingress when its command is public; another system
+// sends it, over a coordinating document's edge. Its command is generated as
+// any other's; the lint refuses neither when the command is not public.
+const SchemaVersion = "6.1.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

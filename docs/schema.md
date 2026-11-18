@@ -88,6 +88,11 @@ in them is generated:
 - a `stateChange` slice started by an **ingress** (`ingressId`) generates its
   command like any other; the ingress itself generates nothing (how the message
   arrives and is checked is surface tooling's);
+- a `stateChange` slice with **neither a screen nor an ingress** (schema 6.1.0,
+  v0.27.0) is sent by another of your systems, over a coordinating document's
+  internal edge: its command must be `public` (or the lint refuses the slice),
+  is generated like any other, and the report names it; the reaction that
+  sends it comes from the edge, not this document;
 - an automation with a **delay** generates its command but no reactor: sending
   it after the delay is its source's;
 - an automation with an **effect** generates its answer and its give-up

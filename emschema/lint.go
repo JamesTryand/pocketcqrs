@@ -235,8 +235,14 @@ func lintSlice(doc *Document, s Slice, swimlanes map[string]bool, r *Report) {
 			if _, ok := doc.Ingresses[s.IngressID]; !ok {
 				r.errorf("slice %q references ingress %q, which does not exist", s.ID, s.IngressID)
 			}
-		} else {
+		} else if s.ScreenID != "" {
 			requireScreen()
+		} else if cmd, ok := doc.Commands[s.CommandID]; ok && cmd.Public == nil {
+			// 6.1.0: neither a screen nor an ingress means another system
+			// sends it, over a coordinating document's edge, which needs it public
+			r.errorf("slice %q (%s) has no screenId or ingressId, and its command %q is not public: "+
+				"nothing starts it (a screen for a person, an ingress for an outside input, or, for a "+
+				"public command, another system over a coordinating document's edge)", s.ID, s.Pattern, s.CommandID)
 		}
 		forbid("delay", s.Delay != nil)
 		forbid("effect", s.Effect != nil)

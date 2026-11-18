@@ -151,6 +151,11 @@ func (m *mapper) mapSlices() {
 	for _, s := range m.doc.Slices {
 		if s.Pattern == PatternStateChange {
 			m.mapStateChange(s)
+			if s.ScreenID == "" && s.IngressID == "" {
+				m.rep.warnf("slice %q: %s is sent by another system (no screen or ingress): its command is "+
+					"generated; the reaction that sends it comes from the coordinating document's edge, not "+
+					"this document", s.ID, s.CommandID)
+			}
 		}
 	}
 	for _, s := range m.doc.Slices {

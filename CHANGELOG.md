@@ -3,6 +3,16 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.27.0 — eventmodelschema 6.1.0: a command another system sends needs no screen
+
+### Changed
+
+- **A `stateChange` slice may name neither a screen nor an ingress** when its command is `public` (hub QUESTIONS
+  L14): another of your systems sends it, over a coordinating document's internal edge. Its command is generated as
+  any other's, and the report names it as sent by another system. Before, it had to sit on a screen, as if a person
+  sent it. Neither, with a command that is not public, is refused ("nothing starts it"); both are refused, as before.
+- The vendored schema is eventmodelschema 6.1.0; an export declares 6.1.0.
+
 ## v0.26.0 — several commands may begin a stream
 
 ### Changed
