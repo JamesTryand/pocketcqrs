@@ -151,19 +151,25 @@ func relevantLeaves(e *jsonschema.ValidationError) []*jsonschema.ValidationError
 	}
 	switch e.ErrorKind.(type) {
 	case *kind.OneOf, *kind.AnyOf:
-		// the alternative whose failures reach deepest into the document
+		// An alternative whose constant failed (a target's "kind": "slice"
+		// against the alternative for "element") is one the document did
+		// not mean; of the rest, the one whose failures reach deepest into
+		// the document. If every constant failed, the deepest of all.
 		var best []*jsonschema.ValidationError
-		bestDepth := -1
+		bestDepth, bestMeant := -1, false
 		for _, alt := range e.Causes {
 			leaves := relevantLeaves(alt)
-			d := 0
+			d, meant := 0, true
 			for _, l := range leaves {
 				if len(l.InstanceLocation) > d {
 					d = len(l.InstanceLocation)
 				}
+				if _, c := l.ErrorKind.(*kind.Const); c {
+					meant = false
+				}
 			}
-			if d > bestDepth {
-				best, bestDepth = leaves, d
+			if meant && !bestMeant || meant == bestMeant && d > bestDepth {
+				best, bestDepth, bestMeant = leaves, d, meant
 			}
 		}
 		return best

@@ -579,15 +579,17 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	// what the model describes, which is exactly what an author needs told.
 	res.Passed = true
 	res.Detail = fmt.Sprintf("would append %s", strings.Join(got, ", "))
-	var notes []string
+	// a given event of another aggregate is an automation's trigger: said,
+	// but it is not a difference in the example data
 	if len(foreign) > 0 {
 		types := make([]string, 0, len(foreign))
 		for _, g := range foreign {
 			types = append(types, v.eventType(g.EventID))
 		}
-		notes = append(notes, fmt.Sprintf("%s belong to another aggregate and were treated as the "+
-			"trigger rather than this stream's history", strings.Join(types, ", ")))
+		res.Detail += fmt.Sprintf(" (given %s, of another aggregate, as the trigger rather than this stream's history)",
+			strings.Join(types, ", "))
 	}
+	var notes []string
 	for i, e := range then.Events {
 		if len(e.Data) == 0 {
 			continue

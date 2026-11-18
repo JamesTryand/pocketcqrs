@@ -16,6 +16,10 @@ All notable changes to PocketCQRS. Format loosely follows
   refuse to start with it until the document is fixed. Validation uses `santhosh-tekuri/jsonschema/v6`, with
   ECMAScript patterns (`dlclark/regexp2`), and fetches nothing.
 - The `pocketcqrs-domain` skill (`pocketcqrs skill install`) says what an import refused by the schema means.
+- Of a `oneOf`'s alternatives, a refusal names the one whose constant matched (a hotspot target's `kind`), not the
+  first one listed.
+- Verify no longer says "the example data differs" when an automation scenario's only note is that its given event
+  is the trigger, from another aggregate; that is said in brackets after "would append".
 
 ## v0.21.0 — schema 4.2.0, and Litestream no longer stalls
 

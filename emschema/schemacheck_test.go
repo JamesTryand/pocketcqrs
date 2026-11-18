@@ -149,3 +149,27 @@ func TestASplitDocumentIsCheckedAndNamesTheFile(t *testing.T) {
 		t.Errorf("want one problem in the events file, at placed, got %+v", se.Problems)
 	}
 }
+
+// A oneOf's alternatives are told apart by a constant (a hotspot target's
+// kind). The refusal names the alternative whose constant matched, not the
+// first one listed.
+func TestTheAlternativeWhoseKindMatchedIsTheOneNamed(t *testing.T) {
+	raw := readAccessWithout(t, func(doc map[string]any) {
+		doc["hotspots"] = map[string]any{"open-question": map[string]any{
+			"note":   "Who may see a closed ticket?",
+			"target": map[string]any{"kind": "slice", "sliceIds": []any{"view-tickets-slice"}},
+		}}
+	})
+	_, err := Parse("read-access.json", raw)
+	var se *SchemaError
+	if !errors.As(err, &se) {
+		t.Fatalf("want a SchemaError, got %v", err)
+	}
+	want := []SchemaProblem{
+		{Pointer: "/hotspots/open-question/target", Message: "missing property 'sliceId'"},
+		{Pointer: "/hotspots/open-question/target", Message: "additional properties 'sliceIds' not allowed"},
+	}
+	if len(se.Problems) != len(want) || se.Problems[0] != want[0] || se.Problems[1] != want[1] {
+		t.Errorf("want %+v, got %+v", want, se.Problems)
+	}
+}
