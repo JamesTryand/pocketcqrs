@@ -15,6 +15,7 @@ All notable changes to PocketCQRS. Format loosely follows
   now be refused**, and a Go program whose generated `register.go` parses its embedded document at start-up will
   refuse to start with it until the document is fixed. Validation uses `santhosh-tekuri/jsonschema/v6`, with
   ECMAScript patterns (`dlclark/regexp2`), and fetches nothing.
+- The `pocketcqrs-domain` skill (`pocketcqrs skill install`) says what an import refused by the schema means.
 
 ## v0.21.0 — schema 4.2.0, and Litestream no longer stalls
 
