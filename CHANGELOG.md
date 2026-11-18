@@ -3,7 +3,10 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased
+## v0.21.0 — schema 4.2.0, and Litestream no longer stalls
+
+Reads eventmodelschema 4.2.0 (tag `v4.2.0`): `public` on an event or command. Fixes a secondary stalling
+Litestream, found by the new kill tests.
 
 ### Added
 
