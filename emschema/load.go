@@ -154,6 +154,10 @@ func LoadManifest(dir string) (*Document, error) {
 			err = load(rel, &doc.ReadModels)
 		case "screens":
 			err = load(rel, &doc.Screens)
+		case "ingresses":
+			err = load(rel, &doc.Ingresses)
+		case "outputs":
+			err = load(rel, &doc.Outputs)
 		case "automations":
 			err = load(rel, &doc.Automations)
 		case "chapters":

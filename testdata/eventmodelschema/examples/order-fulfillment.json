@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
-  "eventModelingSchemaVersion": "5.0.0",
+  "eventModelingSchemaVersion": "6.0.0",
   "id": "order-fulfillment",
   "name": "Order Fulfillment",
   "description": "Worked example exercising every notation in the schema: all 3 slice patterns, all 3 scenario kinds, a hotspot, a chapter, and an actor lane. The shipping-partner notification slice also demonstrates automation without a read model (a boundary-crossing Bridge/Reactor: event straight to command, no persisted state needed).",
@@ -129,16 +129,22 @@
     "carrier-webhook": {
       "name": "Carrier Webhook",
       "description": "The shipping partner calls this to report delivery attempts. It redelivers on any non-2xx response, so every call carries the carrier's own event id.",
-      "swimlaneId": "shipping-partner",
-      "verification": { "scheme": "hmac-sha256" },
-      "deliveryIdField": "carrierEventId"
+      "swimlaneId": "shipping-partner"
+    }
+  },
+  "outputs": {
+    "order-confirmation": {
+      "name": "Order Confirmation",
+      "description": "A placed order's confirmation goes to the customer; nothing comes back.",
+      "swimlaneId": "sales",
+      "triggerEventIds": ["order-placed"],
+      "fields": ["orderId", "customerEmail", "items"]
     }
   },
   "automations": {
     "auto-ship-pending-orders": { "name": "Auto-Ship Pending Orders", "description": "Reacts to newly placed orders by shipping them." },
     "notify-shipping-partner-automation": { "name": "Notify Shipping Partner", "description": "When a shipment leaves the warehouse, calls the shipping partner's API and records whether the partner acknowledged it. No local state needed." },
-    "delivery-overdue-timer": { "name": "Delivery Overdue Timer", "description": "Flags an order that has neither been delivered nor failed some days after shipping." },
-    "reconcile-pending-shipments": { "name": "Reconcile Pending Shipments", "description": "Every so often, retries shipping any order still waiting, in case its first attempt was lost." }
+    "delivery-overdue-timer": { "name": "Delivery Overdue Timer", "description": "Flags an order that has neither been delivered nor failed some days after shipping." }
   },
   "slices": [
     {
@@ -293,8 +299,7 @@
       "triggerEventIds": ["order-shipped"],
       "targetIdField": "orderId",
       "delay": {
-        "after": { "setting": "deliveryOverdueAfter", "default": "P5D" },
-        "cancelledByEventIds": ["order-delivered", "delivery-failed"]
+        "after": { "setting": "deliveryOverdueAfter", "default": "P5D" }
       },
       "commandId": "flag-delivery-overdue",
       "resultEventIds": ["delivery-overdue"],
@@ -303,37 +308,9 @@
           "id": "undelivered-order-flagged",
           "name": "An order neither delivered nor failed five days after shipping is flagged",
           "kind": "stateChange",
-          "given": [
-            { "eventId": "order-shipped", "data": { "orderId": "order-1" } },
-            { "elapsed": "P5D" }
-          ],
+          "given": [{ "eventId": "order-shipped", "data": { "orderId": "order-1" } }],
           "when": { "commandId": "flag-delivery-overdue", "data": { "orderId": "order-1" } },
           "then": { "events": [{ "eventId": "delivery-overdue", "data": { "orderId": "order-1" } }] }
-        }
-      ]
-    },
-    {
-      "id": "reconcile-shipments-slice",
-      "name": "Reconcile Pending Shipments",
-      "pattern": "automation",
-      "swimlaneId": "warehouse",
-      "chapterId": "order-lifecycle",
-      "businessCapability": "No order stays unshipped because one attempt was lost",
-      "status": "planned",
-      "automationId": "reconcile-pending-shipments",
-      "schedule": { "cron": { "setting": "shipmentReconcileCron", "default": "*/15 * * * *" } },
-      "readModelId": "pending-shipments",
-      "commandId": "ship-order",
-      "resultEventIds": ["order-shipped"],
-      "outcomes": [["order-shipped"], []],
-      "scenarios": [
-        {
-          "id": "reconcile-ships-waiting-order",
-          "name": "A reconcile pass ships an order that is still waiting",
-          "kind": "stateChange",
-          "given": [{ "eventId": "order-placed", "data": { "orderId": "order-2" } }],
-          "when": { "commandId": "ship-order", "data": { "orderId": "order-2" } },
-          "then": { "events": [{ "eventId": "order-shipped", "data": { "orderId": "order-2" } }] }
         }
       ]
     }

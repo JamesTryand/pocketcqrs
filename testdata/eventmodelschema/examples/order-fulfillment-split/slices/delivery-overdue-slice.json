@@ -15,11 +15,7 @@
     "after": {
       "setting": "deliveryOverdueAfter",
       "default": "P5D"
-    },
-    "cancelledByEventIds": [
-      "order-delivered",
-      "delivery-failed"
-    ]
+    }
   },
   "commandId": "flag-delivery-overdue",
   "resultEventIds": [
@@ -36,9 +32,6 @@
           "data": {
             "orderId": "order-1"
           }
-        },
-        {
-          "elapsed": "P5D"
         }
       ],
       "when": {

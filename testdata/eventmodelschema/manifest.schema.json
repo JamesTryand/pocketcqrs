@@ -36,6 +36,7 @@
         "readModels": { "$ref": "#/$defs/filePath" },
         "screens": { "$ref": "#/$defs/filePath" },
         "ingresses": { "$ref": "#/$defs/filePath" },
+        "outputs": { "$ref": "#/$defs/filePath" },
         "automations": { "$ref": "#/$defs/filePath" },
         "hotspots": { "$ref": "#/$defs/filePath" }
       },

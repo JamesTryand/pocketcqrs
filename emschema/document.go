@@ -47,6 +47,8 @@ type Document struct {
 	Commands                   map[string]Command   `json:"commands,omitempty"`
 	ReadModels                 map[string]ReadModel `json:"readModels,omitempty"`
 	Screens                    map[string]Screen    `json:"screens,omitempty"`
+	Ingresses                  map[string]Ingress   `json:"ingresses,omitempty"`
+	Outputs                    map[string]Output    `json:"outputs,omitempty"`
 	Automations                map[string]Chapter   `json:"automations,omitempty"`
 	Slices                     []Slice              `json:"slices"`
 	Hotspots                   map[string]Hotspot   `json:"hotspots,omitempty"`
@@ -535,6 +537,8 @@ type Slice struct {
 
 	// stateChange + stateView
 	ScreenID string `json:"screenId,omitempty"`
+	// stateChange (schema 3.4.0; only a name from 6.0.0): started by an outside input instead of a screen
+	IngressID string `json:"ingressId,omitempty"`
 	// stateChange
 	CommandID string   `json:"commandId,omitempty"`
 	EventIDs  []string `json:"eventIds,omitempty"`
@@ -548,9 +552,56 @@ type Slice struct {
 	// acts on; the command declares the same field as its idAttribute.
 	TargetIDField  string   `json:"targetIdField,omitempty"`
 	ResultEventIDs []string `json:"resultEventIds,omitempty"`
+	// Delay (schema 3.5.0; its length only from 6.0.0) and Effect (3.6.0): an
+	// automation whose source fires it after a delay, or calls out and sends
+	// the answer back as its command. The commands are generated; the firing
+	// and the call are the source's (surface tooling), so no reactor is.
+	Delay  *Delay  `json:"delay,omitempty"`
+	Effect *Effect `json:"effect,omitempty"`
 	// stateChange + automation: the alternatives the command may produce
 	// (schema 3.3.0; when and set 3.12.0, repeated 3.13.0). See Outcome.
 	Outcomes []Outcome `json:"outcomes,omitempty"`
+}
+
+// Ingress is a message entering from outside as a command (schema 3.4.0). From
+// 6.0.0 it is only what it is: how it is carried and checked is its source's.
+type Ingress struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	SwimlaneID  string `json:"swimlaneId,omitempty"`
+}
+
+// Output is a message leaving after an event, nothing coming back (schema
+// 6.0.0). Nothing is generated from it: its carrier is surface tooling's.
+type Output struct {
+	Name            string   `json:"name"`
+	Description     string   `json:"description,omitempty"`
+	SwimlaneID      string   `json:"swimlaneId"`
+	TriggerEventIDs []string `json:"triggerEventIds"`
+	Fields          []string `json:"fields,omitempty"`
+}
+
+// Delay is how long after its trigger an automation's command is sent: the
+// business's rule (hub I1). Firing it is a source's.
+type Delay struct {
+	After json.RawMessage `json:"after,omitempty"` // a duration, or {setting, default}
+	At    string          `json:"at,omitempty"`
+	Key   string          `json:"key,omitempty"`
+}
+
+// Effect is an automation's call out: its answer comes back as the slice's
+// command, its give-up as GaveUp's.
+type Effect struct {
+	SwimlaneID  string       `json:"swimlaneId"`
+	Description string       `json:"description,omitempty"`
+	GaveUp      EffectGaveUp `json:"gaveUp"`
+}
+
+// EffectGaveUp is the command a call's give-up comes back as.
+type EffectGaveUp struct {
+	CommandID      string    `json:"commandId"`
+	ResultEventIDs []string  `json:"resultEventIds"`
+	Outcomes       []Outcome `json:"outcomes,omitempty"`
 }
 
 // Scenario is a given/when/then example. The `when` and `then` shapes depend
@@ -687,8 +738,15 @@ type Hotspot struct {
 // 5.0.0 (breaking: targetIdField, required on every automation started by an
 // event, names the trigger's field whose value is the target stream's id)
 // was vendored on 2026-11-18. The generated reactor routes by it; nothing is
-// derived from the trigger's own id any more. An export declares 5.0.0.
-const SchemaVersion = "5.0.0"
+// derived from the trigger's own id any more.
+//
+// 6.0.0 (breaking: the document names messages, never their sources) was
+// vendored on 2026-11-18: an ingress loses verification and deliveryIdField;
+// schedule, delay.cancelledByEventIds and scenario elapsed are gone; outputs
+// are added. This importer now reads ingresses, outputs, delays and effects:
+// it generates their commands, and nothing that would fire or carry them.
+// An export declares 6.0.0.
+const SchemaVersion = "6.0.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

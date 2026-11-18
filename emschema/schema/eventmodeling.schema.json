@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "5.0.0"
+      "default": "6.0.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -27,6 +27,7 @@
     "readModels": { "$ref": "#/$defs/readModelRegistry" },
     "screens": { "$ref": "#/$defs/screenRegistry" },
     "ingresses": { "$ref": "#/$defs/ingressRegistry" },
+    "outputs": { "$ref": "#/$defs/outputRegistry" },
     "automations": { "$ref": "#/$defs/automationRegistry" },
     "slices": {
       "type": "array",
@@ -431,13 +432,13 @@
           "minLength": 1
         },
         "message": {
-          "description": "3.15.0: the refusal's message when the actor is not the owner (stateField only).",
+          "description": "3.15.0: the refusal's message when the actor is not the owner (stateField; and via from 6.0.0, as scope's).",
           "type": "string",
           "minLength": 1
         }
       },
       "oneOf": [
-        { "required": ["via"], "not": { "anyOf": [{ "required": ["stateField"] }, { "required": ["message"] }] } },
+        { "required": ["via"], "not": { "required": ["stateField"] } },
         { "required": ["stateField"], "not": { "anyOf": [{ "required": ["via"] }, { "required": ["bypassRoles"] }] } }
       ],
       "additionalProperties": false
@@ -699,21 +700,36 @@
     },
 
     "ingress": {
+      "description": "A message entering from outside as a command (an outside input): the slices it starts name it with ingressId. 6.0.0: only what it is; how it is carried, checked and de-duplicated (verification, delivery ids, a schedule's cadence) is a source's, configured by surface tooling, which refers to the ingress by id.",
       "type": "object",
-      "required": ["name", "verification", "deliveryIdField"],
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "swimlaneId": { "$ref": "#/$defs/id" }
+      },
+      "additionalProperties": false
+    },
+
+    "output": {
+      "description": "6.0.0: a message leaving after an event, with nothing coming back (an outside output: a notification, a publish). The mirror of an ingress. fields names what leaves, from the trigger events (so personal data leaving the system is visible in the model). Nothing is generated from it; its carrier is configured by surface tooling, which refers to it by id.",
+      "type": "object",
+      "required": ["name", "swimlaneId", "triggerEventIds"],
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "description": { "type": "string" },
         "swimlaneId": { "$ref": "#/$defs/id" },
-        "verification": {
-          "type": "object",
-          "required": ["scheme"],
-          "properties": {
-            "scheme": { "type": "string", "minLength": 1 }
-          },
-          "additionalProperties": false
+        "triggerEventIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1,
+          "uniqueItems": true
         },
-        "deliveryIdField": { "type": "string", "minLength": 1 }
+        "fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
       },
       "additionalProperties": false
     },
@@ -773,6 +789,11 @@
       "propertyNames": { "$ref": "#/$defs/id" },
       "additionalProperties": { "$ref": "#/$defs/ingress" }
     },
+    "outputRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/output" }
+    },
     "automationRegistry": {
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/id" },
@@ -800,15 +821,6 @@
       "properties": {
         "eventId": { "$ref": "#/$defs/id" },
         "data": { "type": "object" }
-      },
-      "additionalProperties": false
-    },
-
-    "elapsedRef": {
-      "type": "object",
-      "required": ["elapsed"],
-      "properties": {
-        "elapsed": { "$ref": "#/$defs/duration" }
       },
       "additionalProperties": false
     },
@@ -900,12 +912,7 @@
         "kind": { "$ref": "#/$defs/scenarioKind" },
         "given": {
           "type": "array",
-          "items": {
-            "oneOf": [
-              { "$ref": "#/$defs/eventRef" },
-              { "$ref": "#/$defs/elapsedRef" }
-            ]
-          }
+          "items": { "$ref": "#/$defs/eventRef" }
         }
       }
     },
@@ -976,26 +983,6 @@
       ]
     },
 
-    "cronExpression": {
-      "type": "string",
-      "pattern": "^\\S+(\\s+\\S+){4}$"
-    },
-
-    "cronValue": {
-      "oneOf": [
-        { "$ref": "#/$defs/cronExpression" },
-        {
-          "type": "object",
-          "required": ["setting", "default"],
-          "properties": {
-            "setting": { "$ref": "#/$defs/settingName" },
-            "default": { "$ref": "#/$defs/cronExpression" }
-          },
-          "additionalProperties": false
-        }
-      ]
-    },
-
     "automationDelay": {
       "type": "object",
       "oneOf": [
@@ -1005,13 +992,7 @@
       "properties": {
         "after": { "$ref": "#/$defs/durationValue" },
         "at": { "type": "string", "minLength": 1 },
-        "key": { "type": "string", "minLength": 1 },
-        "cancelledByEventIds": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/id" },
-          "minItems": 1,
-          "uniqueItems": true
-        }
+        "key": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": false
     },
@@ -1036,16 +1017,6 @@
           },
           "additionalProperties": false
         }
-      },
-      "additionalProperties": false
-    },
-
-    "automationSchedule": {
-      "type": "object",
-      "required": ["cron"],
-      "properties": {
-        "cron": { "$ref": "#/$defs/cronValue" },
-        "timeZone": { "type": "string", "minLength": 1, "default": "UTC" }
       },
       "additionalProperties": false
     },
@@ -1198,21 +1169,7 @@
           "if": { "type": "object", "properties": { "pattern": { "const": "automation" } } },
           "then": {
             "type": "object",
-            "required": ["automationId", "commandId", "resultEventIds"],
-            "oneOf": [
-              { "type": "object", "required": ["triggerEventIds"] },
-              { "type": "object", "required": ["schedule"] }
-            ],
-            "allOf": [
-              {
-                "if": { "type": "object", "required": ["delay"] },
-                "then": { "type": "object", "required": ["triggerEventIds"] }
-              },
-              {
-                "if": { "type": "object", "required": ["triggerEventIds"] },
-                "then": { "type": "object", "required": ["targetIdField"] }
-              }
-            ],
+            "required": ["automationId", "triggerEventIds", "targetIdField", "commandId", "resultEventIds"],
             "properties": {
               "automationId": { "$ref": "#/$defs/id" },
               "triggerEventIds": {
@@ -1226,7 +1183,6 @@
                 "minLength": 1
               },
               "delay": { "$ref": "#/$defs/automationDelay" },
-              "schedule": { "$ref": "#/$defs/automationSchedule" },
               "effect": { "$ref": "#/$defs/automationEffect" },
               "partitionFrom": { "type": "string", "minLength": 1 },
               "readModelId": { "$ref": "#/$defs/id" },
@@ -1259,7 +1215,7 @@
           "properties": {
             "kind": { "const": "element" },
             "elementType": {
-              "enum": ["swimlane", "event", "command", "readModel", "screen", "ingress", "automation", "chapter", "actorLane"]
+              "enum": ["swimlane", "event", "command", "readModel", "screen", "ingress", "output", "automation", "chapter", "actorLane"]
             },
             "elementId": { "$ref": "#/$defs/id" }
           },

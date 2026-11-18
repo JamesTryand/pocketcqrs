@@ -159,6 +159,11 @@ func (m *mapper) mapSlices() {
 		}
 	}
 	m.mapFolds()
+	for _, id := range sortedOutputIDs(m.doc) {
+		o := m.doc.Outputs[id]
+		m.rep.warnf("output %q leaves after %s: nothing is generated; its carrier is surface tooling's",
+			id, strings.Join(o.TriggerEventIDs, ", "))
+	}
 	// PatternStateView: the read model itself is mapped separately; the slice
 	// adds only a screen, which has no runtime concept here.
 }
@@ -229,6 +234,9 @@ func (m *mapper) buildEventOwners() map[string]string {
 		if s.Pattern == PatternAutomation {
 			if agg := resolve(s.CommandID, m.doc.Commands[s.CommandID].Aggregate); agg != "" {
 				assign(agg, s.ResultEventIDs)
+				if s.Effect != nil {
+					assign(agg, s.Effect.GaveUp.ResultEventIDs)
+				}
 			}
 		}
 	}
@@ -291,8 +299,23 @@ func (m *mapper) mapAutomation(s Slice) {
 	if !ok {
 		return
 	}
-	if !m.checkTarget(s, cmd) {
+	if !m.checkTarget(s, s.CommandID, cmd) {
 		return
+	}
+	var gaveUpCmd Command
+	if s.Effect != nil {
+		gaveUpCmd = m.doc.Commands[s.Effect.GaveUp.CommandID]
+		if gAgg, ok := m.aggregateFor("command", s.Effect.GaveUp.CommandID, gaveUpCmd.Aggregate); !ok {
+			return
+		} else if gAgg != agg {
+			m.rep.errorf("automation %q: its give-up command %q is on %s, its answer %q on %s; both come back to "+
+				"the stream the trigger names, so they must be on one aggregate", s.ID, s.Effect.GaveUp.CommandID,
+				gAgg, s.CommandID, agg)
+			return
+		}
+		if !m.checkTarget(s, s.Effect.GaveUp.CommandID, gaveUpCmd) {
+			return
+		}
 	}
 	// the reactor belongs to whichever aggregate OWNS the trigger events —
 	// that is the stream it consumes, and it may well not be the target
@@ -330,6 +353,35 @@ func (m *mapper) mapAutomation(s Slice) {
 	c.CanBeginAgain = isCreate && m.hasBeginAgainEvidence(s, agg)
 	c.Outcomes = m.mapOutcomes(s, s.ResultEventIDs, c.Events)
 	target.Commands = append(target.Commands, c)
+	if s.Effect != nil {
+		g := s
+		g.Outcomes = s.Effect.GaveUp.Outcomes
+		// the answer and the give-up are alternatives, either of which may be
+		// the first on the stream; a stream has one beginning, so the answer
+		// keeps the create and the give-up (sent only when no answer came) is
+		// an upsert: neither guard
+		gc := m.command(agg, s.Effect.GaveUp.CommandID, gaveUpCmd, s.Effect.GaveUp.ResultEventIDs, false, false)
+		if isCreate {
+			m.rep.warnf("automation %q: its give-up %q may begin the stream as its answer %q does; a stream has one "+
+				"beginning, so the answer is the create and the give-up runs on a fresh or existing stream alike",
+				s.ID, s.Effect.GaveUp.CommandID, s.CommandID)
+		}
+		gc.Outcomes = m.mapOutcomes(g, s.Effect.GaveUp.ResultEventIDs, gc.Events)
+		target.Commands = append(target.Commands, gc)
+	}
+	// A delay or an effect is fired by its source (a timer; ext-caller's call
+	// and answer), configured by surface tooling: the commands are the model's
+	// and are generated, but a reactor sending at once would be wrong.
+	switch {
+	case s.Delay != nil:
+		m.rep.warnf("automation %q waits before sending %q: the command is generated; sending it after the delay is "+
+			"its source's (surface tooling), so no reactor is generated", s.ID, s.CommandID)
+		return
+	case s.Effect != nil:
+		m.rep.warnf("automation %q calls out: its answer %q and give-up %q are generated; the call is its source's "+
+			"(surface tooling), so no reactor is generated", s.ID, s.CommandID, s.Effect.GaveUp.CommandID)
+		return
+	}
 	triggers := make([]string, 0, len(s.TriggerEventIDs))
 	for _, id := range s.TriggerEventIDs {
 		triggers = append(triggers, m.eventType(id))
@@ -357,11 +409,11 @@ func (m *mapper) mapAutomation(s Slice) {
 // checkTarget refuses an automation that doesn't say where its command goes
 // (schema 5.0.0 targetIdField), or names a field that a trigger event doesn't
 // carry or the command doesn't declare as its identity (idAttribute).
-func (m *mapper) checkTarget(s Slice, cmd Command) bool {
+func (m *mapper) checkTarget(s Slice, commandID string, cmd Command) bool {
 	f := s.TargetIDField
 	if f == "" {
 		m.rep.errorf("automation %q names no targetIdField: name the trigger event's field whose value is "+
-			"the id of the stream %q acts on (schema 5.0.0; the stream is no longer derived)", s.ID, s.CommandID)
+			"the id of the stream %q acts on (schema 5.0.0; the stream is no longer derived)", s.ID, commandID)
 		return false
 	}
 	ok := true
@@ -373,7 +425,7 @@ func (m *mapper) checkTarget(s Slice, cmd Command) bool {
 	}
 	if fd, found := docField(cmd.Fields, f); !found || !fd.IDAttribute {
 		m.rep.errorf("automation %q: command %q must declare %q with idAttribute: true, the identity of the "+
-			"stream it acts on (the automation's targetIdField)", s.ID, s.CommandID, f)
+			"stream it acts on (the automation's targetIdField)", s.ID, commandID, f)
 		ok = false
 	}
 	// The reactor copies the trigger's fields into the command by name, so a field both declare must be
@@ -387,7 +439,7 @@ func (m *mapper) checkTarget(s Slice, cmd Command) bool {
 			}
 			if ef.Type != cf.Type || cardinality(ef) != cardinality(cf) {
 				m.rep.errorf("automation %q: %q is %s on trigger event %q but %s on command %q; the reactor "+
-					"copies it by name, so they must match", s.ID, cf.Name, fieldShape(ef), id, fieldShape(cf), s.CommandID)
+					"copies it by name, so they must match", s.ID, cf.Name, fieldShape(ef), id, fieldShape(cf), commandID)
 				ok = false
 			}
 		}

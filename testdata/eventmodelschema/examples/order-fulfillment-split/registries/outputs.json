@@ -1,0 +1,15 @@
+{
+  "order-confirmation": {
+    "name": "Order Confirmation",
+    "description": "A placed order's confirmation goes to the customer; nothing comes back.",
+    "swimlaneId": "sales",
+    "triggerEventIds": [
+      "order-placed"
+    ],
+    "fields": [
+      "orderId",
+      "customerEmail",
+      "items"
+    ]
+  }
+}

@@ -3,6 +3,23 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.25.0 — eventmodelschema 6.0.0: the boundary parts are read
+
+### Changed (breaking)
+
+- **eventmodelschema 6.0.0**: a document names messages, never their sources. Gone from the schema: an ingress's
+  `verification` and `deliveryIdField`, `schedule`, `delay.cancelledByEventIds` and scenario `elapsed` (a document
+  using them is refused by the schema check, as any invalid document is). New: `outputs`, and
+  `requiredOwnership.message` with `via`.
+
+### Added
+
+- **Import reads the boundary parts that remain, and generates only their model.** A `stateChange` slice started by
+  an ingress generates its command. An automation with a delay generates its command, and one with an effect its
+  answer and give-up commands, but neither a reactor: firing them is their source's (surface tooling). An output
+  generates nothing; its fields must be on its trigger events. The report names each. They were refused before.
+- An effect's give-up command routes by the slice's `targetIdField` too, and must be on the answer's aggregate.
+
 ## v0.24.0 — an automation's copied fields must fit its command
 
 ### Changed

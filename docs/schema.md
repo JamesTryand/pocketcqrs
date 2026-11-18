@@ -78,9 +78,26 @@ know. Example data (`data`, `queryParams`, a scenario's expected `result`) is
 the domain's own and isn't checked. A split document is checked file by file,
 and the pointer starts with the file's path.
 
-Refused today, from schema 3.2.0 on: `selfAccess.via`,
-ingresses, delays, schedules and `elapsed`, automation `effect`,
-and partitioning. Each leaves this list as it is implemented.
+Refused today, from schema 3.2.0 on: `selfAccess.via` and partitioning. Each
+leaves this list as it is implemented.
+
+**The boundary (schema 6.0.0, v0.25.0).** A document names messages, never
+their sources, so the parts that cross the edge are read, and only the model
+in them is generated:
+
+- a `stateChange` slice started by an **ingress** (`ingressId`) generates its
+  command like any other; the ingress itself generates nothing (how the message
+  arrives and is checked is surface tooling's);
+- an automation with a **delay** generates its command but no reactor: sending
+  it after the delay is its source's;
+- an automation with an **effect** generates its answer and its give-up
+  commands but no reactor: the call is its source's (an ext-caller rule). The
+  answer is the stream's create; the give-up runs on a fresh or an existing
+  stream alike, since either may come first and a stream has one beginning;
+- an **output** generates nothing; import checks each field it says leaves is
+  on its trigger events, and reports it.
+
+The report names each of these.
 
 ### Who may read a read model
 

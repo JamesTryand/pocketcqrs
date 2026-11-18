@@ -46,10 +46,10 @@ func wantRefused(t *testing.T, got []string, want ...string) {
 // removals while looking complete.
 func TestNewerSchemaFeaturesAreRefusedWhereDeclared(t *testing.T) {
 	cases := map[string][]string{
+		// ingresses, delays, effects and outputs are read since schema 6.0.0
+		// (TestBoundaryPartsImport); partitioning is still refused
 		"examples/order-fulfillment.json": {
-			"/ingresses",
 			"/partitioning",
-			"/slices/5/scenarios/0/given/1/elapsed",
 		},
 	}
 	for rel, want := range cases {
@@ -67,7 +67,7 @@ func TestRefusalNamesTheFeature(t *testing.T) {
 		t.Fatal("order-fulfillment.json loaded")
 	}
 	msg := err.Error()
-	for _, want := range []string{"an ingress", "3.4.0", "/ingresses", "nothing was generated"} {
+	for _, want := range []string{"partitioning", "3.7.0", "/partitioning", "nothing was generated"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the error does not mention %q:\n%s", want, msg)
 		}

@@ -77,6 +77,28 @@ func Lint(doc *Document) *Report {
 		}
 	}
 
+	// an output (schema 6.0.0): its trigger events exist, and every field it
+	// says leaves is on each of them, so what leaves (personal data too) is
+	// what the model says
+	for _, id := range sortedOutputIDs(doc) {
+		o := doc.Outputs[id]
+		if !swimlanes[o.SwimlaneID] {
+			r.errorf("output %q references swimlane %q, which does not exist", id, o.SwimlaneID)
+		}
+		for _, ev := range o.TriggerEventIDs {
+			e, ok := doc.Events[ev]
+			if !ok {
+				r.errorf("output %q references event %q, which does not exist", id, ev)
+				continue
+			}
+			for _, f := range o.Fields {
+				if _, found := docField(e.Fields, f); !found {
+					r.errorf("output %q: field %q, which it says leaves, is not a field of trigger event %q", id, f, ev)
+				}
+			}
+		}
+	}
+
 	sliceIDs := map[string]bool{}
 	for _, s := range doc.Slices {
 		if sliceIDs[s.ID] {
@@ -208,7 +230,16 @@ func lintSlice(doc *Document, s Slice, swimlanes map[string]bool, r *Report) {
 
 	switch s.Pattern {
 	case PatternStateChange:
-		requireScreen()
+		if s.IngressID != "" {
+			forbid("screenId", s.ScreenID != "")
+			if _, ok := doc.Ingresses[s.IngressID]; !ok {
+				r.errorf("slice %q references ingress %q, which does not exist", s.ID, s.IngressID)
+			}
+		} else {
+			requireScreen()
+		}
+		forbid("delay", s.Delay != nil)
+		forbid("effect", s.Effect != nil)
 		requireCommand(s.CommandID)
 		requireEvents("eventIds", s.EventIDs)
 		forbid("readModelId", s.ReadModelID != "")
@@ -218,6 +249,9 @@ func lintSlice(doc *Document, s Slice, swimlanes map[string]bool, r *Report) {
 	case PatternStateView:
 		requireScreen()
 		requireReadModel()
+		forbid("ingressId", s.IngressID != "")
+		forbid("delay", s.Delay != nil)
+		forbid("effect", s.Effect != nil)
 		forbid("commandId", s.CommandID != "")
 		forbid("eventIds", len(s.EventIDs) > 0)
 		forbid("automationId", s.AutomationID != "")
@@ -239,9 +273,23 @@ func lintSlice(doc *Document, s Slice, swimlanes map[string]bool, r *Report) {
 		}
 		forbid("screenId", s.ScreenID != "")
 		forbid("eventIds", len(s.EventIDs) > 0)
+		forbid("ingressId", s.IngressID != "")
+		if s.Effect != nil {
+			requireCommand(s.Effect.GaveUp.CommandID)
+			requireEvents("effect.gaveUp.resultEventIds", s.Effect.GaveUp.ResultEventIDs)
+		}
 	}
 
 	lintScenarios(doc, s, r)
+}
+
+func sortedOutputIDs(doc *Document) []string {
+	ids := make([]string, 0, len(doc.Outputs))
+	for id := range doc.Outputs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // lintScenarios checks scenario references and that each kind is one the

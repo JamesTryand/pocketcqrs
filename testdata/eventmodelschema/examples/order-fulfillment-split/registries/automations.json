@@ -10,9 +10,5 @@
   "delivery-overdue-timer": {
     "name": "Delivery Overdue Timer",
     "description": "Flags an order that has neither been delivered nor failed some days after shipping."
-  },
-  "reconcile-pending-shipments": {
-    "name": "Reconcile Pending Shipments",
-    "description": "Every so often, retries shipping any order still waiting, in case its first attempt was lost."
   }
 }
