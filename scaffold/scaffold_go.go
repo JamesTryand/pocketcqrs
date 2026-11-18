@@ -1511,9 +1511,9 @@ func (d Domain) reactorGo(pkg string, r Reactor) string {
 	fmt.Fprintf(&b, "// %s reacts to %s's events by dispatching %s/%s — generated\n", ctor, d.Aggregate, r.Aggregate, r.Command)
 	b.WriteString("// automation matching the JS scaffolder's reactTo(): one reaction per\n")
 	b.WriteString("// triggering event, its payload the causing event's own data untouched.\n")
-	b.WriteString("// The target id is derived from the source event, so a replay hits the\n")
-	b.WriteString("// target's own \"already exists\" rule instead of dispatching twice — keep\n")
-	b.WriteString("// it deterministic if you change it.\n")
+	fmt.Fprintf(&b, "// The command goes to the %s stream named by the event's %s (the\n", r.Aggregate, r.IDField)
+	b.WriteString("// model's targetIdField). Delivery is at-least-once; a redelivery reaches the\n")
+	b.WriteString("// same stream, and the runtime skips a reaction already applied.\n")
 	fmt.Fprintf(&b, "func %s() reactors.Reactor { return %s{} }\n\n", ctor, typeName)
 	fmt.Fprintf(&b, "type %s struct{}\n\n", typeName)
 	fmt.Fprintf(&b, "func (%s) Name() string { return %q }\n\n", typeName, r.Name)
@@ -1523,11 +1523,7 @@ func (d Domain) reactorGo(pkg string, r Reactor) string {
 	b.WriteString("\tdefault:\n\t\treturn nil\n\t}\n")
 	b.WriteString("\treturn []reactors.Reaction{{\n")
 	fmt.Fprintf(&b, "\t\tAggregate: %q,\n", r.Aggregate)
-	if r.PerEvent {
-		fmt.Fprintf(&b, "\t\tID:        %q + ev.ID,\n", r.IDPrefix)
-	} else {
-		fmt.Fprintf(&b, "\t\tID:        %q + ev.AggregateID,\n", r.IDPrefix)
-	}
+	fmt.Fprintf(&b, "\t\tID:        reactors.TargetID(ev, %q),\n", r.IDField)
 	b.WriteString("\t\tCommand:   decider.Command{Name: ")
 	fmt.Fprintf(&b, "%q, Payload: ev.Data},\n", r.Command)
 	b.WriteString("\t}}\n")

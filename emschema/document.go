@@ -543,7 +543,11 @@ type Slice struct {
 	// automation
 	AutomationID    string   `json:"automationId,omitempty"`
 	TriggerEventIDs []string `json:"triggerEventIds,omitempty"`
-	ResultEventIDs  []string `json:"resultEventIds,omitempty"`
+	// TargetIDField (schema 5.0.0, required with triggerEventIds) names the
+	// trigger events' field whose value is the id of the stream the command
+	// acts on; the command declares the same field as its idAttribute.
+	TargetIDField  string   `json:"targetIdField,omitempty"`
+	ResultEventIDs []string `json:"resultEventIds,omitempty"`
 	// stateChange + automation: the alternatives the command may produce
 	// (schema 3.3.0; when and set 3.12.0, repeated 3.13.0). See Outcome.
 	Outcomes []Outcome `json:"outcomes,omitempty"`
@@ -678,8 +682,13 @@ type Hotspot struct {
 // 4.2.0 (additive: public on an event or command, the contract another
 // system may use, checked across systems by eventmodelschema's
 // architecture-check) was vendored on 2026-11-17. It is read and kept, and
-// changes nothing generated. An export declares 4.2.0.
-const SchemaVersion = "4.2.0"
+// changes nothing generated.
+//
+// 5.0.0 (breaking: targetIdField, required on every automation started by an
+// event, names the trigger's field whose value is the target stream's id)
+// was vendored on 2026-11-18. The generated reactor routes by it; nothing is
+// derived from the trigger's own id any more. An export declares 5.0.0.
+const SchemaVersion = "5.0.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

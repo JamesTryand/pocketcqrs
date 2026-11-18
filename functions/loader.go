@@ -64,6 +64,7 @@ type Declaration struct {
 	Produces   map[string][]string `json:"produces,omitempty"`
 	Reactor    []string            `json:"reactor,omitempty"`
 	Dispatches []string            `json:"dispatches,omitempty"`
+	Target     string              `json:"target,omitempty"`
 	// SchemaBearing reports whether ACTIVATING this file needs the
 	// maintenance barrier: projection schemas and deciders move only in
 	// maintenance, effect/http/cron functions move in any mode.
@@ -93,6 +94,7 @@ func declaration(name string, t triggers) (*Declaration, error) {
 		Produces:   t.produces,
 		Reactor:    t.reactor,
 		Dispatches: t.dispatches,
+		Target:     t.target,
 	}
 	if t.empty() {
 		return d, nil
@@ -128,6 +130,9 @@ func declaration(name string, t triggers) (*Declaration, error) {
 	}
 	if len(t.dispatches) > 0 && len(t.reactor) == 0 {
 		return nil, fmt.Errorf("functions: %s: //@dispatches requires //@trigger reactor", name)
+	}
+	if t.target != "" && len(t.reactor) == 0 {
+		return nil, fmt.Errorf("functions: %s: //@target requires //@trigger reactor", name)
 	}
 	if len(t.produces) > 0 {
 		if t.decider == "" {
@@ -235,6 +240,10 @@ func declaration(name string, t triggers) (*Declaration, error) {
 //	                                                catalog, since a command
 //	                                                leaves no trace until it
 //	                                                has actually fired.
+//	//@target <field>                            -> optional, with a reactor: the
+//	                                                event field naming the target
+//	                                                stream (targetIdField), for
+//	                                                the catalog and an export.
 //	//@trigger decider <aggregate>               -> JS decider (tier 3);
 //	//@handles <EventTypes...>                      requires //@handles
 //	//@commands <Names...>                       -> optional: the commands this
@@ -447,6 +456,7 @@ type triggers struct {
 	produces     map[string][]string // //@produces <Command> <Event...> (optional)
 	reactor      []string            // //@trigger reactor <EventTypes...>
 	dispatches   []string            // //@dispatches <aggregate>/<Command>... (optional)
+	target       string              // //@target <field>: the event field naming the target stream (optional)
 	transforms   []TransformSpec
 	hand         string   // //@hand <file>: the decider's hand-written hooks, compiled in
 	hooks        []string // //@hooks <name...>: what the hand file must define
@@ -458,7 +468,7 @@ type triggers struct {
 func (t triggers) empty() bool {
 	return len(t.eventTypes) == 0 && !t.isHTTP && t.cron == "" && t.projection == "" && len(t.schemas) == 0 &&
 		t.decider == "" && len(t.handles) == 0 && len(t.commands) == 0 && len(t.transforms) == 0 &&
-		len(t.reactor) == 0 && len(t.dispatches) == 0 && len(t.produces) == 0 && len(t.rules) == 0 &&
+		len(t.reactor) == 0 && len(t.dispatches) == 0 && t.target == "" && len(t.produces) == 0 && len(t.rules) == 0 &&
 		t.hand == "" && len(t.hooks) == 0 && len(t.authorize) == 0
 }
 
@@ -615,6 +625,18 @@ func parseTriggers(src string) (triggers, error) {
 				return t, fmt.Errorf("//@produces declared twice for command %q; list its events on one line", cmd)
 			}
 			t.produces[cmd] = append([]string(nil), fields[2:]...)
+		case "target":
+			// //@target <field>: the triggering event's field whose value is
+			// the target stream's id (eventmodelschema 5.0.0 targetIdField).
+			// Documentation for the catalog, as //@dispatches is: reactTo()
+			// still returns the id. A generated reactor declares it.
+			if len(fields) != 2 {
+				return t, fmt.Errorf("//@target wants: target <field>")
+			}
+			if t.target != "" {
+				return t, fmt.Errorf("//@target declared twice")
+			}
+			t.target = fields[1]
 		case "dispatches":
 			if len(fields) < 2 {
 				return t, fmt.Errorf("//@dispatches wants: dispatches <aggregate>/<Command>...")

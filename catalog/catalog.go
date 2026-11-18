@@ -92,7 +92,10 @@ type Consumer struct {
 	// not observed: an automation that has never fired produces no flow
 	// edge, so this is the only way to report it before its first run.
 	Dispatches []string `json:"dispatches,omitempty"`
-	Checkpoint int64    `json:"checkpoint"`
+	// Target is a JS reactor's declared //@target: the event field naming
+	// the stream its command goes to.
+	Target     string `json:"target,omitempty"`
+	Checkpoint int64  `json:"checkpoint"`
 }
 
 // Collection is one PocketBase collection with its ownership facts.
@@ -225,9 +228,11 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 	}
 	reactorTypes := map[string][]string{}
 	reactorDispatches := map[string][]string{}
+	reactorTarget := map[string]string{}
 	for _, spec := range in.JSReactors {
 		reactorTypes[spec.Name()] = spec.EventTypes
 		reactorDispatches[spec.Name()] = spec.Dispatches
+		reactorTarget[spec.Name()] = spec.Target
 	}
 	for _, name := range in.Engine.Names() {
 		// read through the engine, not in.Store: on a secondary the store is
@@ -254,6 +259,7 @@ func Build(ctx context.Context, in Inputs) (*Catalog, error) {
 			cons.Kind = "js-reactor"
 			cons.EventTypes = reactorTypes[name]
 			cons.Dispatches = reactorDispatches[name]
+			cons.Target = reactorTarget[name]
 		case strings.HasPrefix(name, "fn:"):
 			cons.Kind = "effect-function"
 			cons.EventTypes = effectTypes[name]

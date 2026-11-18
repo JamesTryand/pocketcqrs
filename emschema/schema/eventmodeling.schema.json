@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "4.2.0"
+      "default": "5.0.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -1207,6 +1207,10 @@
               {
                 "if": { "type": "object", "required": ["delay"] },
                 "then": { "type": "object", "required": ["triggerEventIds"] }
+              },
+              {
+                "if": { "type": "object", "required": ["triggerEventIds"] },
+                "then": { "type": "object", "required": ["targetIdField"] }
               }
             ],
             "properties": {
@@ -1215,6 +1219,11 @@
                 "type": "array",
                 "items": { "$ref": "#/$defs/id" },
                 "minItems": 1
+              },
+              "targetIdField": {
+                "description": "5.0.0: where the command goes. Names a field that every trigger event carries; its value is the id of the stream the command acts on, the same stream a command sent directly with that id reaches. Required on every automation started by an event. The command declares the same field with `idAttribute: true`. Generators check both; verify checks each scenario's command carries the trigger's value. There is no other rule: the stream is never derived from the trigger event's own id or its stream's.",
+                "type": "string",
+                "minLength": 1
               },
               "delay": { "$ref": "#/$defs/automationDelay" },
               "schedule": { "$ref": "#/$defs/automationSchedule" },

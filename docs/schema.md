@@ -28,7 +28,7 @@ wizard form cannot produce differently-shaped deciders.
 | --- | --- |
 | `stateChange` slice | a command on its aggregate's decider |
 | `stateView` slice / `readModels` | a JS projection per read model |
-| `automation` slice | a JS reactor plus the command it dispatches |
+| `automation` slice | a JS reactor plus the command it dispatches, to the stream its `targetIdField` names |
 | `Command.reason`, `ReadModel.question`, descriptions, hotspots | `docs/domains/<aggregate>.md` |
 
 **Nothing is written live.** `--out` receives the generated files; save them
@@ -389,7 +389,7 @@ Round-tripping is a **loss measurement**, not a fidelity promise.
 | command names | ✅ the `//@commands` declared surface |
 | which events a command produces | ✅ **with `//@produces`**, otherwise widened to the whole aggregate |
 | read models and their source events | ✅ |
-| automation wiring | ✅ via `//@dispatches` |
+| automation wiring | ✅ via `//@dispatches` and `//@target` (a reactor without `//@target` is left out) |
 | field names and types | ⚠️ lossy both ways (ten types onto five) |
 | element ids and display names | ⚠️ mechanically derived |
 | swimlanes, screens, status | ❌ synthesized on the way out |
@@ -422,17 +422,28 @@ lower-camel convention (`Order` → `order`).
 
 ## Schema version
 
-This project reads **schema 4.2.0** documents, and an export declares it
-(this paragraph said 4.0.0 through 4.1.0; corrected 2026-11-17).
+This project reads **schema 5.0.0** documents, and an export declares it.
 Import refuses by name anything it cannot apply (above). 4.0.0 is breaking
 in one place: a command `scope`'s `memberOfVia` must name its `actorField`,
 the field of the membership read model compared with the command's actor;
-lint refuses a scope without it. Every other change since 3.1.1 is
-additive, so an export, which uses only what import reads, is a valid 4.2.0
-document. 4.2.0's `public` marker on an event or command (the contract
-another system may use, checked across systems by eventmodelschema's
-coordinating document and its `architecture-check`) is read and generates
-nothing.
+lint refuses a scope without it. 4.2.0's `public` marker on an event or
+command (the contract another system may use, checked across systems by
+eventmodelschema's coordinating document and its `architecture-check`) is
+read and generates nothing.
+
+**5.0.0 is breaking: an automation names where its command goes.** Every
+automation slice has `targetIdField`, a field of each trigger event whose
+value is the id of the stream the command acts on, and the command declares
+that field with `idAttribute: true`. The generated reactor sends to
+`event.data[<field>]`, and nothing else: the target used to be derived (the
+trigger's own stream, or a prefix plus the trigger event's id), which could
+never reach an existing stream named by a field. Import refuses an
+automation without it, or whose field a trigger event or the command lacks.
+Verify runs an automation scenario on the stream its trigger names, and
+fails one whose command carries another value for the field, or that shows
+no trigger event: before, such a scenario passed with its command going to
+the wrong stream. An automation that creates something new for each trigger
+event needs the trigger to carry that new thing's id.
 
 **Import checks the document against the schema** (since v0.22.0) before
 anything else, and refuses it naming each problem: a key the schema requires

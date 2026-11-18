@@ -10,6 +10,7 @@
   "triggerEventIds": [
     "order-placed"
   ],
+  "targetIdField": "orderId",
   "readModelId": "pending-shipments",
   "commandId": "ship-order",
   "resultEventIds": [

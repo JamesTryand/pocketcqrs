@@ -10,35 +10,35 @@ import "testing"
 const automationUpsertDoc = `{"eventModelingSchemaVersion":"3.17.0","id":"u","name":"U",
 	"swimlanes":[{"id":"s","name":"S","kind":"team"}],
 	"events":{
-		"sale-logged":{"name":"Sale Logged","swimlaneId":"s","aggregate":"sale","fields":[{"name":"saleId","type":"string","idAttribute":true},{"name":"amount","type":"decimal"}]},
-		"cost-logged":{"name":"Cost Logged","swimlaneId":"s","aggregate":"sale","fields":[{"name":"saleId","type":"string","idAttribute":true},{"name":"amount","type":"decimal"}]},
+		"sale-logged":{"name":"Sale Logged","swimlaneId":"s","aggregate":"sale","fields":[{"name":"saleId","type":"string","idAttribute":true},{"name":"ledgerId","type":"string"},{"name":"amount","type":"decimal"}]},
+		"cost-logged":{"name":"Cost Logged","swimlaneId":"s","aggregate":"sale","fields":[{"name":"saleId","type":"string","idAttribute":true},{"name":"ledgerId","type":"string"},{"name":"amount","type":"decimal"}]},
 		"revenue-recorded":{"name":"Revenue Recorded","swimlaneId":"s","aggregate":"ledger","fields":[{"name":"ledgerId","type":"string","idAttribute":true},{"name":"saleId","type":"string"},{"name":"amount","type":"decimal"}]},
 		"cost-recorded":{"name":"Cost Recorded","swimlaneId":"s","aggregate":"ledger","fields":[{"name":"ledgerId","type":"string","idAttribute":true},{"name":"saleId","type":"string"},{"name":"amount","type":"decimal"}]}},
 	"commands":{
 		"log-sale":{"name":"Log Sale","aggregate":"sale","fields":[{"name":"saleId","type":"string","idAttribute":true},{"name":"amount","type":"decimal"}]},
 		"log-cost":{"name":"Log Cost","aggregate":"sale","fields":[{"name":"saleId","type":"string","idAttribute":true},{"name":"amount","type":"decimal"}]},
-		"record-revenue":{"name":"Record Revenue","aggregate":"ledger","fields":[{"name":"saleId","type":"string"},{"name":"amount","type":"decimal"}]},
-		"record-cost":{"name":"Record Cost","aggregate":"ledger","fields":[{"name":"saleId","type":"string"},{"name":"amount","type":"decimal"}]}},
+		"record-revenue":{"name":"Record Revenue","aggregate":"ledger","fields":[{"name":"ledgerId","type":"string","idAttribute":true},{"name":"saleId","type":"string"},{"name":"amount","type":"decimal"}]},
+		"record-cost":{"name":"Record Cost","aggregate":"ledger","fields":[{"name":"ledgerId","type":"string","idAttribute":true},{"name":"saleId","type":"string"},{"name":"amount","type":"decimal"}]}},
 	"automations":{"on-sale":{"name":"On Sale"},"on-cost":{"name":"On Cost"}},
 	"screens":{"sc":{"name":"Sc"}},
 	"slices":[
 		{"id":"lt","name":"Log Sale","pattern":"stateChange","swimlaneId":"s","status":"planned","screenId":"sc","commandId":"log-sale","eventIds":["sale-logged"],"scenarios":[]},
 		{"id":"lc","name":"Log Cost","pattern":"stateChange","swimlaneId":"s","status":"planned","screenId":"sc","commandId":"log-cost","eventIds":["cost-logged"],"scenarios":[]},
 		{"id":"rp","name":"Record Revenue","pattern":"automation","swimlaneId":"s","status":"planned","automationId":"on-sale",
-		 "triggerEventIds":["sale-logged"],"commandId":"record-revenue","resultEventIds":["revenue-recorded"],"scenarios":[
-			{"id":"first","name":"first","kind":"stateChange","given":[{"eventId":"sale-logged","data":{"saleId":"e1","amount":2}}],
-			 "when":{"commandId":"record-revenue","data":{"saleId":"e1","amount":2}},
+		 "triggerEventIds":["sale-logged"],"targetIdField":"ledgerId","commandId":"record-revenue","resultEventIds":["revenue-recorded"],"scenarios":[
+			{"id":"first","name":"first","kind":"stateChange","given":[{"eventId":"sale-logged","data":{"saleId":"e1","ledgerId":"ledger","amount":2}}],
+			 "when":{"commandId":"record-revenue","data":{"ledgerId":"ledger","saleId":"e1","amount":2}},
 			 "then":{"events":[{"eventId":"revenue-recorded","data":{"ledgerId":"ledger","saleId":"e1","amount":2}}]}},
-			{"id":"again","name":"again","kind":"stateChange","given":[{"eventId":"revenue-recorded","data":{"ledgerId":"ledger","saleId":"e1","amount":2}}],
-			 "when":{"commandId":"record-revenue","data":{"saleId":"e1","amount":3}},
+			{"id":"again","name":"again","kind":"stateChange","given":[{"eventId":"revenue-recorded","data":{"ledgerId":"ledger","saleId":"e1","amount":2}},{"eventId":"sale-logged","data":{"saleId":"e1","ledgerId":"ledger","amount":3}}],
+			 "when":{"commandId":"record-revenue","data":{"ledgerId":"ledger","saleId":"e1","amount":3}},
 			 "then":{"events":[{"eventId":"revenue-recorded","data":{"ledgerId":"ledger","saleId":"e1","amount":3}}]}}]},
 		{"id":"rc","name":"Record Cost","pattern":"automation","swimlaneId":"s","status":"planned","automationId":"on-cost",
-		 "triggerEventIds":["cost-logged"],"commandId":"record-cost","resultEventIds":["cost-recorded"],"scenarios":[
-			{"id":"first-cost","name":"first cost","kind":"stateChange","given":[{"eventId":"cost-logged","data":{"saleId":"x1","amount":5}}],
-			 "when":{"commandId":"record-cost","data":{"saleId":"x1","amount":5}},
+		 "triggerEventIds":["cost-logged"],"targetIdField":"ledgerId","commandId":"record-cost","resultEventIds":["cost-recorded"],"scenarios":[
+			{"id":"first-cost","name":"first cost","kind":"stateChange","given":[{"eventId":"cost-logged","data":{"saleId":"x1","ledgerId":"ledger","amount":5}}],
+			 "when":{"commandId":"record-cost","data":{"ledgerId":"ledger","saleId":"x1","amount":5}},
 			 "then":{"events":[{"eventId":"cost-recorded","data":{"ledgerId":"ledger","saleId":"x1","amount":5}}]}},
-			{"id":"cost-again","name":"cost again","kind":"stateChange","given":[{"eventId":"cost-recorded","data":{"ledgerId":"ledger","saleId":"x1","amount":5}}],
-			 "when":{"commandId":"record-cost","data":{"saleId":"x1","amount":6}},
+			{"id":"cost-again","name":"cost again","kind":"stateChange","given":[{"eventId":"cost-recorded","data":{"ledgerId":"ledger","saleId":"x1","amount":5}},{"eventId":"cost-logged","data":{"saleId":"x1","ledgerId":"ledger","amount":6}}],
+			 "when":{"commandId":"record-cost","data":{"ledgerId":"ledger","saleId":"x1","amount":6}},
 			 "then":{"events":[{"eventId":"cost-recorded","data":{"ledgerId":"ledger","saleId":"x1","amount":6}}]}}]}]}`
 
 func TestAutomationWithBothEvidenceIsAnUpsert(t *testing.T) {
@@ -61,8 +61,8 @@ func TestAutomationWithBothEvidenceIsAnUpsert(t *testing.T) {
 			}
 		}
 		for _, r := range d.Reactors {
-			if r.PerEvent {
-				t.Errorf("reactor %s creates a stream per event; an upsert targets one", r.Name)
+			if r.IDField != "ledgerId" {
+				t.Errorf("reactor %s goes to the stream named by %q, want ledgerId (its targetIdField)", r.Name, r.IDField)
 			}
 		}
 	}

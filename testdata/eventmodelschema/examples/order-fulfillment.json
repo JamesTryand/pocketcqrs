@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
-  "eventModelingSchemaVersion": "3.15.0",
+  "eventModelingSchemaVersion": "5.0.0",
   "id": "order-fulfillment",
   "name": "Order Fulfillment",
   "description": "Worked example exercising every notation in the schema: all 3 slice patterns, all 3 scenario kinds, a hotspot, a chapter, and an actor lane. The shipping-partner notification slice also demonstrates automation without a read model (a boundary-crossing Bridge/Reactor: event straight to command, no persisted state needed).",
@@ -44,7 +44,7 @@
         }
       ]
     },
-    "order-shipped": { "name": "Order Shipped", "description": "The warehouse shipped an order.", "swimlaneId": "warehouse", "aggregate": "Order" },
+    "order-shipped": { "name": "Order Shipped", "description": "The warehouse shipped an order.", "swimlaneId": "warehouse", "aggregate": "Order", "fields": [{ "name": "orderId", "type": "uuid", "idAttribute": true }] },
     "shipment-notified": { "name": "Shipment Notified", "description": "The shipping partner acknowledged a shipment.", "swimlaneId": "shipping-partner" },
     "partner-notification-abandoned": { "name": "Partner Notification Abandoned", "description": "The shipping partner could not be told about a shipment, and the runtime has stopped trying.", "swimlaneId": "shipping-partner" },
     "order-delivered": { "name": "Order Delivered", "description": "The carrier delivered the order.", "swimlaneId": "sales", "aggregate": "Order" },
@@ -62,14 +62,14 @@
         { "name": "items", "type": "custom", "cardinality": "list" }
       ]
     },
-    "ship-order": { "name": "Ship Order", "description": "Warehouse fulfills a pending order.", "reason": "A pending order needs to leave the warehouse.", "aggregate": "Order" },
-    "record-partner-notified": { "name": "Record Partner Notified", "description": "Records that the shipping partner acknowledged a shipment.", "reason": "The shipping partner needs to know about the shipment to process it." },
+    "ship-order": { "name": "Ship Order", "description": "Warehouse fulfills a pending order.", "reason": "A pending order needs to leave the warehouse.", "aggregate": "Order", "fields": [{ "name": "orderId", "type": "uuid", "idAttribute": true }] },
+    "record-partner-notified": { "name": "Record Partner Notified", "description": "Records that the shipping partner acknowledged a shipment.", "reason": "The shipping partner needs to know about the shipment to process it.", "fields": [{ "name": "orderId", "type": "uuid", "idAttribute": true }] },
     "record-partner-notification-abandoned": {
       "name": "Record Partner Notification Abandoned",
       "description": "Records that the shipping partner could not be told about a shipment.",
       "reason": "Someone has to tell the partner another way.",
       "fields": [
-        { "name": "orderId", "type": "uuid" },
+        { "name": "orderId", "type": "uuid", "idAttribute": true },
         { "name": "reason", "type": "string" }
       ]
     },
@@ -89,7 +89,7 @@
       "description": "Marks a shipped order whose delivery has taken too long.",
       "reason": "Someone should chase the carrier before the customer has to.",
       "aggregate": "Order",
-      "fields": [{ "name": "orderId", "type": "uuid" }]
+      "fields": [{ "name": "orderId", "type": "uuid", "idAttribute": true }]
     }
   },
   "readModels": {
@@ -194,6 +194,7 @@
       "status": "inProgress",
       "automationId": "auto-ship-pending-orders",
       "triggerEventIds": ["order-placed"],
+      "targetIdField": "orderId",
       "readModelId": "pending-shipments",
       "commandId": "ship-order",
       "resultEventIds": ["order-shipped"],
@@ -219,6 +220,7 @@
       "status": "planned",
       "automationId": "notify-shipping-partner-automation",
       "triggerEventIds": ["order-shipped"],
+      "targetIdField": "orderId",
       "effect": {
         "swimlaneId": "shipping-partner",
         "description": "POST the shipment to the partner's API.",
@@ -289,6 +291,7 @@
       "status": "planned",
       "automationId": "delivery-overdue-timer",
       "triggerEventIds": ["order-shipped"],
+      "targetIdField": "orderId",
       "delay": {
         "after": { "setting": "deliveryOverdueAfter", "default": "P5D" },
         "cancelledByEventIds": ["order-delivered", "delivery-failed"]

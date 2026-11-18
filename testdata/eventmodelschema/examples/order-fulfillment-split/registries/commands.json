@@ -20,12 +20,26 @@
     "name": "Ship Order",
     "description": "Warehouse fulfills a pending order.",
     "reason": "A pending order needs to leave the warehouse.",
-    "aggregate": "Order"
+    "aggregate": "Order",
+    "fields": [
+      {
+        "name": "orderId",
+        "type": "uuid",
+        "idAttribute": true
+      }
+    ]
   },
   "record-partner-notified": {
     "name": "Record Partner Notified",
     "description": "Records that the shipping partner acknowledged a shipment.",
-    "reason": "The shipping partner needs to know about the shipment to process it."
+    "reason": "The shipping partner needs to know about the shipment to process it.",
+    "fields": [
+      {
+        "name": "orderId",
+        "type": "uuid",
+        "idAttribute": true
+      }
+    ]
   },
   "record-partner-notification-abandoned": {
     "name": "Record Partner Notification Abandoned",
@@ -34,7 +48,8 @@
     "fields": [
       {
         "name": "orderId",
-        "type": "uuid"
+        "type": "uuid",
+        "idAttribute": true
       },
       {
         "name": "reason",
@@ -70,7 +85,8 @@
     "fields": [
       {
         "name": "orderId",
-        "type": "uuid"
+        "type": "uuid",
+        "idAttribute": true
       }
     ]
   }

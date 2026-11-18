@@ -242,6 +242,14 @@ func exportAutomations(cat *catalog.Catalog, doc *Document, rep *Report, eventsB
 				"contributes no automation slice", name)
 			continue
 		}
+		// schema 5.0.0: an automation slice names its target field. A
+		// generated reactor declares it (//@target); a hand-written one
+		// that doesn't can't be described, and is left out, said.
+		if cons.Target == "" {
+			rep.warnf("reactor %q declares no //@target (the event field naming the stream its command "+
+				"goes to), so it contributes no automation slice", name)
+			continue
+		}
 		sort.Strings(triggers)
 
 		// one slice per declared dispatch: the schema's automation slice
@@ -273,6 +281,7 @@ func exportAutomations(cat *catalog.Catalog, doc *Document, rep *Report, eventsB
 				Status:          "informational",
 				AutomationID:    id,
 				TriggerEventIDs: triggers,
+				TargetIDField:   cons.Target,
 				CommandID:       cmdID,
 				ResultEventIDs:  results,
 				Scenarios:       []Scenario{},

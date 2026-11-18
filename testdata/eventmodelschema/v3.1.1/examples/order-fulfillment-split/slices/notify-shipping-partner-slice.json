@@ -10,6 +10,7 @@
   "triggerEventIds": [
     "order-shipped"
   ],
+  "targetIdField": "orderId",
   "commandId": "notify-shipping-partner",
   "resultEventIds": [
     "shipment-notified"

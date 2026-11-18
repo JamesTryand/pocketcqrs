@@ -54,26 +54,26 @@ func TestBuildPolicies(t *testing.T) {
 		t.Fatalf("expected 4 policies (the undeclared command excluded), got %d: %v", len(policies), policies)
 	}
 
-	price := policies[Key{"price", "SetPrice"}]
+	price := policies[Key{Aggregate: "price", Command: "SetPrice"}]
 	if len(price.RequiredRole) != 1 || price.RequiredRole[0] != "supervisor" {
 		t.Errorf("SetPrice: expected requiredRole [supervisor], got %+v", price)
 	}
 
-	invite := policies[Key{"user", "InviteUser"}]
+	invite := policies[Key{Aggregate: "user", Command: "InviteUser"}]
 	if invite.FieldGatedRole == nil || invite.FieldGatedRole.Field != "role" ||
 		invite.FieldGatedRole.Value != "supervisor" || len(invite.FieldGatedRole.RequiredRole) != 1 ||
 		invite.FieldGatedRole.RequiredRole[0] != "admin" {
 		t.Errorf("InviteUser: unexpected fieldGatedRole: %+v", invite.FieldGatedRole)
 	}
 
-	update := policies[Key{"order", "UpdateOrder"}]
+	update := policies[Key{Aggregate: "order", Command: "UpdateOrder"}]
 	if update.Ownership == nil || update.Ownership.Collection != "orders" ||
 		update.Ownership.KeyField != "orderId" || update.Ownership.OwnerField != "ownerId" ||
 		len(update.Ownership.BypassRoles) != 0 {
 		t.Errorf("UpdateOrder: unexpected ownership: %+v", update.Ownership)
 	}
 
-	flag := policies[Key{"order", "FlagOrder"}]
+	flag := policies[Key{Aggregate: "order", Command: "FlagOrder"}]
 	if flag.Scope == nil || flag.Scope.ResolveCollection != "orders" || flag.Scope.ResolveKeyField != "orderId" ||
 		flag.Scope.ResolveSelectField != "regionId" || flag.Scope.MemberOfCollection != "regionMembers" ||
 		flag.Scope.MemberOfMatchField != "regionId" || flag.Scope.MemberOfActorField != "memberId" ||
@@ -82,7 +82,7 @@ func TestBuildPolicies(t *testing.T) {
 		t.Errorf("FlagOrder: unexpected scope: %+v", flag.Scope)
 	}
 
-	if _, ok := policies[Key{"order", "PlaceOrder"}]; ok {
+	if _, ok := policies[Key{Aggregate: "order", Command: "PlaceOrder"}]; ok {
 		t.Error("PlaceOrder declares nothing and must not appear in the table")
 	}
 }
@@ -157,7 +157,7 @@ func TestAuthorize_NoPolicy_Allows(t *testing.T) {
 
 func TestAuthorize_RequiredRole(t *testing.T) {
 	a := &Authorizer{
-		Policies:       map[Key]Policy{{"price", "SetPrice"}: {RequiredRole: []string{"supervisor"}}},
+		Policies:       map[Key]Policy{{Aggregate: "price", Command: "SetPrice"}: {RequiredRole: []string{"supervisor"}}},
 		ResolveOwnRole: func(*core.Record) string { return "supervisor" },
 	}
 	ok, err := a.Authorize(newTestApp(t), "price", "SetPrice", "r1", nil, nil)
@@ -180,7 +180,7 @@ func TestAuthorize_RequiredRole(t *testing.T) {
 
 func TestAuthorize_FieldGatedRole(t *testing.T) {
 	a := &Authorizer{
-		Policies: map[Key]Policy{{"user", "InviteUser"}: {FieldGatedRole: &FieldGatedRolePolicy{
+		Policies: map[Key]Policy{{Aggregate: "user", Command: "InviteUser"}: {FieldGatedRole: &FieldGatedRolePolicy{
 			Field: "role", Value: "supervisor", RequiredRole: []string{"admin"},
 		}}},
 	}
@@ -214,7 +214,7 @@ func TestAuthorize_Ownership(t *testing.T) {
 	mustInsertRow(t, app, col, map[string]string{"orderId": "o1", "ownerId": "u1"})
 
 	a := &Authorizer{
-		Policies: map[Key]Policy{{"order", "UpdateOrder"}: {Ownership: &OwnershipPolicy{
+		Policies: map[Key]Policy{{Aggregate: "order", Command: "UpdateOrder"}: {Ownership: &OwnershipPolicy{
 			Collection: "orders", KeyField: "orderId", OwnerField: "ownerId",
 		}}},
 		ResolveOwnRole:      func(*core.Record) string { return "member" },
@@ -247,7 +247,7 @@ func TestAuthorize_OwnershipBypass(t *testing.T) {
 	mustInsertRow(t, app, col, map[string]string{"orderId": "o1", "ownerId": "u1"})
 
 	a := &Authorizer{
-		Policies: map[Key]Policy{{"order", "UpdateOrder"}: {Ownership: &OwnershipPolicy{
+		Policies: map[Key]Policy{{Aggregate: "order", Command: "UpdateOrder"}: {Ownership: &OwnershipPolicy{
 			Collection: "orders", KeyField: "orderId", OwnerField: "ownerId", BypassRoles: []string{"supervisor"},
 		}}},
 		ResolveOwnRole:      func(*core.Record) string { return "supervisor" },
@@ -269,7 +269,7 @@ func TestAuthorize_Scope(t *testing.T) {
 	mustInsertRow(t, app, members, map[string]string{"regionId": "north", "memberId": "m1", "addedBy": "admin1"})
 
 	a := &Authorizer{
-		Policies: map[Key]Policy{{"order", "FlagOrder"}: {Scope: &ScopePolicy{
+		Policies: map[Key]Policy{{Aggregate: "order", Command: "FlagOrder"}: {Scope: &ScopePolicy{
 			ResolveCollection: "orders", ResolveKeyField: "orderId", ResolveSelectField: "regionId",
 			MemberOfCollection: "regionMembers", MemberOfMatchField: "regionId", MemberOfActorField: "memberId",
 			BypassRoles: []string{"supervisor"},
@@ -324,7 +324,7 @@ func TestAuthorize_ScopeRefusesWithItsMessage(t *testing.T) {
 
 	const message = "only a member of the order's region may flag it"
 	a := &Authorizer{
-		Policies: map[Key]Policy{{"order", "FlagOrder"}: {Scope: &ScopePolicy{
+		Policies: map[Key]Policy{{Aggregate: "order", Command: "FlagOrder"}: {Scope: &ScopePolicy{
 			ResolveCollection: "orders", ResolveKeyField: "orderId", ResolveSelectField: "regionId",
 			MemberOfCollection: "regionMembers", MemberOfMatchField: "regionId", MemberOfActorField: "memberId",
 			Message: message,
@@ -348,7 +348,7 @@ func TestAuthorize_NilResolversTreatedAsNoActor(t *testing.T) {
 	// host-specific delegates must not panic, and must refuse a
 	// role/ownership-gated command (there's no actor to satisfy it with).
 	app := newTestApp(t)
-	a := &Authorizer{Policies: map[Key]Policy{{"price", "SetPrice"}: {RequiredRole: []string{"supervisor"}}}}
+	a := &Authorizer{Policies: map[Key]Policy{{Aggregate: "price", Command: "SetPrice"}: {RequiredRole: []string{"supervisor"}}}}
 	ok, err := a.Authorize(app, "price", "SetPrice", "r1", nil, nil)
 	if err != nil || ok {
 		t.Fatalf("no resolvers configured should mean no role satisfies a requirement, got ok=%v err=%v", ok, err)
@@ -401,7 +401,7 @@ func TestAuthorize_EveryDeclarationMustHold(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			a := &Authorizer{
-				Policies:            map[Key]Policy{{"order", "UpdateOrder"}: c.policy},
+				Policies:            map[Key]Policy{{Aggregate: "order", Command: "UpdateOrder"}: c.policy},
 				ResolveOwnRole:      func(*core.Record) string { return c.role },
 				ResolveOwnSubjectID: func(*core.Record) string { return c.subjectID },
 			}

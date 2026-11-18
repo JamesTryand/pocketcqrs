@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -329,6 +330,44 @@ func (v *verifier) indexSources(mapped *Mapped) error {
 	return nil
 }
 
+// automationTarget is the stream an automation scenario's command goes to:
+// the value of the slice's targetIdField on the scenario's trigger event (the
+// last given event that is one of the slice's triggers). It is a problem when
+// the scenario shows no trigger, the trigger has no value for the field, or
+// the command carries another value for it.
+func automationTarget(s Slice, sc Scenario, ref CommandRef) (string, string) {
+	field := s.TargetIDField
+	var trigger *EventRef
+	for i := range sc.Given {
+		if slices.Contains(s.TriggerEventIDs, sc.Given[i].EventID) {
+			trigger = &sc.Given[i]
+		}
+	}
+	if trigger == nil {
+		return "", fmt.Sprintf("an automation scenario gives none of its trigger events (%s): "+
+			"the trigger names the stream the command goes to", strings.Join(s.TriggerEventIDs, ", "))
+	}
+	want := stringField(trigger.Data, field)
+	if want == "" {
+		return "", fmt.Sprintf("the trigger event %q gives no %s: it names the stream the command goes to "+
+			"(the automation's targetIdField)", trigger.EventID, field)
+	}
+	if got := stringField(ref.Data, field); got != want {
+		return "", fmt.Sprintf("the command goes to the stream its trigger names, %s %q, but the scenario's "+
+			"command carries %s %q", field, want, field, got)
+	}
+	return want, ""
+}
+
+func stringField(raw json.RawMessage, field string) string {
+	var data map[string]any
+	if json.Unmarshal(raw, &data) != nil {
+		return ""
+	}
+	s, _ := data[field].(string)
+	return s
+}
+
 // streamID picks the aggregate id a scenario runs against.
 //
 // `idAttribute: true` names the field carrying instance identity, so when the
@@ -473,6 +512,18 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	// a failure about the fixture, not about the domain.
 	own, foreign := v.splitGiven(aggregate, sc.Given)
 	stream := v.streamID(sc.Given)
+	if s.Pattern == PatternAutomation {
+		// The command goes where the trigger's targetIdField says (schema
+		// 5.0.0), so that is the stream the scenario runs on, and a command
+		// naming any other id is the model's mistake. Without this check
+		// every scenario passed with its command going to the wrong stream.
+		target, problem := automationTarget(s, sc, ref)
+		if problem != "" {
+			res.Detail = problem
+			return
+		}
+		stream = target
+	}
 	payload := json.RawMessage(`{}`)
 	if len(ref.Data) > 0 {
 		payload = ref.Data

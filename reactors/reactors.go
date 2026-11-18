@@ -131,6 +131,14 @@ func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.E
 		warn = logger
 	}
 	for i, reaction := range reactions {
+		// No target id: the event lacks the field its model names as the
+		// target (targetIdField). Permanent, like an unknown aggregate, so
+		// loud, and the log moves on rather than blocking every reaction.
+		if reaction.ID == "" {
+			warn("reaction dropped: the event has no target id (its targetIdField is missing or empty)",
+				"reactor", name, "cause", ev.ID, "target", reaction.Aggregate, "command", reaction.Command.Name)
+			continue
+		}
 		// A reaction IS a command, so it carries a commandId like any other —
 		// the same durable proof CommitBatch stamps for queued commands.
 		//
@@ -219,6 +227,20 @@ func Dispatch(ctx context.Context, registry Dispatcher, name string, ev events.E
 		}
 	}
 	return nil
+}
+
+// TargetID is the value of the event's field that names the target stream
+// (eventmodelschema 5.0.0 targetIdField), or "" when the event has no such
+// non-empty string, which Dispatch drops loudly. A generated reactor calls it.
+func TargetID(ev events.Event, field string) string {
+	var data map[string]any
+	if json.Unmarshal(ev.Data, &data) != nil {
+		return ""
+	}
+	if s, ok := data[field].(string); ok {
+		return s
+	}
+	return ""
 }
 
 // assertAppliedImplemented fails to compile if the real dispatcher stops

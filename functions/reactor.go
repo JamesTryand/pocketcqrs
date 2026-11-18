@@ -35,8 +35,11 @@ type ReactorSpec struct {
 	// recoverable from the log, but only once the reactor has actually
 	// fired, so an automation that has never run is invisible without this.
 	Dispatches []string
-	Prog       *goja.Program
-	runtime    *GojaRuntime
+	// Target is the declared //@target: the triggering event's field that
+	// names the target stream (eventmodelschema 5.0.0 targetIdField).
+	Target  string
+	Prog    *goja.Program
+	runtime *GojaRuntime
 }
 
 // Name implements consumers.Consumer — and is the durable checkpoint key.
@@ -175,6 +178,7 @@ func buildReactorSpec(rt *GojaRuntime, filename string, src string, t triggers) 
 		Reactor:    name,
 		EventTypes: t.reactor,
 		Dispatches: t.dispatches,
+		Target:     t.target,
 		Prog:       prog,
 		runtime:    rt,
 	}, nil

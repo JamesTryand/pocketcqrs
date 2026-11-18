@@ -204,7 +204,7 @@ func TestRoundTripLoss(t *testing.T) {
 		for _, r := range d.Reactors {
 			cat.Consumers = append(cat.Consumers, catalog.Consumer{
 				Name: "fn-reactor:" + r.Name, Kind: "js-reactor",
-				EventTypes: r.On, Dispatches: []string{r.Aggregate + "/" + r.Command},
+				EventTypes: r.On, Dispatches: []string{r.Aggregate + "/" + r.Command}, Target: r.IDField,
 			})
 		}
 	}
@@ -269,6 +269,20 @@ func TestRoundTripLoss(t *testing.T) {
 		if s.Pattern != PatternAutomation && s.ScreenID == "" {
 			t.Errorf("slice %q requires a synthesized screen", s.ID)
 		}
+	}
+	// schema 5.0.0: an exported automation names where its command goes,
+	// from the reactor's declared //@target
+	automations := 0
+	for _, s := range out.Slices {
+		if s.Pattern == PatternAutomation {
+			automations++
+			if s.TargetIDField != "orderId" {
+				t.Errorf("automation slice %q exported targetIdField %q, want orderId", s.ID, s.TargetIDField)
+			}
+		}
+	}
+	if automations != 2 {
+		t.Errorf("want both automations exported, got %d", automations)
 	}
 
 	// ---- the documented loss ----

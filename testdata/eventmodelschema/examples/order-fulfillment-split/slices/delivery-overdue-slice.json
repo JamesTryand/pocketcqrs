@@ -10,6 +10,7 @@
   "triggerEventIds": [
     "order-shipped"
   ],
+  "targetIdField": "orderId",
   "delay": {
     "after": {
       "setting": "deliveryOverdueAfter",

@@ -18,7 +18,7 @@ func TestGoWiringPackage(t *testing.T) {
 
 func TestGoWiringNamesEveryPart(t *testing.T) {
 	plain := sampleDomain()
-	plain.Reactors = []Reactor{{Name: "autoClose", On: []string{"TicketOpened"}, Aggregate: "audit", Command: "Record", IDPrefix: "audit-"}}
+	plain.Reactors = []Reactor{{Name: "autoClose", On: []string{"TicketOpened"}, Aggregate: "audit", Command: "Record", IDField: "ticketId"}}
 	src, err := GenerateGoWiring(GoWiring{Package: "domain", ImportBase: "example.com/app/domain", ModelFile: "model.eventmodel.json"},
 		[]Domain{plain, piiDomain()})
 	if err != nil {
@@ -57,7 +57,7 @@ func TestGeneratedWiringCompiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := sampleDomain()
-	plain.Reactors = []Reactor{{Name: "autoClose", On: []string{"TicketOpened"}, Aggregate: "audit", Command: "Record", IDPrefix: "audit-"}}
+	plain.Reactors = []Reactor{{Name: "autoClose", On: []string{"TicketOpened"}, Aggregate: "audit", Command: "Record", IDField: "ticketId"}}
 	writeOnly := Domain{Aggregate: "audit", Commands: []Command{{Name: "Record", Events: []Event{{Name: "Recorded", NoFields: true}}}}}
 
 	for name, domains := range map[string][]Domain{

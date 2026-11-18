@@ -342,17 +342,12 @@ type Reactor struct {
 	// Aggregate and Command name what it dispatches.
 	Aggregate string `json:"aggregate"`
 	Command   string `json:"command"`
-	// IDPrefix prefixes the source aggregate id to build the target id
-	// (e.g. "fulfill-" → "fulfill-<orderId>"). Deterministic on purpose:
-	// a replay then hits the target's own "already exists" rule. Empty
-	// targets the triggering event's own stream (an automation acting on
-	// the aggregate that triggered it).
-	IDPrefix string `json:"idPrefix,omitempty"`
-	// PerEvent keys the target by the triggering EVENT's id instead of its
-	// stream's (IDPrefix + event id): a create per trigger event, so two
-	// events on one source stream create two targets. A redelivery of
-	// the same event still targets the same id, and hits "already exists".
-	PerEvent bool `json:"perEvent,omitempty"`
+	// IDField names the triggering event's field whose value is the target
+	// stream's id (eventmodelschema 5.0.0 targetIdField): the same stream a
+	// command sent directly with that id reaches. Nothing else is derived,
+	// so a redelivery reaches the same stream, where the runtime's applied-
+	// command check skips the repeat.
+	IDField string `json:"idField"`
 }
 
 // File is one generated source file.
@@ -1179,6 +1174,7 @@ func (d Domain) reactor(r Reactor) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "//@trigger reactor %s\n", strings.Join(r.On, " "))
 	fmt.Fprintf(&b, "//@dispatches %s/%s\n", r.Aggregate, r.Command)
+	fmt.Fprintf(&b, "//@target %s\n", r.IDField)
 	b.WriteString("//\n")
 	fmt.Fprintf(&b, "// %s — generated automation: %s's events become %s commands\n",
 		r.Name, d.Aggregate, r.Aggregate)
@@ -1188,18 +1184,14 @@ func (d Domain) reactor(r Reactor) string {
 	b.WriteString("// decider registry, so a reaction is a COMMAND that can be refused —\n")
 	b.WriteString("// never a direct append.\n")
 	b.WriteString("//\n")
-	b.WriteString("// Delivery is at-least-once. The target id below is derived from the\n")
-	b.WriteString("// source event, so a replay hits the target's own 'already exists' rule\n")
-	b.WriteString("// instead of dispatching twice. Keep it deterministic.\n\n")
+	fmt.Fprintf(&b, "// The command goes to the %s stream named by the event's %s\n", r.Aggregate, r.IDField)
+	b.WriteString("// (the model's targetIdField). Delivery is at-least-once; a redelivery\n")
+	b.WriteString("// reaches the same stream, and the runtime skips a reaction already applied.\n\n")
 
 	b.WriteString("function reactTo(event) {\n")
 	b.WriteString("  return [{\n")
 	fmt.Fprintf(&b, "    aggregate: '%s',\n", r.Aggregate)
-	if r.PerEvent {
-		fmt.Fprintf(&b, "    id: '%s' + event.id,\n", r.IDPrefix)
-	} else {
-		fmt.Fprintf(&b, "    id: '%s' + event.aggregateId,\n", r.IDPrefix)
-	}
+	fmt.Fprintf(&b, "    id: event.data[%q],\n", r.IDField)
 	fmt.Fprintf(&b, "    command: '%s',\n", r.Command)
 	b.WriteString("    payload: Object.assign({}, event.data)\n")
 	b.WriteString("  }];\n")

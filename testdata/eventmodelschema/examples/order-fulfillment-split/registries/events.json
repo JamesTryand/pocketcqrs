@@ -41,7 +41,14 @@
     "name": "Order Shipped",
     "description": "The warehouse shipped an order.",
     "swimlaneId": "warehouse",
-    "aggregate": "Order"
+    "aggregate": "Order",
+    "fields": [
+      {
+        "name": "orderId",
+        "type": "uuid",
+        "idAttribute": true
+      }
+    ]
   },
   "shipment-notified": {
     "name": "Shipment Notified",

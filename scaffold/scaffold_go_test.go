@@ -14,7 +14,7 @@ func TestGenerateGoShape(t *testing.T) {
 	d := sampleDomain()
 	d.Reactors = []Reactor{{
 		Name: "autoClose", On: []string{"TicketOpened"},
-		Aggregate: "audit", Command: "Record", IDPrefix: "audit-",
+		Aggregate: "audit", Command: "Record", IDField: "ticketId",
 	}}
 	files, err := d.GenerateGo()
 	if err != nil {
@@ -75,7 +75,7 @@ func TestGenerateGoShape(t *testing.T) {
 		`func (autoCloseReactor) Name() string { return "autoClose" }`,
 		`case "TicketOpened":`,
 		`Aggregate: "audit"`,
-		`ID:        "audit-" + ev.AggregateID`,
+		`ID:        reactors.TargetID(ev, "ticketId")`,
 		`Command:   decider.Command{Name: "Record", Payload: ev.Data}`,
 	} {
 		if !strings.Contains(react.Source, want) {
@@ -219,7 +219,7 @@ func TestGeneratedGoDomainCompiles(t *testing.T) {
 	d := sampleDomain()
 	d.Reactors = []Reactor{{
 		Name: "autoClose", On: []string{"TicketOpened"},
-		Aggregate: "audit", Command: "Record", IDPrefix: "audit-",
+		Aggregate: "audit", Command: "Record", IDField: "ticketId",
 	}}
 	files, err := d.GenerateGo()
 	if err != nil {

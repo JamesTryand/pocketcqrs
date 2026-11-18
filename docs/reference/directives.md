@@ -272,6 +272,18 @@ entry is refused rather than dropped.
 Declared dispatches appear on the consumer in `GET /api/cqrs/catalog`
 (`kind: "js-reactor"`).
 
+## `//@target <field>`
+
+Optional, reactors only: the triggering event's field whose value is the id of
+the stream the command goes to. A reactor generated from an EventModel document
+declares it, from the automation's `targetIdField` (eventmodelschema 5.0.0), and
+its `reactTo` sends to `event.data[<field>]`.
+
+Documentation, like `//@dispatches`: `reactTo` still returns the id. It appears
+on the consumer in the catalog (`target`), and `pocketcqrs schema export` needs it
+to describe the automation: a reactor without it contributes no automation slice,
+and the export says so.
+
 ## `//@produces <Command> <EventType...>`
 
 Optional, deciders only: the events a given command may append.

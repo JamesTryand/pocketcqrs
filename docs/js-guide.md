@@ -360,6 +360,9 @@ still refuse.
   (same limits as `//@commands`), but worth adding: a dispatched command
   leaves no trace of its own in the catalog until the reaction has actually
   fired once, so a saga that has never run is otherwise invisible.
+- `//@target <field>` is optional too: the event field whose value is the
+  target stream's id. A reactor generated from an EventModel document declares
+  it (the automation's `targetIdField`), and an export needs it.
 - Dry-run before shipping: `pocketcqrs dryrun` has no CLI subcommand for
   reactors yet, but `mode=reactor` over
   [`POST /api/cqrs/admin/dryrun`](reference/gateway.md#dry-run) — and the

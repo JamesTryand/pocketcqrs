@@ -3,6 +3,34 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.23.0 — an automation's command goes where the model says
+
+### Changed (breaking)
+
+- **eventmodelschema 5.0.0: `targetIdField`.** Every automation started by an event names the trigger's field whose
+  value is the id of the stream its command acts on, and the command declares that field with `idAttribute: true`.
+  The generated reactor (JS and Go) sends to that stream, `event.data[<field>]`, and nothing else. The target used to
+  be derived: the trigger's own stream, or a prefix plus the trigger event's id or its stream's. That could never
+  reach an existing stream named by a field (a customer's, from a payment's `customerId`). **A document with an
+  automation must add `targetIdField`**; import refuses one without it, or whose field a trigger event or the command
+  lacks. An automation that creates something new for each trigger event now needs the trigger to carry that new
+  thing's id.
+- **Verify checks where an automation's command goes.** An automation scenario runs on the stream its trigger
+  names, and fails if its command carries another value for the field, or if it shows no trigger event. Before, such
+  a scenario passed with its command going to the wrong stream.
+- `scaffold.Reactor` has `IDField` in place of `IDPrefix` and `PerEvent`.
+
+### Added
+
+- `reactors.TargetID(ev, field)`: the target id a generated Go reactor sends to. A reaction with no target id (the
+  event lacks the field) is dropped with a warning, as one to an unknown aggregate is.
+- `//@target <field>` on a JS reactor: the event field naming the target stream. Generated reactors declare it; the
+  catalog shows it; an export needs it, and leaves out (saying so) a reactor without it.
+
+### Fixed
+
+- `go vet ./...` passes again: the authorize tests' policy keys name their fields.
+
 ## v0.22.0 — import refuses a document the schema refuses
 
 ### Changed

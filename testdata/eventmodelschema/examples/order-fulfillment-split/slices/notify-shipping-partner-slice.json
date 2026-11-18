@@ -10,6 +10,7 @@
   "triggerEventIds": [
     "order-shipped"
   ],
+  "targetIdField": "orderId",
   "effect": {
     "swimlaneId": "shipping-partner",
     "description": "POST the shipment to the partner's API.",

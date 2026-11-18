@@ -358,7 +358,7 @@ func TestReactorGeneration(t *testing.T) {
 	d := sampleDomain()
 	d.Reactors = []Reactor{{
 		Name: "autoClose", On: []string{"TicketOpened"},
-		Aggregate: "audit", Command: "Record", IDPrefix: "audit-",
+		Aggregate: "audit", Command: "Record", IDField: "ticketId",
 	}}
 	files, err := d.Generate()
 	if err != nil {
@@ -373,7 +373,7 @@ func TestReactorGeneration(t *testing.T) {
 		"//@dispatches audit/Record",
 		"function reactTo(event)",
 		"aggregate: 'audit'",
-		"id: 'audit-' + event.aggregateId", // deterministic: replay-safe
+		"id: event.data[\"ticketId\"]", // the model's targetIdField
 		"command: 'Record'",
 	} {
 		if !strings.Contains(last.Source, want) {

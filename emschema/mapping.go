@@ -291,6 +291,9 @@ func (m *mapper) mapAutomation(s Slice) {
 	if !ok {
 		return
 	}
+	if !m.checkTarget(s, cmd) {
+		return
+	}
 	// the reactor belongs to whichever aggregate OWNS the trigger events —
 	// that is the stream it consumes, and it may well not be the target
 	source := agg
@@ -337,24 +340,52 @@ func (m *mapper) mapAutomation(s Slice) {
 			"triggering event, and let the target decider refuse what doesn't hold",
 			s.ID, s.ReadModelID)
 	}
-	// Where the command goes (as dotnetcqrs's mapper): an automation on
-	// its trigger's own aggregate acts on the trigger's own stream (no
-	// prefix; with one, auto-ship sent ShipOrder to a stream that never
-	// exists). Across aggregates the target id is derived from the source,
-	// and a create is keyed by the triggering EVENT, so every trigger event
-	// creates its own target, not just the first per source stream.
-	prefix := ""
-	if crossAggregate {
-		prefix = DeriveID(TypeName(s.Name, s.ID)) + "-"
-	}
+	// Where the command goes (schema 5.0.0): the stream named by the trigger
+	// event's targetIdField, the same stream a command sent directly with
+	// that id reaches. It used to be derived (the trigger's own stream, or a
+	// prefix plus the trigger's id), which could never reach an existing
+	// stream named by a field.
 	m.domain(source).Reactors = append(m.domain(source).Reactors, scaffold.Reactor{
 		Name:      LowerFirst(scaffold.SanitizeName(TypeName(s.Name, s.ID))),
 		On:        triggers,
 		Aggregate: agg,
 		Command:   m.commandName(s.CommandID),
-		IDPrefix:  prefix,
-		PerEvent:  isCreate,
+		IDField:   scaffold.SanitizeName(s.TargetIDField),
 	})
+}
+
+// checkTarget refuses an automation that doesn't say where its command goes
+// (schema 5.0.0 targetIdField), or names a field that a trigger event doesn't
+// carry or the command doesn't declare as its identity (idAttribute).
+func (m *mapper) checkTarget(s Slice, cmd Command) bool {
+	f := s.TargetIDField
+	if f == "" {
+		m.rep.errorf("automation %q names no targetIdField: name the trigger event's field whose value is "+
+			"the id of the stream %q acts on (schema 5.0.0; the stream is no longer derived)", s.ID, s.CommandID)
+		return false
+	}
+	ok := true
+	for _, id := range s.TriggerEventIDs {
+		if _, found := docField(m.doc.Events[id].Fields, f); !found {
+			m.rep.errorf("automation %q: its targetIdField %q is not a field of trigger event %q", s.ID, f, id)
+			ok = false
+		}
+	}
+	if fd, found := docField(cmd.Fields, f); !found || !fd.IDAttribute {
+		m.rep.errorf("automation %q: command %q must declare %q with idAttribute: true, the identity of the "+
+			"stream it acts on (the automation's targetIdField)", s.ID, s.CommandID, f)
+		ok = false
+	}
+	return ok
+}
+
+func docField(fields []Field, name string) (Field, bool) {
+	for _, f := range fields {
+		if f.Name == name {
+			return f, true
+		}
+	}
+	return Field{}, false
 }
 
 // command builds one scaffold command and its events, folding field types
