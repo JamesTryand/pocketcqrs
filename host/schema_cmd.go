@@ -70,6 +70,18 @@ func newSchemaImportCommand() *cobra.Command {
 				return mapErr
 			}
 
+			// a coordinating document's edges for this system (architecture
+			// 0.2.0): the edges into it and the events it publishes, and
+			// their examples run against package edges
+			se, err := systemEdges(cmd, args[0], doc, opts)
+			if err != nil {
+				return err
+			}
+			if se != nil && lang != "go" {
+				return fmt.Errorf("--architecture generates for --lang go only: a carrier's receiving side " +
+					"runs in the program's own process")
+			}
+
 			// Run the document's own scenarios against the code just
 			// generated, before anything is written. A scenario is a
 			// given/when/then, which is exactly a dry run — so a document can
@@ -107,7 +119,7 @@ func newSchemaImportCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				written, wired, err := writeSliceGo(mapped, outDir, raw, force)
+				written, wired, err := writeSliceGo(mapped, outDir, raw, force, se)
 				if err != nil {
 					return err
 				}
@@ -153,7 +165,52 @@ func newSchemaImportCommand() *cobra.Command {
 	// share it with. Only used for the completion message above.
 	imp.Flags().String("functionsDir", "pb_functions",
 		"the directory the completion message tells you to copy generated files into")
+	imp.Flags().String("architecture", "",
+		"a coordinating document (eventmodelschema architecture.schema.json): generate this system's edge tables "+
+			"(edges.go) and run its edges' examples; needs --system and --lang go")
+	imp.Flags().String("system", "", "this document's system id in --architecture")
 	return imp
+}
+
+// systemEdges reads --architecture/--system, if given, and prints how the
+// edges' examples went. nil when no coordinating document was named.
+func systemEdges(cmd *cobra.Command, docPath string, doc *emschema.Document, opts emschema.Options) (*emschema.SystemEdges, error) {
+	archPath, _ := cmd.Flags().GetString("architecture")
+	system, _ := cmd.Flags().GetString("system")
+	if archPath == "" {
+		if system != "" {
+			return nil, fmt.Errorf("--system names a system in --architecture, which is not given")
+		}
+		return nil, nil
+	}
+	if system == "" {
+		return nil, fmt.Errorf("--architecture needs --system: this document's system id in it")
+	}
+	arch, err := emschema.LoadArchitecture(archPath)
+	if err != nil {
+		return nil, err
+	}
+	se, err := emschema.EdgesFor(arch, system, doc, docPath, opts)
+	if se != nil {
+		cmd.Println()
+		cmd.Printf("Edges of %q in %q: %d in, %d published event(s)", system, se.Architecture, len(se.In), len(se.Out))
+		cmd.Println()
+		for _, in := range se.In {
+			cmd.Printf("  in  %s: %s %s v%d -> %s on %s, its id from %s\n", in.ID, in.FromSystem, in.FromEvent,
+				in.FromVersion, in.Command, in.Aggregate, in.TargetField)
+		}
+		for _, o := range se.Out {
+			cmd.Printf("  out %s v%d (%s): only %s\n", o.Event, o.Version, o.EventType, strings.Join(o.Fields, ", "))
+		}
+		for _, r := range se.Examples {
+			mark := "✓"
+			if !r.Passed {
+				mark = "✗"
+			}
+			cmd.Printf("  %s example %s / %s: %s\n", mark, r.Edge, r.Name, r.Detail)
+		}
+	}
+	return se, err
 }
 
 // addMapFlags registers the flags that shape the mapping, shared by import
@@ -359,7 +416,7 @@ func writeSlice(mapped *emschema.Mapped, outDir, docsDir string, force bool) (in
 // Inside a Go module (a go.mod in outDir or above it) it also writes the
 // wiring package (scaffold.GenerateGoWiring) and the document it embeds, and
 // returns the package's name; outside one, "".
-func writeSliceGo(mapped *emschema.Mapped, outDir string, docRaw []byte, force bool) (int, string, error) {
+func writeSliceGo(mapped *emschema.Mapped, outDir string, docRaw []byte, force bool, se *emschema.SystemEdges) (int, string, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return 0, "", err
 	}
@@ -390,6 +447,20 @@ func writeSliceGo(mapped *emschema.Mapped, outDir string, docRaw []byte, force b
 			written += n
 		}
 		wired = w.Package
+		if se != nil {
+			src, err := scaffold.GenerateGoEdges(w.Package, se.Architecture, se.System, se.In, se.Out)
+			if err != nil {
+				return written, "", err
+			}
+			n, err := writeIfAbsent(filepath.Join(outDir, scaffold.GoEdgesFile), src, true)
+			if err != nil {
+				return written, "", err
+			}
+			written += n
+		}
+	} else if se != nil {
+		return 0, "", fmt.Errorf("--architecture writes its edge tables into the wiring package, which needs a go.mod "+
+			"at or above %s", outDir)
 	}
 	for _, d := range mapped.Domains {
 		files, err := d.GenerateGo()

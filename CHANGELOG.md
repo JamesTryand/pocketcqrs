@@ -3,6 +3,21 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.28.0 — a system's edges, generated from a coordinating document
+
+### Added
+
+- **`schema import --architecture <coordinating document> --system <id>`** (Go target; the edges addendum, hub
+  QUESTIONS L17). It writes `edges.go` into the wiring package: `EdgesIn`, the internal edges into this system, and
+  `EdgesOut`, the public events it publishes for edges out of it, each with only the fields some edge maps. It runs
+  each edge's `examples` (architecture schema 0.2.0) and refuses the import if one fails. Refused: a document that is
+  not the system's, an edge's event or command that is not public, a target id of several fields, a personal field on
+  an edge.
+- **Package `edges`**: what the tables mean, with no carrier in it. `edges.Message` is the architecture schema's
+  `edgeMessage` (the source event's id, system, event, public version and the mapped fields); `Publish` makes one of
+  an event, `In.Translate` the command it becomes (to the stream its target field names), `ErrNoTarget` when it has
+  none.
+
 ## v0.27.0 — eventmodelschema 6.1.0: a command another system sends needs no screen
 
 ### Changed

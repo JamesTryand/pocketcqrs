@@ -386,6 +386,39 @@ by the Go target and refused by the JS target; see [Personal data](personal-data
 `match` filters (schema 3.1.0) are generated as search indexes for the Go
 target, described on the same page.
 
+### A system's edges, from a coordinating document (v0.28.0)
+
+A coordinating document (eventmodelschema's `architecture.schema.json`, 0.2.0)
+says how several systems work together. Name it, and this document's system
+in it, and the Go target also writes the system's edges:
+
+```sh
+pocketcqrs schema import model/commerce.eventmodel.json --lang go --out domain \
+  --architecture model/landing-pages.architecture.json --system commerce
+```
+
+- `edges.go`, in the wiring package: `EdgesIn` (each internal edge into this
+  system: the source event at its version, the local aggregate and command,
+  the field the target stream id comes from, and the field mapping) and
+  `EdgesOut` (each public event an edge out of it starts from, with only the
+  fields some edge maps). Data only: package `edges` is what they mean
+  (`edges.Publish`, `edges.In.Translate`), so there is one implementation.
+- **Each edge's `examples` run** against `edges.In.Translate`, after the
+  sender's filter, and a failing one refuses the import: the checker
+  (`architecture-check.js`) and this generator cannot disagree.
+- **Refused:** a system document that is not the one the coordinating
+  document names; an edge's event or command that is not public here; a
+  target id of several fields; and a personal field on an edge (carrying one
+  is not built).
+- **No carrier is named.** The host gives the tables to one: with
+  pocketcqrs-extensions' `federation`, `PublisherConfig.Edges = EdgesOut` on
+  the sending system and `IngestConfig.Edges = EdgesIn` on the receiving one.
+  Which carrier, its subjects and its credentials are surface tooling's.
+- What crosses is `edges.Message`, the architecture schema's `edgeMessage`:
+  the source event's id, system, event and public version, and only the
+  mapped fields. Not this store's own event record, so either runtime can be
+  on either end.
+
 ## Export
 
 `schema export` reconstructs a document from the running platform's catalog.
