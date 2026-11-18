@@ -4,18 +4,18 @@ Fixtures for the eventmodelschema import/export. Copied verbatim, unmodified.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
 - **Commit**: `e53fa6a`, *"Schema 4.2.0: public events and commands; the
-  coordinating document (architecture 0.1.0)"* (untagged; committed locally
-  2026-11-17, on GitHub once the user pushes it). Copied 2026-11-17: the schema
+  coordinating document (architecture 0.1.0)"*, tag `v4.2.0` (tagged
+  2026-11-18; on GitHub once the user pushes it). Copied 2026-11-17: the schema
   and the changelog. 4.2.0 is additive: `public` on an event or command, read
   by `emschema` and generating nothing. The coordinating document's own schema
   and checker stay upstream (they check several documents, not one import).
 - **Before that**: `f475947`, *"Schema 4.1.0: when.role, the role a command
-  scenario's actor holds"* (untagged). Copied 2026-10-18: the schema,
+  scenario's actor holds"*, tag `v4.1.0` (added upstream after this copy). Copied 2026-10-18: the schema,
   `state-ownership.json` (the approval scope's `bypassRoles: ["coordinator"]`
   and a scenario of a coordinator approving with `when.role`) and the
   changelog; nothing else changed upstream. 4.1.0 is additive.
 - **Before that**: `aa14961`, *"4.0.0: optional command.scope.message, the
-  refusal's own message"* (untagged). Copied 2026-10-17: the schema and
+  refusal's own message"*, tag `v4.0.0` (added upstream after this copy). Copied 2026-10-17: the schema and
   `state-ownership.json`, whose `approve-loan-request` scope now declares the
   message its refusal scenario expects; nothing else changed upstream.
 - **Before that**: `6f0be44`, *"Schema 4.0.0: scope.memberOfVia requires actorField;
