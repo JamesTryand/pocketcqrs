@@ -444,6 +444,8 @@ fails one whose command carries another value for the field, or that shows
 no trigger event: before, such a scenario passed with its command going to
 the wrong stream. An automation that creates something new for each trigger
 event needs the trigger to carry that new thing's id.
+The value has to be on the event: a command sent directly puts its stream's
+id in its body too, or the reaction has no target and is dropped, said.
 
 **Import checks the document against the schema** (since v0.22.0) before
 anything else, and refuses it naming each problem: a key the schema requires
