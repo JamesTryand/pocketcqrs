@@ -3,7 +3,7 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased
+## v0.22.0 — import refuses a document the schema refuses
 
 ### Changed
 
