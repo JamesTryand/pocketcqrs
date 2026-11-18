@@ -3,12 +3,14 @@ module github.com/jamestryand/pocketcqrs
 go 1.25.0
 
 require (
+	github.com/dlclark/regexp2/v2 v2.5.2
 	github.com/dop251/goja v0.0.0-20260722130236-0768e0998ac0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats.go v1.50.0
 	github.com/pocketbase/dbx v1.12.0
 	github.com/pocketbase/pocketbase v0.39.10
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.37.0
 	golang.org/x/oauth2 v0.36.0
@@ -20,7 +22,6 @@ require (
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/disintegration/imaging v1.6.2 // indirect
-	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/domodwyer/mailyak/v3 v3.6.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect

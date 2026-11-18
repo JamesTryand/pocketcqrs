@@ -434,6 +434,14 @@ another system may use, checked across systems by eventmodelschema's
 coordinating document and its `architecture-check`) is read and generates
 nothing.
 
+**Import checks the document against the schema** (since v0.22.0) before
+anything else, and refuses it naming each problem: a key the schema requires
+and the document leaves out, a value outside an enum, a malformed id. Before,
+only keys the importer does not read were refused, so a view scenario's
+caller without its `subjectId` imported cleanly. A problem in a split
+document is named in the file it is in (`slices/place.json`,
+`registries/events.json/placed`).
+
 **Import reports a document's declared version but does not branch on it**,
 which is deliberate rather than left over: the 2.0.0 bump fixed the signal
 going forward, but a document authored between the v2 schema changes and the

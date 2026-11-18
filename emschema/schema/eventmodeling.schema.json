@@ -1,0 +1,1296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "title": "EventModeling Document",
+  "description": "Structural schema for a document describing an EventModeling model (eventmodeling.org methodology): swimlanes, the 5 elements (Event/Command/ReadModel/Screen/Automation), the 3 slice patterns (State Change/State View/Automation), scenarios, and the optional notation layer (hotspots, chapters, actor lanes, slice status). Events are only ever produced by a Command; a Read Model can be consulted for context but never originates an Event -- see docs/design-notes.md for why this schema has no separate 'translation' pattern. This schema enforces structural well-formedness only -- methodology rules such as 'every command has a reason' or anti-pattern cardinality checks are deliberately NOT enforced here; see docs/design-notes.md.",
+  "type": "object",
+  "required": ["eventModelingSchemaVersion", "id", "name", "swimlanes", "slices"],
+  "properties": {
+    "$schema": { "type": "string", "format": "uri" },
+    "eventModelingSchemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "default": "4.2.0"
+    },
+    "id": { "$ref": "#/$defs/id" },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "swimlanes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/swimlane" },
+      "minItems": 1
+    },
+    "chapters": { "$ref": "#/$defs/chapterRegistry" },
+    "actorLanes": { "$ref": "#/$defs/actorLaneRegistry" },
+    "events": { "$ref": "#/$defs/eventRegistry" },
+    "commands": { "$ref": "#/$defs/commandRegistry" },
+    "readModels": { "$ref": "#/$defs/readModelRegistry" },
+    "screens": { "$ref": "#/$defs/screenRegistry" },
+    "ingresses": { "$ref": "#/$defs/ingressRegistry" },
+    "automations": { "$ref": "#/$defs/automationRegistry" },
+    "slices": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/slice" }
+    },
+    "hotspots": { "$ref": "#/$defs/hotspotRegistry" },
+    "dataSubjects": { "$ref": "#/$defs/dataSubjects" },
+    "partitioning": { "$ref": "#/$defs/partitioning" }
+  },
+  "additionalProperties": false,
+
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+
+    "swimlaneKind": { "enum": ["team", "system"] },
+
+    "sliceStatus": {
+      "enum": ["created", "done", "assigned", "inProgress", "review", "accepted", "blocked", "planned", "informational"]
+    },
+
+    "slicePattern": {
+      "enum": ["stateChange", "stateView", "automation"]
+    },
+
+    "scenarioKind": {
+      "enum": ["stateChange", "stateView", "error"]
+    },
+
+    "swimlane": {
+      "type": "object",
+      "required": ["id", "name", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/swimlaneKind" },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "fieldType": {
+      "enum": ["string", "boolean", "integer", "long", "decimal", "double", "date", "dateTime", "uuid", "custom"]
+    },
+
+    "fieldCardinality": { "enum": ["single", "list"] },
+
+    "fieldDerivationKind": { "enum": ["toggle", "count", "sum", "groupBy", "byEvent", "sumOfItems"] },
+
+    "fieldDerivation": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/fieldDerivationKind" }
+      },
+      "allOf": [
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "toggle" } } },
+          "then": {
+            "type": "object",
+            "required": ["onEventIds", "offEventIds"],
+            "properties": {
+              "onEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "offEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "initial": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "count" } } },
+          "then": {
+            "type": "object",
+            "required": ["incrementOnEventIds"],
+            "properties": {
+              "incrementOnEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "decrementOnEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" }
+              },
+              "rowKeyField": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "sum" } } },
+          "then": {
+            "type": "object",
+            "required": ["addOnEventIds", "amountField"],
+            "properties": {
+              "addOnEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "subtractOnEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" }
+              },
+              "amountField": { "type": "string", "minLength": 1 },
+              "rowKeyField": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "groupBy" } } },
+          "then": {
+            "type": "object",
+            "required": ["groupByField"],
+            "properties": {
+              "groupByField": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "byEvent" } } },
+          "then": {
+            "type": "object",
+            "description": "3.16.0: the field takes a literal value chosen by which event fired (an id of builtFromEventIds), such as a status; an event not named leaves it as it was. Toggle is the 0/1 case.",
+            "required": ["values"],
+            "properties": {
+              "values": {
+                "type": "object",
+                "propertyNames": { "$ref": "#/$defs/id" },
+                "additionalProperties": { "type": ["string", "number", "boolean"] },
+                "minProperties": 1
+              }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "sumOfItems" } } },
+          "then": {
+            "type": "object",
+            "description": "3.16.0, with readModel.rowsPerListItem only: the sum of a subfield over the row's own items. Absent (null) unless every item carries a value for it, so amounts not yet in one currency are never added.",
+            "required": ["subfield"],
+            "properties": {
+              "subfield": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "field": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "$ref": "#/$defs/fieldType" },
+        "description": { "type": "string" },
+        "optional": { "type": "boolean" },
+        "cardinality": { "$ref": "#/$defs/fieldCardinality" },
+        "idAttribute": { "type": "boolean" },
+        "pii": { "type": "boolean" },
+        "piiSubject": { "type": "string", "minLength": 1 },
+        "derivation": { "$ref": "#/$defs/fieldDerivation" },
+        "subfields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        }
+      },
+      "additionalProperties": false,
+      "dependentSchemas": {
+        "piiSubject": {
+          "type": "object",
+          "required": ["pii"],
+          "properties": { "pii": { "const": true } }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["pii"],
+            "properties": { "pii": { "const": true } }
+          },
+          "then": {
+            "type": "object",
+            "required": ["piiSubject"]
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["derivation"],
+            "properties": {
+              "derivation": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": { "kind": { "const": "groupBy" } }
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": ["cardinality", "subfields"],
+            "properties": {
+              "cardinality": { "const": "list" },
+              "subfields": { "type": "array", "minItems": 1 }
+            }
+          }
+        }
+      ]
+    },
+
+    "event": {
+      "type": "object",
+      "required": ["name", "swimlaneId"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "swimlaneId": { "$ref": "#/$defs/id" },
+        "aggregate": { "type": "string", "minLength": 1 },
+        "endsStream": { "type": "boolean", "default": false },
+        "partitioned": { "type": "boolean", "default": true },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        },
+        "public": { "$ref": "#/$defs/publicMarker" }
+      },
+      "additionalProperties": false
+    },
+
+    "publicMarker": {
+      "description": "Since 4.2.0. Marks an event or command as part of this system's public contract, at a version: another system may use it through a coordinating document's edge (architecture.schema.json), and nothing else may. A public event changes only by a new version; anything without this marker is private to the system and free to change. It says nothing about how a message is carried.",
+      "type": "object",
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "roleRequirement": {
+      "anyOf": [
+        { "$ref": "#/$defs/id" },
+        { "type": "array", "items": { "$ref": "#/$defs/id" }, "minItems": 1 }
+      ]
+    },
+
+    "command": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "reason": { "type": "string" },
+        "aggregate": { "type": "string", "minLength": 1 },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        },
+        "requiredRole": { "$ref": "#/$defs/roleRequirement" },
+        "fieldGatedRole": { "$ref": "#/$defs/commandFieldGatedRole" },
+        "requiredOwnership": { "$ref": "#/$defs/commandOwnership" },
+        "scope": { "$ref": "#/$defs/commandScope" },
+        "refuseWhen": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/commandRefusal" },
+          "minItems": 1
+        },
+        "partitioned": { "type": "boolean", "default": true },
+        "public": { "$ref": "#/$defs/publicMarker" }
+      },
+      "additionalProperties": false
+    },
+
+    "commandFieldGatedRole": {
+      "type": "object",
+      "required": ["field", "value", "requiredRole"],
+      "properties": {
+        "field": { "type": "string", "minLength": 1 },
+        "value": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "boolean" },
+            { "type": "number" }
+          ]
+        },
+        "requiredRole": { "$ref": "#/$defs/roleRequirement" }
+      },
+      "additionalProperties": false
+    },
+
+    "commandRefusal": {
+      "type": "object",
+      "required": ["message", "all"],
+      "properties": {
+        "message": { "type": "string", "minLength": 1 },
+        "all": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/refusalCondition" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "refusalCondition": {
+      "type": "object",
+      "properties": {
+        "state": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "minLength": 1 },
+        "is": { "enum": ["set", "notSet"] },
+        "equals": { "$ref": "#/$defs/refusalOperand" },
+        "notEquals": { "$ref": "#/$defs/refusalOperand" },
+        "contains": { "$ref": "#/$defs/refusalOperand" },
+        "lessThan": { "$ref": "#/$defs/refusalNumericOperand" },
+        "atMost": { "$ref": "#/$defs/refusalNumericOperand" },
+        "greaterThan": { "$ref": "#/$defs/refusalNumericOperand" },
+        "atLeast": { "$ref": "#/$defs/refusalNumericOperand" }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            { "required": ["state"], "not": { "required": ["command"] } },
+            { "required": ["command"], "not": { "required": ["state"] } }
+          ]
+        },
+        {
+          "oneOf": [
+            { "required": ["is"] },
+            { "required": ["equals"] },
+            { "required": ["notEquals"] },
+            { "required": ["contains"] },
+            { "required": ["lessThan"] },
+            { "required": ["atMost"] },
+            { "required": ["greaterThan"] },
+            { "required": ["atLeast"] }
+          ]
+        }
+      ],
+      "additionalProperties": false
+    },
+
+    "refusalNumericOperand": {
+      "description": "3.11.0: what a numeric comparison compares with: a number, or the value of a numeric state or command field. A comparison with an unset value never holds; say that with `is`.",
+      "oneOf": [
+        { "type": "number" },
+        {
+          "type": "object",
+          "properties": {
+            "state": { "type": "string", "minLength": 1 },
+            "command": { "type": "string", "minLength": 1 }
+          },
+          "oneOf": [
+            { "required": ["state"], "not": { "required": ["command"] } },
+            { "required": ["command"], "not": { "required": ["state"] } }
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "refusalOperand": {
+      "oneOf": [
+        { "type": ["string", "number", "boolean"] },
+        {
+          "type": "object",
+          "properties": {
+            "state": { "type": "string", "minLength": 1 },
+            "command": { "type": "string", "minLength": 1 }
+          },
+          "oneOf": [
+            { "required": ["state"], "not": { "required": ["command"] } },
+            { "required": ["command"], "not": { "required": ["state"] } }
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "commandOwnership": {
+      "description": "Who may run the command: the actor who owns the target. Either via a read model (2.5.0: checked before the command, from a projection, so it lags) or (3.15.0) stateField: the field of the aggregate's own state that names its owner, compared with the command's actor by the aggregate's own decision, never from a projection. bypassRoles applies to via only: a decision knows its actor, not their role.",
+      "type": "object",
+      "properties": {
+        "bypassRoles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1
+        },
+        "via": { "$ref": "#/$defs/ownershipVia" },
+        "stateField": {
+          "description": "3.15.0: the state field (folded from the aggregate's own events) that names the owner. The command is refused, as forbidden rather than invalid, when it differs from the actor.",
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "description": "3.15.0: the refusal's message when the actor is not the owner (stateField only).",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "oneOf": [
+        { "required": ["via"], "not": { "anyOf": [{ "required": ["stateField"] }, { "required": ["message"] }] } },
+        { "required": ["stateField"], "not": { "anyOf": [{ "required": ["via"] }, { "required": ["bypassRoles"] }] } }
+      ],
+      "additionalProperties": false
+    },
+
+    "ownershipVia": {
+      "type": "object",
+      "required": ["readModelId", "keyField", "ownerField"],
+      "properties": {
+        "readModelId": { "$ref": "#/$defs/id" },
+        "keyField": { "type": "string", "minLength": 1 },
+        "ownerField": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "commandScope": {
+      "type": "object",
+      "required": ["resolveVia", "memberOfVia"],
+      "properties": {
+        "bypassRoles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1
+        },
+        "resolveVia": {
+          "type": "object",
+          "required": ["readModelId", "keyField", "selectField"],
+          "properties": {
+            "readModelId": { "$ref": "#/$defs/id" },
+            "keyField": { "type": "string", "minLength": 1 },
+            "selectField": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "memberOfVia": {
+          "description": "4.0.0: the membership read model. The command is allowed when it has a row whose matchField equals the value resolveVia found and whose actorField equals the command's actor.",
+          "type": "object",
+          "required": ["readModelId", "matchField", "actorField"],
+          "properties": {
+            "readModelId": { "$ref": "#/$defs/id" },
+            "matchField": { "type": "string", "minLength": 1 },
+            "actorField": {
+              "description": "4.0.0: the field of the membership read model that holds a member's actor id, compared with the command's actor.",
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "message": {
+          "description": "4.0.0: the refusal's message when the actor is not a member (a bypass role skips the check, and with it the message).",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "readModelScope": {
+      "type": "object",
+      "required": ["param", "via"],
+      "properties": {
+        "param": { "type": "string", "minLength": 1 },
+        "via": {
+          "type": "object",
+          "required": ["readModelId", "matchParamTo", "selectField", "filterLocalField"],
+          "properties": {
+            "readModelId": { "$ref": "#/$defs/id" },
+            "matchParamTo": { "type": "string", "minLength": 1 },
+            "selectField": { "type": "string", "minLength": 1 },
+            "filterLocalField": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "grantsAccess": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+
+    "filterKind": { "enum": ["dateRange", "match"] },
+
+    "matchMode": { "enum": ["exact", "prefix", "contains"] },
+
+    "matchNormalize": { "enum": ["none", "caseFold", "email", "phone", "personName"] },
+
+    "dateRangePreset": { "enum": ["last7Days", "lastCalendarMonth", "custom"] },
+
+    "readModelFilter": {
+      "type": "object",
+      "required": ["param", "field", "kind"],
+      "properties": {
+        "param": { "type": "string", "minLength": 1 },
+        "field": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/filterKind" }
+      },
+      "allOf": [
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "dateRange" } } },
+          "then": {
+            "type": "object",
+            "required": ["presets"],
+            "properties": {
+              "presets": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/dateRangePreset" },
+                "minItems": 1,
+                "uniqueItems": true
+              }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "match" } } },
+          "then": {
+            "type": "object",
+            "required": ["mode"],
+            "properties": {
+              "mode": { "$ref": "#/$defs/matchMode" },
+              "normalize": { "$ref": "#/$defs/matchNormalize" },
+              "minPrefixLength": { "type": "integer", "minimum": 2 }
+            },
+            "allOf": [
+              {
+                "if": { "type": "object", "required": ["minPrefixLength"] },
+                "then": { "type": "object", "properties": { "mode": { "const": "prefix" } } }
+              }
+            ]
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "readModel": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "question": { "type": "string" },
+        "builtFromEventIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "removedByEventIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1
+        },
+        "projection": {
+          "description": "3.17.0: who builds the read model's rows. \"generated\" (the default): a generator's projection, from the declarations. \"hand\": a hand-written projection, for a read model no declaration expresses (a join across streams, say). A generator still generates its query route; a check that runs only generated code reports its view scenarios as needing a host (HAND), and a host check runs the host's own projection.",
+          "enum": ["generated", "hand"],
+          "default": "generated"
+        },
+        "rowsPerListItem": {
+          "description": "3.16.0: one row per group of a stream's list items, in place of one row per stream. listField is a list field the read model's events carry (each carrying event replaces the list); groupBy is the item subfield naming an item's group. Each row is keyed '<stream>|<group>'; its groupBy field takes the group's value, its listField the group's items, and its other plain fields are copied from the stream's events. An item without the groupBy subfield is in no row. A removedByEventIds event removes all of the stream's rows. Not with rowKeyField.",
+          "type": "object",
+          "required": ["listField", "groupBy"],
+          "properties": {
+            "listField": { "type": "string", "minLength": 1 },
+            "groupBy": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "rowKeyField": {
+          "description": "3.14.0: the field of each event this read model is built from (and removed by) that names the row it updates, in place of the event's stream. For one stream that holds many rows' events, such as a ledger recording a payment per person. Every one of those events must carry it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/readModelScope" }
+        },
+        "filters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/readModelFilter" }
+        },
+        "requiredRole": { "$ref": "#/$defs/roleRequirement" },
+        "selfAccess": { "$ref": "#/$defs/readModelSelfAccess" },
+        "partitioned": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+
+    "readModelSelfAccess": {
+      "type": "object",
+      "required": ["subjectField"],
+      "properties": {
+        "subjectField": { "type": "string", "minLength": 1 },
+        "via": { "$ref": "#/$defs/ownershipVia" },
+        "param": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "partitioning": {
+      "type": "object",
+      "required": ["key"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
+        "description": { "type": "string" },
+        "crossPartitionRoles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "dataSubjects": {
+      "type": "object",
+      "properties": {
+        "erasure": { "$ref": "#/$defs/erasureAuthorization" }
+      },
+      "additionalProperties": false
+    },
+
+    "erasureAuthorization": {
+      "type": "object",
+      "properties": {
+        "self": { "type": "boolean", "default": false },
+        "roles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "via": { "$ref": "#/$defs/ownershipVia" }
+      },
+      "anyOf": [
+        { "type": "object", "required": ["self"], "properties": { "self": { "const": true } } },
+        { "type": "object", "required": ["roles"] }
+      ],
+      "allOf": [
+        {
+          "if": { "type": "object", "required": ["via"] },
+          "then": { "type": "object", "required": ["self"], "properties": { "self": { "const": true } } }
+        }
+      ],
+      "additionalProperties": false
+    },
+
+    "screen": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "actorLaneId": { "$ref": "#/$defs/id" }
+      },
+      "additionalProperties": false
+    },
+
+    "ingress": {
+      "type": "object",
+      "required": ["name", "verification", "deliveryIdField"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "swimlaneId": { "$ref": "#/$defs/id" },
+        "verification": {
+          "type": "object",
+          "required": ["scheme"],
+          "properties": {
+            "scheme": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "deliveryIdField": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "automation": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "chapter": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "actorLane": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "eventRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/event" }
+    },
+    "commandRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/command" }
+    },
+    "readModelRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/readModel" }
+    },
+    "screenRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/screen" }
+    },
+    "ingressRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/ingress" }
+    },
+    "automationRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/automation" }
+    },
+    "chapterRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/chapter" }
+    },
+    "actorLaneRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/actorLane" }
+    },
+    "hotspotRegistry": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/hotspot" }
+    },
+
+    "eventRef": {
+      "type": "object",
+      "required": ["eventId"],
+      "properties": {
+        "eventId": { "$ref": "#/$defs/id" },
+        "data": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "elapsedRef": {
+      "type": "object",
+      "required": ["elapsed"],
+      "properties": {
+        "elapsed": { "$ref": "#/$defs/duration" }
+      },
+      "additionalProperties": false
+    },
+
+    "commandRef": {
+      "type": "object",
+      "required": ["commandId"],
+      "properties": {
+        "commandId": { "$ref": "#/$defs/id" },
+        "data": { "type": "object" },
+        "actor": { "type": "string", "minLength": 1 },
+        "role": {
+          "description": "4.1.0: the role the actor holds when sending the command, as a host resolves it from the caller (a view scenario's caller.role is the same thing). A check runs the command's authorization with it: requiredRole and fieldGatedRole must admit it, and a requiredOwnership or scope whose bypassRoles name it is skipped. Without it, the actor holds the command's required roles and none of its bypass roles, as before 4.1.0.",
+          "type": "string",
+          "minLength": 1
+        },
+        "at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+
+    "readModelQuery": {
+      "type": "object",
+      "required": ["readModelId"],
+      "properties": {
+        "readModelId": { "$ref": "#/$defs/id" },
+        "queryParams": { "type": "object" },
+        "asOf": { "type": "string", "format": "date" },
+        "caller": { "$ref": "#/$defs/scenarioCaller" }
+      },
+      "additionalProperties": false
+    },
+
+    "scenarioCaller": {
+      "type": "object",
+      "required": ["subjectId"],
+      "properties": {
+        "subjectId": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "eventsThen": {
+      "type": "object",
+      "required": ["events"],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/eventRef" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "errorThen": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": ["message"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "resultThen": {
+      "type": "object",
+      "required": ["result"],
+      "properties": {
+        "result": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "scenarioBase": {
+      "type": "object",
+      "required": ["id", "name", "kind", "given"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/scenarioKind" },
+        "given": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/eventRef" },
+              { "$ref": "#/$defs/elapsedRef" }
+            ]
+          }
+        }
+      }
+    },
+
+    "scenario": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/scenarioBase" },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "stateChange" } } },
+          "then": {
+            "type": "object",
+            "required": ["when", "then"],
+            "properties": {
+              "when": { "$ref": "#/$defs/commandRef" },
+              "then": { "$ref": "#/$defs/eventsThen" }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "stateView" } } },
+          "then": {
+            "type": "object",
+            "required": ["when", "then"],
+            "properties": {
+              "when": { "$ref": "#/$defs/readModelQuery" },
+              "then": { "$ref": "#/$defs/resultThen" }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "kind": { "const": "error" } } },
+          "then": {
+            "type": "object",
+            "required": ["when", "then"],
+            "properties": {
+              "when": { "$ref": "#/$defs/commandRef" },
+              "then": { "$ref": "#/$defs/errorThen" }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "duration": {
+      "type": "string",
+      "pattern": "^P(?=\\d|T\\d)(\\d+W)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+S)?)?$"
+    },
+
+    "settingName": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$"
+    },
+
+    "durationValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/duration" },
+        {
+          "type": "object",
+          "required": ["setting", "default"],
+          "properties": {
+            "setting": { "$ref": "#/$defs/settingName" },
+            "default": { "$ref": "#/$defs/duration" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "cronExpression": {
+      "type": "string",
+      "pattern": "^\\S+(\\s+\\S+){4}$"
+    },
+
+    "cronValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/cronExpression" },
+        {
+          "type": "object",
+          "required": ["setting", "default"],
+          "properties": {
+            "setting": { "$ref": "#/$defs/settingName" },
+            "default": { "$ref": "#/$defs/cronExpression" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "automationDelay": {
+      "type": "object",
+      "oneOf": [
+        { "type": "object", "required": ["after"] },
+        { "type": "object", "required": ["at"] }
+      ],
+      "properties": {
+        "after": { "$ref": "#/$defs/durationValue" },
+        "at": { "type": "string", "minLength": 1 },
+        "key": { "type": "string", "minLength": 1 },
+        "cancelledByEventIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "automationEffect": {
+      "type": "object",
+      "required": ["swimlaneId", "gaveUp"],
+      "properties": {
+        "swimlaneId": { "$ref": "#/$defs/id" },
+        "description": { "type": "string" },
+        "gaveUp": {
+          "type": "object",
+          "required": ["commandId", "resultEventIds"],
+          "properties": {
+            "commandId": { "$ref": "#/$defs/id" },
+            "resultEventIds": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" },
+              "minItems": 1
+            },
+            "outcomes": { "$ref": "#/$defs/eventOutcomes" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "automationSchedule": {
+      "type": "object",
+      "required": ["cron"],
+      "properties": {
+        "cron": { "$ref": "#/$defs/cronValue" },
+        "timeZone": { "type": "string", "minLength": 1, "default": "UTC" }
+      },
+      "additionalProperties": false
+    },
+
+    "eventOutcomes": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": { "$ref": "#/$defs/id" },
+            "uniqueItems": true
+          },
+          { "$ref": "#/$defs/eventOutcome" }
+        ]
+      },
+      "minItems": 1
+    },
+
+    "eventOutcome": {
+      "description": "3.12.0: one alternative, with when it applies. When any alternative has a `when`, the alternatives are tried in order after the command's refusals, the first whose `when` holds is the result, and the last has no `when` (the default), so the decision always has an answer.",
+      "type": "object",
+      "required": ["eventIds"],
+      "properties": {
+        "eventIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "uniqueItems": true
+        },
+        "repeated": {
+          "description": "3.13.0: events of this alternative that occur zero or more times, one per item (a payment per person paid, say), each in its place in eventIds' order. Each must be one of eventIds. How many, and their values, are hand-written: a generator emits a hook for them.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "description": { "type": "string" },
+        "when": {
+          "oneOf": [
+            {
+              "description": "The condition is hand-written: a generator emits a hook for it rather than a rule.",
+              "const": "hand"
+            },
+            {
+              "description": "Holds when any group holds; a group holds when all its conditions do (the same conditions as refuseWhen).",
+              "type": "array",
+              "items": { "$ref": "#/$defs/outcomeCondition" },
+              "minItems": 1
+            }
+          ]
+        },
+        "set": {
+          "description": "Values this alternative fixes on its events, by event id then field name. Other fields are filled as for any event.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/id" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "type": ["string", "number", "boolean"] }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "outcomeCondition": {
+      "type": "object",
+      "required": ["all"],
+      "properties": {
+        "all": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/refusalCondition" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "sliceBase": {
+      "type": "object",
+      "required": ["id", "name", "pattern", "swimlaneId", "status", "scenarios"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "pattern": { "$ref": "#/$defs/slicePattern" },
+        "swimlaneId": { "$ref": "#/$defs/id" },
+        "chapterId": { "$ref": "#/$defs/id" },
+        "businessCapability": { "type": "string" },
+        "status": { "$ref": "#/$defs/sliceStatus", "default": "created" },
+        "scenarios": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/scenario" }
+        }
+      }
+    },
+
+    "slice": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/sliceBase" },
+        {
+          "if": { "type": "object", "properties": { "pattern": { "const": "stateChange" } } },
+          "then": {
+            "type": "object",
+            "required": ["commandId", "eventIds"],
+            "oneOf": [
+              { "type": "object", "required": ["screenId"] },
+              { "type": "object", "required": ["ingressId"] }
+            ],
+            "properties": {
+              "screenId": { "$ref": "#/$defs/id" },
+              "ingressId": { "$ref": "#/$defs/id" },
+              "commandId": { "$ref": "#/$defs/id" },
+              "eventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "outcomes": { "$ref": "#/$defs/eventOutcomes" },
+              "scenarios": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": { "kind": { "enum": ["stateChange", "error"] } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "pattern": { "const": "stateView" } } },
+          "then": {
+            "type": "object",
+            "required": ["screenId", "readModelId"],
+            "properties": {
+              "screenId": { "$ref": "#/$defs/id" },
+              "readModelId": { "$ref": "#/$defs/id" },
+              "scenarios": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": { "kind": { "enum": ["stateView"] } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "type": "object", "properties": { "pattern": { "const": "automation" } } },
+          "then": {
+            "type": "object",
+            "required": ["automationId", "commandId", "resultEventIds"],
+            "oneOf": [
+              { "type": "object", "required": ["triggerEventIds"] },
+              { "type": "object", "required": ["schedule"] }
+            ],
+            "allOf": [
+              {
+                "if": { "type": "object", "required": ["delay"] },
+                "then": { "type": "object", "required": ["triggerEventIds"] }
+              }
+            ],
+            "properties": {
+              "automationId": { "$ref": "#/$defs/id" },
+              "triggerEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "delay": { "$ref": "#/$defs/automationDelay" },
+              "schedule": { "$ref": "#/$defs/automationSchedule" },
+              "effect": { "$ref": "#/$defs/automationEffect" },
+              "partitionFrom": { "type": "string", "minLength": 1 },
+              "readModelId": { "$ref": "#/$defs/id" },
+              "commandId": { "$ref": "#/$defs/id" },
+              "resultEventIds": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" },
+                "minItems": 1
+              },
+              "outcomes": { "$ref": "#/$defs/eventOutcomes" },
+              "scenarios": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": { "kind": { "enum": ["stateChange", "error"] } }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "hotspotTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "elementType", "elementId"],
+          "properties": {
+            "kind": { "const": "element" },
+            "elementType": {
+              "enum": ["swimlane", "event", "command", "readModel", "screen", "ingress", "automation", "chapter", "actorLane"]
+            },
+            "elementId": { "$ref": "#/$defs/id" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "sliceId"],
+          "properties": {
+            "kind": { "const": "slice" },
+            "sliceId": { "$ref": "#/$defs/id" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "sliceIds"],
+          "properties": {
+            "kind": { "const": "ordering" },
+            "sliceIds": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "hotspot": {
+      "type": "object",
+      "required": ["note", "target"],
+      "properties": {
+        "note": { "type": "string", "minLength": 1 },
+        "target": { "$ref": "#/$defs/hotspotTarget" },
+        "resolved": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

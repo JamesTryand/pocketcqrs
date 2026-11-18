@@ -2,6 +2,10 @@
 
 Fixtures for the eventmodelschema import/export. Copied verbatim, unmodified.
 
+The schema is also embedded in the importer (`emschema/schema/eventmodeling.schema.json`, since
+2026-11-18: import checks documents against it). The two copies must be identical;
+`TestEmbeddedSchemaIsTheVendoredCopy` checks they are. Update both together.
+
 - **Source**: `github.com/jamestryand/eventmodelschema`
 - **Commit**: `e53fa6a`, *"Schema 4.2.0: public events and commands; the
   coordinating document (architecture 0.1.0)"*, tag `v4.2.0` (tagged

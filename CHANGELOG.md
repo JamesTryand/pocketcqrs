@@ -3,6 +3,19 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased
+
+### Changed
+
+- **Import refuses a document the schema refuses.** A document is checked against the vendored eventmodelschema
+  (4.2.0) before anything is generated, as dotnetcqrs's generator already does, and refused naming every problem
+  and nothing else. Before, the importer refused keys it does not read but not keys the schema requires: a view
+  scenario's caller given only a role (`subjectId` has been required since 3.8.0) imported cleanly. A split document
+  is checked as the document it joins into, each problem named in its own file. **A document accepted before may
+  now be refused**, and a Go program whose generated `register.go` parses its embedded document at start-up will
+  refuse to start with it until the document is fixed. Validation uses `santhosh-tekuri/jsonschema/v6`, with
+  ECMAScript patterns (`dlclark/regexp2`), and fetches nothing.
+
 ## v0.21.0 — schema 4.2.0, and Litestream no longer stalls
 
 Reads eventmodelschema 4.2.0 (tag `v4.2.0`): `public` on an event or command. Fixes a secondary stalling

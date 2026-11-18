@@ -17,8 +17,8 @@ import (
 func TestSchemaImportReturnsErrorOnRefusal(t *testing.T) {
 	dir := t.TempDir()
 	bogus := filepath.Join(dir, "bogus.json")
-	// a document lint refuses: the translation pattern was removed in v2
-	body := `{"swimlanes":[{"id":"s","name":"S","kind":"team"}],
+	// a document the schema refuses: the translation pattern was removed in v2
+	body := `{"eventModelingSchemaVersion":"4.2.0","id":"bogus","name":"Bogus","swimlanes":[{"id":"s","name":"S","kind":"team"}],
 		"slices":[{"id":"t","name":"T","pattern":"translation","swimlaneId":"s","status":"planned","scenarios":[]}]}`
 	if err := os.WriteFile(bogus, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestSchemaImportReturnsErrorOnRefusal(t *testing.T) {
 	if err == nil {
 		t.Fatal("a refused document was accepted (no error returned)")
 	}
-	if !strings.Contains(out.String(), "REFUSED") {
+	if !strings.Contains(out.String(), "/slices/0/pattern") {
 		t.Errorf("refusal reason was not printed:\n%s", out.String())
 	}
 }
@@ -89,6 +89,7 @@ func TestSchemaImportReturnsNilOnSuccess(t *testing.T) {
 // untagged element can own), which is fine for asserting "no error" but
 // useless for asserting what got written.
 const widgetDoc = `{
+	"eventModelingSchemaVersion": "4.2.0", "id": "widgets", "name": "Widgets",
 	"swimlanes": [{ "id": "widgets", "name": "Widgets", "kind": "team" }],
 	"events": { "widget-created": { "name": "Widget Created", "swimlaneId": "widgets" } },
 	"commands": { "create-widget": { "name": "Create Widget" } },

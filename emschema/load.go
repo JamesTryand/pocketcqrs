@@ -1,11 +1,14 @@
 package emschema
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 )
 
 // Manifest describes how one document is split across files. Order lives
@@ -55,6 +58,9 @@ func Parse(name string, raw []byte) (*Document, error) {
 	if err := c.refuseUnsupported(name); err != nil {
 		return nil, err
 	}
+	if err := validateDocument(name, raw, nil); err != nil {
+		return nil, err
+	}
 	return &doc, nil
 }
 
@@ -92,6 +98,25 @@ func LoadManifest(dir string) (*Document, error) {
 	// registry paths are relative to the manifest's own directory, and a
 	// path escaping it is refused: a manifest is data, and data must not be
 	// able to name a file outside the tree it came from
+	// the raw files, joined as the schema project's join.js joins them, so
+	// the whole document is checked against the schema as written (the Go
+	// values have already dropped what they do not read)
+	var joined map[string]any
+	if err := json.Unmarshal(raw, &joined); err != nil {
+		return nil, fmt.Errorf("emschema: invalid manifest.json: %w", err)
+	}
+	delete(joined, "registries")
+	joinedSlices := []any{}
+	registryFile := map[string]string{}
+	var lastRegistry any
+	readRaw := func(body []byte) (any, error) {
+		var v any
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.UseNumber()
+		err := dec.Decode(&v)
+		return v, err
+	}
+
 	load := func(rel string, into any) error {
 		full, err := resolveWithin(dir, rel)
 		if err != nil {
@@ -105,11 +130,21 @@ func LoadManifest(dir string) (*Document, error) {
 			return fmt.Errorf("emschema: %s: %w", rel, err)
 		}
 		c.check(body, reflect.TypeOf(into).Elem(), filepath.ToSlash(rel))
+		v, err := readRaw(body)
+		if err != nil {
+			return fmt.Errorf("emschema: %s: %w", rel, err)
+		}
+		if _, isSlice := into.(*Slice); isSlice {
+			joinedSlices = append(joinedSlices, v)
+		} else {
+			lastRegistry = v
+		}
 		return nil
 	}
 
 	for key, rel := range m.Registries {
 		var err error
+		lastRegistry = nil
 		switch key {
 		case "events":
 			err = load(rel, &doc.Events)
@@ -136,6 +171,8 @@ func LoadManifest(dir string) (*Document, error) {
 		if err != nil {
 			return nil, err
 		}
+		joined[key] = lastRegistry
+		registryFile[key] = filepath.ToSlash(rel)
 	}
 
 	for _, rel := range m.Slices {
@@ -146,6 +183,31 @@ func LoadManifest(dir string) (*Document, error) {
 		doc.Slices = append(doc.Slices, s)
 	}
 	if err := c.refuseUnsupported(filepath.Base(dir)); err != nil {
+		return nil, err
+	}
+	joined["slices"] = joinedSlices
+	joinedRaw, err := json.Marshal(joined)
+	if err != nil {
+		return nil, fmt.Errorf("emschema: joining %s: %w", dir, err)
+	}
+	// a problem is named in the file it is in, as the support check names it
+	locate := func(ptr string) string {
+		parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
+		if len(parts) >= 2 && parts[0] == "slices" {
+			if i, err := strconv.Atoi(parts[1]); err == nil && i < len(m.Slices) {
+				rest := ""
+				if len(parts) == 3 {
+					rest = "/" + parts[2]
+				}
+				return filepath.ToSlash(m.Slices[i]) + rest
+			}
+		}
+		if f, ok := registryFile[parts[0]]; ok && parts[0] != "" {
+			return f + strings.TrimPrefix(ptr, "/"+parts[0])
+		}
+		return "manifest.json" + ptr
+	}
+	if err := validateDocument(filepath.Base(dir), joinedRaw, locate); err != nil {
 		return nil, err
 	}
 	return doc, nil
