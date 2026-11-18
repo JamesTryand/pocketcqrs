@@ -356,16 +356,11 @@ func (m *mapper) mapAutomation(s Slice) {
 	if s.Effect != nil {
 		g := s
 		g.Outcomes = s.Effect.GaveUp.Outcomes
-		// the answer and the give-up are alternatives, either of which may be
-		// the first on the stream; a stream has one beginning, so the answer
-		// keeps the create and the give-up (sent only when no answer came) is
-		// an upsert: neither guard
-		gc := m.command(agg, s.Effect.GaveUp.CommandID, gaveUpCmd, s.Effect.GaveUp.ResultEventIDs, false, false)
-		if isCreate {
-			m.rep.warnf("automation %q: its give-up %q may begin the stream as its answer %q does; a stream has one "+
-				"beginning, so the answer is the create and the give-up runs on a fresh or existing stream alike",
-				s.ID, s.Effect.GaveUp.CommandID, s.CommandID)
-		}
+		// the answer and the give-up are alternatives: either may begin the
+		// stream, guarded alike, so whichever comes first begins it and the
+		// other is refused ("already exists"): a call has exactly one outcome
+		// (hub L16: several commands may begin a stream)
+		gc := m.command(agg, s.Effect.GaveUp.CommandID, gaveUpCmd, s.Effect.GaveUp.ResultEventIDs, isCreate, !hasCreate)
 		gc.Outcomes = m.mapOutcomes(g, s.Effect.GaveUp.ResultEventIDs, gc.Events)
 		target.Commands = append(target.Commands, gc)
 	}

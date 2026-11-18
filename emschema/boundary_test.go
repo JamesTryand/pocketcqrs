@@ -38,6 +38,10 @@ func TestBoundaryPartsImport(t *testing.T) {
 			}
 		case "auto-ship-slice":
 			delete(s, "outcomes")
+		case "notify-shipping-partner-slice":
+			// either outcome may begin the stream, and the other is then refused
+			// (hub L16): a call has exactly one outcome
+			s["scenarios"] = append(s["scenarios"].([]any), oneOutcome...)
 		}
 	}
 	b, _ := json.Marshal(d)
@@ -99,9 +103,27 @@ func TestBoundaryPartsImport(t *testing.T) {
 			t.Errorf("%s/%s: %s", r.SliceID, r.ScenarioID, r.Detail)
 		}
 	}
-	if ran != 4 {
-		t.Errorf("want the 4 boundary scenarios run, got %d", ran)
+	if ran != 6 {
+		t.Errorf("want the 6 boundary scenarios run, got %d", ran)
 	}
+}
+
+// oneOutcome: once a call is answered its give-up is refused, and the other
+// way round (several commands may begin a stream, each refused once it has).
+var oneOutcome = []any{
+	map[string]any{"id": "no-give-up-after-an-answer", "name": "no give-up after an answer", "kind": "error",
+		"given": []any{
+			map[string]any{"eventId": "order-shipped", "data": map[string]any{"orderId": "order-1"}},
+			map[string]any{"eventId": "shipment-notified", "data": map[string]any{"orderId": "order-1"}}},
+		"when": map[string]any{"commandId": "record-partner-notification-abandoned",
+			"data": map[string]any{"orderId": "order-1", "reason": "timed out"}},
+		"then": map[string]any{"error": map[string]any{"message": "shipment notice already exists"}}},
+	map[string]any{"id": "no-answer-after-a-give-up", "name": "no answer after a give-up", "kind": "error",
+		"given": []any{
+			map[string]any{"eventId": "order-shipped", "data": map[string]any{"orderId": "order-1"}},
+			map[string]any{"eventId": "partner-notification-abandoned", "data": map[string]any{"orderId": "order-1"}}},
+		"when": map[string]any{"commandId": "record-partner-notified", "data": map[string]any{"orderId": "order-1"}},
+		"then": map[string]any{"error": map[string]any{"message": "shipment notice already exists"}}},
 }
 
 // An output's fields must be on each of its trigger events: what leaves is

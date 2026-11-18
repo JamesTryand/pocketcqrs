@@ -385,7 +385,6 @@ func (d Domain) Validate() error {
 	}
 
 	seenCmd, seenEvent := map[string]bool{}, map[string]bool{}
-	creates := 0
 	for i, c := range d.Commands {
 		if !identifier.MatchString(c.Name) {
 			add("command %d: name %q must be a letter followed by letters, digits or underscores", i+1, c.Name)
@@ -412,9 +411,6 @@ func (d Domain) Validate() error {
 				}
 			}
 		}
-		if c.Once {
-			creates++
-		}
 		if c.Once && c.RequiresExisting {
 			add("command %q cannot be both the create and require an existing aggregate", c.Name)
 		}
@@ -427,9 +423,10 @@ func (d Domain) Validate() error {
 			}
 		}
 	}
-	if creates > 1 {
-		add("more than one command is marked as the create; a stream has one beginning")
-	}
+	// Several commands may begin a stream (hub QUESTIONS L16, 2026-11-18): each
+	// is refused as "already exists" once any event is on it, so whichever
+	// comes first begins it and the rest are refused (an effect's answer and
+	// give-up: a call has exactly one outcome).
 
 	// NOTE: an event produced by more than one command is NOT an error. A
 	// schema document may legitimately reference one event id from several

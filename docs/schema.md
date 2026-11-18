@@ -92,8 +92,9 @@ in them is generated:
   it after the delay is its source's;
 - an automation with an **effect** generates its answer and its give-up
   commands but no reactor: the call is its source's (an ext-caller rule). The
-  answer is the stream's create; the give-up runs on a fresh or an existing
-  stream alike, since either may come first and a stream has one beginning;
+  answer and the give-up may each begin the stream (v0.26.0), and whichever
+  comes first does: the other is refused as "already exists", so a call has
+  exactly one outcome;
 - an **output** generates nothing; import checks each field it says leaves is
   on its trigger events, and reports it.
 

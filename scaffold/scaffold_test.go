@@ -112,11 +112,28 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 		"aggregate name",          // invalid name
 		`command 1: name "Do It"`, // space in a command name
 		"type \"guess\"",          // unknown field type
-		"more than one command",   // two creates
 		`command "Silent" records no event`,
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("validation did not mention %q: %v", want, err)
+		}
+	}
+}
+
+// Several commands may begin a stream (hub QUESTIONS L16): two creates are no
+// longer a validation error; each is refused once the stream has begun.
+func TestSeveralCommandsMayBeginAStream(t *testing.T) {
+	d := Domain{Aggregate: "notice", Commands: []Command{
+		{Name: "RecordAnswer", Once: true, Events: []Event{{Name: "Answered", NoFields: true}}},
+		{Name: "RecordGiveUp", Once: true, Events: []Event{{Name: "GaveUp", NoFields: true}}},
+	}}
+	files, err := d.Generate()
+	if err != nil {
+		t.Fatalf("two creates refused: %v", err)
+	}
+	for _, f := range files {
+		if f.Kind == "decider" && strings.Count(f.Source, "throw new Error('notice already exists')") != 2 {
+			t.Errorf("both creates must refuse an existing stream: %s", f.Source)
 		}
 	}
 }

@@ -3,6 +3,17 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.26.0 — several commands may begin a stream
+
+### Changed
+
+- **More than one command may be a stream's create** (hub QUESTIONS L16). Each is refused as "already exists" once any
+  event is on the stream, so whichever comes first begins it and the others are refused. The scaffold refused a domain
+  with two creates ("a stream has one beginning"); it no longer does.
+- **An effect's answer and give-up both begin the stream**, guarded alike, so a call has exactly one outcome: a give-up
+  after an answer, or an answer after a give-up, is refused. In v0.25.0 the give-up was unguarded, so one arriving after
+  an answer was still recorded.
+
 ## v0.25.0 — eventmodelschema 6.0.0: the boundary parts are read
 
 ### Changed (breaking)
