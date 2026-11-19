@@ -619,6 +619,24 @@ func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer, head *int64) 
 		return fail(err)
 	}
 	_, commits := c.(Committer)
+	// A consumer that is neither a committer nor an effect saves its position once per batch rather than once per
+	// event: it is idempotent by contract (Consumer.Apply), so a crash replays at most one batch into it, harmlessly.
+	// On a store that syncs every commit (events.db: WAL, synchronous FULL) a save per event costs a disk sync per
+	// event per consumer; on n2's disk, 46 ms each, a burst of 150 sign-ups left personal data's read models about
+	// 40 s behind (hub NEEDS, 2026-11-19). An effect acts on the world, so it keeps a save per event: a replay would act
+	// again. Whatever stops the batch early (a failing event, a stop) saves the position reached first.
+	perBatch := !commits && !IsEffect(c)
+	saved := pos
+	flush := func() error {
+		if !perBatch || pos == saved {
+			return nil
+		}
+		if err := checkpoints.SaveCheckpoint(ctx, name, pos); err != nil {
+			return err
+		}
+		saved = pos
+		return nil
+	}
 	for {
 		batch, err := e.source.Poll(ctx, pos, 100)
 		if err != nil {
@@ -634,10 +652,14 @@ func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer, head *int64) 
 			if err := deliver(ctx, c, ev); err != nil {
 				e.logger("consumer apply error",
 					"consumer", name, "position", ev.Position, "error", err)
+				// keep what was applied before the failing event, so the retry starts at it
+				if ferr := flush(); ferr != nil {
+					return fail(errors.Join(err, ferr))
+				}
 				return fail(err)
 			}
 			// a committer recorded its position with the event's effects
-			if !commits {
+			if !commits && !perBatch {
 				if err := checkpoints.SaveCheckpoint(ctx, name, ev.Position); err != nil {
 					return fail(err)
 				}
@@ -645,8 +667,14 @@ func (e *Engine) runOnceFor(ctx, stop context.Context, c Consumer, head *int64) 
 			pos = ev.Position
 			blocked = false
 			if stop.Err() != nil {
+				if err := flush(); err != nil {
+					return fail(err)
+				}
 				return nil
 			}
+		}
+		if err := flush(); err != nil {
+			return fail(err)
 		}
 	}
 	e.record(name, progress{checkpoint: pos, head: head})
