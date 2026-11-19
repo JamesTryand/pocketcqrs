@@ -3,6 +3,20 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.29.0 — a consumer that only reads the log saves its position once per batch
+
+### Changed
+
+- **A consumer that is neither a committer nor an effect saves its checkpoint once per batch** (the engine polls 100
+  events at a time), not once per event: a search index, the key destroyer, the cache evictor, a plain projection,
+  federation's publisher. Each is idempotent by contract (`Consumer.Apply`), so a crash replays at most one batch into
+  it. A failure part way through a batch saves the position before the failing event, and a stop the position reached.
+  An effect (a reactor, an event function, the external caller, the retention governor) still saves once per event,
+  since a replay would act again, and a committer (a projection writing its rows and position in one transaction) is
+  unchanged. Found by the landing-pages kill test on n2 (hub NEEDS, 2026-11-19): `events.db` syncs every commit, and
+  on a disk taking 46 ms a sync, a burst of 150 sign-ups left personal data's read models 30 to 40 s behind, one
+  consumer's checkpoint after another; with this change about 2 s.
+
 ## v0.28.0 — a system's edges, generated from a coordinating document
 
 ### Added
