@@ -1,7 +1,16 @@
-// Package queryroute serves a read model over HTTP: one generated GET
-// route per read model, at /api/cqrs/rm/{collection}. It is the read path
-// for personal data — the port of dotnetcqrs's generated read-model query
+// Package queryroute serves a read model over HTTP: one generated route
+// per read model, at /api/cqrs/rm/{collection}. It is the read path for
+// personal data — the port of dotnetcqrs's generated read-model query
 // routes — and works the same for a read model without any.
+//
+// A query is a GET with its terms in the query string, or a POST with the
+// same terms as a JSON object body ({"email":"a@b.example","perPage":20}:
+// each value a string or a number, one per term; 64 KiB at most), so a
+// search by a personal field never has to be in a URL. Both answer the
+// same: the same access rules, paging, reveals, errors and body. A body
+// that is not such an object is 400. Config.RefusePersonalTermsInURL
+// (off by default; to be turned on once callers have moved, decided
+// 2026-11-21) makes a GET searching a personal field a 400 naming POST.
 //
 // What it guarantees (decided 2026-10-06):
 //
@@ -26,10 +35,13 @@
 package queryroute
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -104,6 +116,14 @@ type Config struct {
 	// Indexes holds each read model's registered search (searchindex.Register),
 	// by collection; required for a spec with Match filters.
 	Indexes map[string]*searchindex.Index
+	// RefusePersonalTermsInURL answers 400 to a GET whose query string
+	// searches a personal-data match filter, telling the caller to send
+	// the search as POST (its terms in the body), so a person's email or
+	// address never sits in a URL, where access logs, proxies and browser
+	// history keep it. Off by default while callers move to POST; it will
+	// be turned on once they have (decided 2026-11-21). The live route is
+	// not affected.
+	RefusePersonalTermsInURL bool
 	// Logger may be nil.
 	Logger func(msg string, args ...any)
 }
@@ -194,6 +214,11 @@ func Register(se *core.ServeEvent, spec Spec, cfg Config) error {
 	se.Router.GET(PathPrefix+spec.Collection, func(re *core.RequestEvent) error {
 		return serve(re, spec, cfg)
 	}).Bind(apis.RequireAuth())
+	// the same query with its terms in the body, so a search by a personal
+	// field never has to be in a URL
+	se.Router.POST(PathPrefix+spec.Collection, func(re *core.RequestEvent) error {
+		return servePost(re, spec, cfg)
+	}).Bind(apis.RequireAuth())
 	// its live route: the same result, pushed when it changes (see live).
 	// A read model whose record API is locked gets no PocketBase realtime,
 	// so this is how a screen stays current for it.
@@ -227,10 +252,12 @@ func LockRecordAPI(app core.App, collection string, logger func(string, ...any))
 	return nil
 }
 
-// answer is the route's result for this request: its status and its JSON
+// answer is the route's result for this request and these terms (the GET's
+// query string or the POST's body, one shape): its status and its JSON
 // body. The read route sends it once; the live route sends it again
-// whenever it changes, so both apply the same access rules.
-func answer(re *core.RequestEvent, spec Spec, cfg Config) (int, any) {
+// whenever it changes, so all of them apply the same access rules. terms
+// is not changed.
+func answer(re *core.RequestEvent, spec Spec, cfg Config, terms url.Values) (int, any) {
 	// who may see what (the whole rule of schema 3.8.0): a role holder sees
 	// every row; anyone else their own rows (SelfSubject) and those a
 	// granting scope admits for their subject id; with none of those, a
@@ -266,7 +293,10 @@ func answer(re *core.RequestEvent, spec Spec, cfg Config) (int, any) {
 		}
 	}
 
-	query := re.Request.URL.Query()
+	query := make(url.Values, len(terms)) // answer deletes the terms it has used
+	for k, v := range terms {
+		query[k] = v
+	}
 	// selfAccess.param narrows anyone, role holders too, to their own rows
 	narrowToSelf := false
 	if spec.SelfParam != "" {
@@ -381,8 +411,74 @@ func answer(re *core.RequestEvent, spec Spec, cfg Config) (int, any) {
 }
 
 func serve(re *core.RequestEvent, spec Spec, cfg Config) error {
-	status, body := answer(re, spec, cfg)
-	return re.JSON(status, body)
+	query := re.Request.URL.Query()
+	if cfg.RefusePersonalTermsInURL {
+		for _, f := range spec.Match {
+			if _, ok := query[f.Param]; ok && f.PII {
+				return re.JSON(failed(http.StatusBadRequest, fmt.Sprintf(
+					"'%s' searches personal data, which must not be in a URL: send the search as POST %s%s "+
+						"with the terms in a JSON object body", f.Param, PathPrefix, spec.Collection)))
+			}
+		}
+	}
+	return re.JSON(answer(re, spec, cfg, query))
+}
+
+// maxQueryBody caps a POST query's body: its terms are a few short values.
+const maxQueryBody = 64 << 10
+
+// servePost answers a query whose terms are a JSON object body instead of
+// the query string: the same keys, each value a string or a number.
+func servePost(re *core.RequestEvent, spec Spec, cfg Config) error {
+	terms, status, msg := termsOf(re)
+	if status != 0 {
+		return re.JSON(failed(status, msg))
+	}
+	return re.JSON(answer(re, spec, cfg, terms))
+}
+
+// termsOf reads a POST query's body as the query string it stands for. An
+// empty body is no terms, as on the command route.
+func termsOf(re *core.RequestEvent) (url.Values, int, string) {
+	const notObject = "the body must be a JSON object of query terms, each a string or a number"
+	raw, err := io.ReadAll(http.MaxBytesReader(re.Response, re.Request.Body, maxQueryBody))
+	var tooBig *http.MaxBytesError
+	switch {
+	case errors.As(err, &tooBig):
+		return nil, http.StatusRequestEntityTooLarge, fmt.Sprintf("the body is over %d bytes", maxQueryBody)
+	case err != nil:
+		return nil, http.StatusBadRequest, "reading the body: " + err.Error()
+	}
+	terms := url.Values{}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return terms, 0, ""
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var body any
+	if err := dec.Decode(&body); err != nil {
+		return nil, http.StatusBadRequest, notObject
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, http.StatusBadRequest, notObject
+	}
+	obj, ok := body.(map[string]any)
+	if !ok {
+		return nil, http.StatusBadRequest, notObject
+	}
+	for k, v := range obj {
+		switch v := v.(type) {
+		case string:
+			terms.Set(k, v)
+		case json.Number:
+			terms.Set(k, v.String())
+		default:
+			// the query string takes one value per term, so a list is refused
+			// rather than read as its first value
+			return nil, http.StatusBadRequest, fmt.Sprintf("'%s' must be a string or a number", k)
+		}
+	}
+	return terms, 0, ""
 }
 
 func failed(status int, msg string) (int, any) {

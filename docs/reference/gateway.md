@@ -1,6 +1,6 @@
 # Gateway (HTTP) reference
 
-PocketCQRS adds four route groups to the stock PocketBase API (which serves
+PocketCQRS adds five route groups to the stock PocketBase API (which serves
 queries unchanged — see any PocketBase docs for `/api/collections/...`).
 
 ## Commands
@@ -73,6 +73,35 @@ key is replayable for a bounded window rather than forever.
 and the reaction's index — so an at-least-once redelivery of the same event is
 recognised and skipped rather than relying on the target having a uniqueness
 rule of its own.
+
+## Read models
+
+```
+GET  /api/cqrs/rm/{collection}?name=al&perPage=20
+POST /api/cqrs/rm/{collection}        {"email":"a@b.example","perPage":20}
+GET  /api/cqrs/rm/{collection}/live?...
+```
+
+A read model's generated route (package `queryroute`; Go target). The GET takes
+its terms in the query string: a plain column's value as a filter, a `match`
+filter's search, `page`, `perPage` (at most 500) and `sort` (`-` for
+descending). The POST takes **the same terms as a JSON object body**, each value
+a string or a number, one per term (a list is a `400`), at most 64 KiB (`413`
+over it); an empty body is no terms. It answers exactly what the GET answers:
+the same access rules, self-access, paging, reveals, errors and body. A body
+that is not a JSON object is a `400`.
+
+**Send a search by a personal field (an email, an address) as POST**, so the
+term is never in a URL, where access logs, proxies and browser history keep
+it. A GET doing so works for now, while callers move; the host option
+`queryroute.Config.RefusePersonalTermsInURL` (off by default) answers it `400`,
+naming POST, and will be turned on once callers have moved (decided
+2026-11-21). The live route (server-sent events, see
+[personal data](../personal-data.md#watching-it-live)) is GET only and not
+affected by the option.
+
+Auth: a token is required (`401` without one); who sees which rows is the read
+model's declaration, described in [personal data](../personal-data.md#reading-it-back).
 
 ## HTTP functions
 

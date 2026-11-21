@@ -384,7 +384,9 @@ Outside a module it writes only the aggregates and prints the lines instead.
 - **Searches** by a personal field (`match` filters): a `search.db` in the
   data directory, keyed by `KMS_INDEX_KEY`.
 
-`Serve` registers every read model's route (`GET /api/cqrs/rm/{collection}`),
+`Serve` registers every read model's route (`GET /api/cqrs/rm/{collection}`,
+and `POST` with the same terms in a JSON body, the way to send a search by a
+personal field; see the [gateway reference](reference/gateway.md#read-models)),
 which checks the role the document gives it, and self-access where the
 document declares it. Nothing generated names a source of messages (no
 schedule, URL or credential): those are configured outside the program.

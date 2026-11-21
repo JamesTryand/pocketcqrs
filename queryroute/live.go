@@ -100,7 +100,7 @@ func live(re *core.RequestEvent, spec Spec, cfg Config) error {
 	notices, unsubscribe := h.subscribe(spec.Collection)
 	defer unsubscribe()
 
-	status, body := answer(re, spec, cfg)
+	status, body := answer(re, spec, cfg, re.Request.URL.Query())
 	if status != http.StatusOK {
 		return re.JSON(status, body) // refused (or failing) before any stream
 	}
@@ -150,7 +150,7 @@ func live(re *core.RequestEvent, spec Spec, cfg Config) error {
 			_ = send("expired", map[string]string{"reason": "the token expired; open the view again"})
 			return nil
 		case <-notices:
-			status, body := answer(re, spec, cfg)
+			status, body := answer(re, spec, cfg, re.Request.URL.Query())
 			event := "view"
 			if status != http.StatusOK {
 				event = "error" // e.g. the key service is down: say so, keep the stream

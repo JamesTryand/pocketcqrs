@@ -3,6 +3,21 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.30.0 — a read-model query can be a POST, so a personal search is never in a URL
+
+### Added
+
+- **`POST /api/cqrs/rm/{collection}`** beside each read model's GET (hub QUESTIONS Q1, decided 2026-11-21): the
+  GET's query terms as a JSON object body, `{"email":"a@b.example","perPage":20}`, each value a string or a number,
+  one per term, at most 64 KiB. It answers exactly what the GET answers (the same access rules, self-access, paging,
+  reveals, errors and body): both go through one function. A body that is not a JSON object, or a value that is a
+  list, an object, a boolean or null, is a `400`; an empty body is no terms; over the cap is a `413`. A search by a
+  personal field (an email, an address) sent this way never sits in a URL, where access logs, proxies and browser
+  history keep it.
+- **`queryroute.Config.RefusePersonalTermsInURL`**, off by default: a GET whose query string searches a personal
+  `match` filter is a `400` telling the caller to use POST. It will be turned on once callers have moved; until then
+  such a GET still works. The live route (`/live`, GET only) is not affected.
+
 ## v0.29.0 — a consumer that only reads the log saves its position once per batch
 
 ### Changed

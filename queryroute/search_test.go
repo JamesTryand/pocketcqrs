@@ -26,10 +26,11 @@ var (
 	byName  = searchindex.Field{Param: "name", Field: "name", Mode: match.Prefix, MinPrefix: 2}
 )
 
-// TestMatchFiltersSearchThroughTheRoute drives the whole read path: events
-// indexed into search.db, the read model's rows holding envelopes, and
-// searches through GET /api/cqrs/rm/customers.
-func TestMatchFiltersSearchThroughTheRoute(t *testing.T) {
+// searchSetup serves customers with two match filters (email a hashed
+// search over personal data, name a plain prefix), indexed from events
+// into search.db. tune, when set, changes the route's Config.
+func searchSetup(t *testing.T, tune func(*queryroute.Config)) *fixture {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	m := kms.NewMemory()
@@ -114,13 +115,23 @@ func TestMatchFiltersSearchThroughTheRoute(t *testing.T) {
 		ResolveOwnRole: func(a *core.Record) string { return a.GetString("role") },
 		SubjectOf:      func(a *core.Record) string { return a.GetString("subjectId") },
 	}
+	if tune != nil {
+		tune(&cfg)
+	}
 	if err := queryroute.Register(se, spec, cfg); err != nil {
 		t.Fatal(err)
 	}
 	mux, _ := router.BuildMux()
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	f := &fixture{srv: srv, tokens: map[string]string{"agent": agent, "alice": alice}}
+	return &fixture{srv: srv, tokens: map[string]string{"agent": agent, "alice": alice}}
+}
+
+// TestMatchFiltersSearchThroughTheRoute drives the whole read path: events
+// indexed into search.db, the read model's rows holding envelopes, and
+// searches through GET /api/cqrs/rm/customers.
+func TestMatchFiltersSearchThroughTheRoute(t *testing.T) {
+	f := searchSetup(t, nil)
 
 	get := func(who, q string) (int, map[string]map[string]any) {
 		status, body := f.get(t, who, "/api/cqrs/rm/customers"+q)

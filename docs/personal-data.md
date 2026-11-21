@@ -42,7 +42,7 @@ a person who returns is a new subject with a new id.** Use an opaque id, never t
 | `Decide` | Sees plaintext when it reads a value: the shell decrypts on demand and runs `Decide` again, which is safe because it is pure. A value only copied forward is never decrypted. |
 | Append | Fresh values are encrypted under their subject's key. A value can't be stored under a different subject than it was sealed for. Without the generated protector, the command fails rather than store plaintext. |
 | Projection | Stores the `{"$pii":{"s":...,"c":...}}` envelope text as it is. |
-| Read route | `GET /api/cqrs/rm/{collection}` decrypts each page with one batch call per subject. |
+| Read route | `GET /api/cqrs/rm/{collection}` (or `POST` with the terms in a JSON body) decrypts each page with one batch call per subject. |
 
 Status codes: an erased subject is `410`; the key service being unavailable is `503` (retry);
 a missing key is a `500` wiring fault.
@@ -62,6 +62,12 @@ Each read model gets a generated route spec (`<collection>_query.go`) served by 
   personal data is never readable by default, and self-access is no longer implied by the data.
 - **Erased values** read `{"$redacted":true}`, distinct from `null`.
 - **A pii column can't be filtered or sorted on** (`400`): it is ciphertext.
+- **A query can be a POST.** `POST /api/cqrs/rm/{collection}` takes the GET's query terms as a
+  JSON object body (`{"email":"a@b.example","perPage":20}`, each value a string or a number) and
+  answers exactly what the GET does. **Send a search by a personal field this way**, so the term
+  is never in a URL (access logs, proxies, browser history). `Config.RefusePersonalTermsInURL`
+  (off by default) makes a GET searching a personal field a `400` naming POST; it will be turned
+  on once callers have moved. See the [gateway reference](reference/gateway.md#read-models).
 - **Registering the route locks the collection.** Its List and View rules are set to
   superuser-only, so PocketBase's own record API (list, view, realtime, expand) refuses everyone
   else. The route is the only read path.
