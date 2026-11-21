@@ -197,18 +197,38 @@ const HandMarker = "$hand:"
 
 // goOutcomeEvent writes the code building one non-repeated event of an
 // outcome into variable v, as a single event is built (its fields from the
-// command's payload), with the outcome's set values on top.
-func goOutcomeEvent(b *strings.Builder, v string, e Event, set map[string]any, fieldGoType func(name, typ string) string) {
+// command's payload), with the outcome's set values on top. An event carrying
+// personal data (isPII names its fields) is built as the single-event path
+// builds it: its named payload type, each sealed value resolved from the
+// command, returned as a typed Payload for the Protector to encrypt. Marshalled
+// here, a fresh value would be refused ("pii: refusing to marshal an
+// unencrypted value"; L-008, 2026-11-21).
+func goOutcomeEvent(b *strings.Builder, v string, e Event, set map[string]any, fieldGoType func(name, typ string) string, isPII func(name string) bool) {
 	if len(e.Fields) == 0 {
 		fmt.Fprintf(b, "\t\t\t\t%s := events.NewEvent{Type: %s, Data: json.RawMessage(\"{}\")}\n", v, e.Name)
 		return
 	}
-	fmt.Fprintf(b, "\t\t\t\tvar %sData struct {\n", v)
+	personal := false
 	for _, f := range e.Fields {
-		fmt.Fprintf(b, "\t\t\t\t\t%s %s `json:%q`\n", ExportName(f.Name), fieldGoType(f.Name, f.Type), f.Name)
+		personal = personal || isPII(f.Name)
 	}
-	b.WriteString("\t\t\t\t}\n")
+	if personal {
+		fmt.Fprintf(b, "\t\t\t\tvar %sData %sData\n", v, ExportName(e.Name))
+	} else {
+		fmt.Fprintf(b, "\t\t\t\tvar %sData struct {\n", v)
+		for _, f := range e.Fields {
+			fmt.Fprintf(b, "\t\t\t\t\t%s %s `json:%q`\n", ExportName(f.Name), fieldGoType(f.Name, f.Type), f.Name)
+		}
+		b.WriteString("\t\t\t\t}\n")
+	}
 	fmt.Fprintf(b, "\t\t\t\tif err := json.Unmarshal(cmd.Payload, &%sData); err != nil {\n\t\t\t\t\treturn nil, err\n\t\t\t\t}\n", v)
+	if personal {
+		for _, f := range e.Fields {
+			if isPII(f.Name) {
+				fmt.Fprintf(b, "\t\t\t\tif err := pii.ResolveIn(cmd, &%sData.%s); err != nil {\n\t\t\t\t\treturn nil, err\n\t\t\t\t}\n", v, ExportName(f.Name))
+			}
+		}
+	}
 	names := make([]string, 0, len(set))
 	for k := range set {
 		names = append(names, k)
@@ -216,6 +236,10 @@ func goOutcomeEvent(b *strings.Builder, v string, e Event, set map[string]any, f
 	sort.Strings(names)
 	for _, k := range names {
 		fmt.Fprintf(b, "\t\t\t\t%sData.%s = %s\n", v, ExportName(k), goLiteral(set[k]))
+	}
+	if personal {
+		fmt.Fprintf(b, "\t\t\t\t%s := events.NewEvent{Type: %s, Payload: &%sData}\n", v, e.Name, v)
+		return
 	}
 	fmt.Fprintf(b, "\t\t\t\t%sBytes, err := json.Marshal(%sData)\n\t\t\t\tif err != nil {\n\t\t\t\t\treturn nil, err\n\t\t\t\t}\n", v, v)
 	fmt.Fprintf(b, "\t\t\t\t%s := events.NewEvent{Type: %s, Data: %sBytes}\n", v, e.Name, v)
@@ -253,7 +277,7 @@ func goOutcomeTest(c Command, i int, o Outcome) string {
 
 // writeGoOutcomes emits a command's alternatives, in order, after its
 // refusals: each a block returning its events.
-func writeGoOutcomes(b *strings.Builder, c Command, fieldGoType func(name, typ string) string) {
+func writeGoOutcomes(b *strings.Builder, c Command, fieldGoType func(name, typ string) string, isPII func(name string) bool) {
 	b.WriteString("\t\t\t\t// outcomes (schema 3.12.0), in order: the first whose condition holds is the result\n")
 	readsCommand := false
 	for _, o := range c.Outcomes {
@@ -286,7 +310,7 @@ func writeGoOutcomes(b *strings.Builder, c Command, fieldGoType func(name, typ s
 				continue
 			}
 			v := fmt.Sprintf("e%d", k)
-			goOutcomeEvent(b, v, byName[name], o.Set[name], fieldGoType)
+			goOutcomeEvent(b, v, byName[name], o.Set[name], fieldGoType, isPII)
 			fmt.Fprintf(b, "\t\t\t\tout = append(out, %s)\n", v)
 		}
 		b.WriteString("\t\t\t\treturn out, nil\n\t\t\t\t}\n")

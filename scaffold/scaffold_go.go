@@ -479,7 +479,7 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 		writeGoOwnership(&b, c)
 		writeGoRefusals(&b, c)
 		if len(c.Outcomes) > 0 {
-			writeGoOutcomes(&b, c, fieldGoType)
+			writeGoOutcomes(&b, c, fieldGoType, func(name string) bool { _, ok := piiOf[name]; return ok })
 			continue
 		}
 		if len(c.Events) > 1 {

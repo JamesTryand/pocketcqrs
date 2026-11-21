@@ -227,11 +227,50 @@ func TestGeneratedEvolveReadsTheEnvelopeAsPending(t *testing.T) {
 // generated decider, protector and projection compile against real
 // pocketcqrs packages, and the generated protector really encrypts.
 func TestGeneratedPIIDomainCompilesAndProtects(t *testing.T) {
+	runGeneratedPII(t, piiDomain(), generatedPIIBehaviour)
+}
+
+// piiOutcomeDomain is piiDomain with an outcome that fixes a field on the
+// event carrying personal data (L-008, found in landing-pages 2026-11-08: the
+// Go decider marshalled the fresh email itself and was refused, "pii:
+// refusing to marshal an unencrypted value").
+func piiOutcomeDomain() Domain {
+	d := piiDomain()
+	c := &d.Commands[0]
+	c.Events[0].Fields = append(c.Events[0].Fields, Field{Name: "status", Type: "text"})
+	c.Outcomes = []Outcome{{Events: []string{"CustomerRegistered"},
+		Set: map[string]map[string]any{"CustomerRegistered": {"status": "Registered"}}}}
+	return d
+}
+
+const piiOutcomeBehaviour = `
+func TestAnOutcomeSettingAFieldKeepsPersonalDataSealed(t *testing.T) {
+	reg, _ := setup(t, true)
+	evs, err := reg.Handle(context.Background(), "customer", "c1", decider.Command{Name: "RegisterCustomer", Payload: json.RawMessage(alice)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := string(evs[0].Data)
+	if strings.Contains(data, "alice@") || !strings.Contains(data, "$pii") || !strings.Contains(data, "Alice") ||
+		!strings.Contains(data, ` + "`" + `"status":"Registered"` + "`" + `) {
+		t.Fatalf("email sealed, name plain, status set by the outcome: %s", data)
+	}
+}
+`
+
+func TestGeneratedPIIOutcomeSetCompilesAndProtects(t *testing.T) {
+	runGeneratedPII(t, piiOutcomeDomain(), generatedPIIBehaviour+piiOutcomeBehaviour)
+}
+
+// runGeneratedPII generates d into a throwaway module against this checkout
+// and runs behaviour (in the generated package) there.
+func runGeneratedPII(t *testing.T, d Domain, behaviour string) {
+	t.Helper()
 	repoRoot, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := piiDomain().GenerateGo()
+	files, err := d.GenerateGo()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +286,7 @@ func TestGeneratedPIIDomainCompilesAndProtects(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "behaviour_test.go"), []byte(generatedPIIBehaviour), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "behaviour_test.go"), []byte(behaviour), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	env := append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
