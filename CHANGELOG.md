@@ -3,6 +3,18 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.31.1 — an outcome may set a field on an event carrying personal data (Go)
+
+### Fixed
+
+- **A Go decider whose outcome sets a field on an event carrying personal data no longer fails** with "pii: refusing
+  to marshal an unencrypted value" (L-008, found in landing-pages 2026-11-08). The generated code built that event by
+  marshalling the payload itself, fresh personal data included; it now builds it as a single-event command does: its
+  named payload type, each sealed value resolved from the command, returned as a typed `Payload` for the generated
+  Protector to encrypt before append. The outcome's set values go on top as before. A test generating such a domain
+  failed first ("refusing to marshal") and now passes; landing-pages' personal-data model with a `status` field set by an
+  outcome on `capture-contact-slice` verifies with `--lang go` (37 scenarios). The JS target was not affected.
+
 ## v0.31.0 — the command gateway meets the gateway HTTP contract v0.1
 
 The command gateway's answers are now the command gateway HTTP contract v0.1 (platform/cqrs-runtime-contract
