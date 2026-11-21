@@ -28,6 +28,14 @@ import (
 // wrong command; the caller must treat this as a client error.
 var ErrKeyReused = errors.New("idempotency: key already used for a different request")
 
+// DefaultRetention is how long a record is kept before Prune may delete it:
+// at least 7 days, because a payment processor redelivers a notification for
+// days (command gateway contract v0.1, G7). A host may keep records longer.
+const DefaultRetention = 7 * 24 * time.Hour
+
+// MaxKeyLength is the longest Idempotency-Key the gateway accepts (G7).
+const MaxKeyLength = 200
+
 const schema = `
 CREATE TABLE IF NOT EXISTS idempotency_keys (
 	key           TEXT PRIMARY KEY,
@@ -72,8 +80,11 @@ type Result struct {
 //
 //   - No prior record: (nil, nil) — the caller should proceed and Save the
 //     outcome when it has one.
-//   - A prior record with the same requestHash: the stored Result, to
-//     replay verbatim instead of re-deciding the command.
+//   - A prior record with the same requestHash and status 200: the stored
+//     Result, to replay verbatim instead of re-deciding the command.
+//   - A prior record with the same requestHash and any other status (a 409
+//     saved by a gateway older than contract v0.1, which replayed it): (nil,
+//     nil), so the command is decided again. Only a 200 is ever replayed.
 //   - A prior record with a different requestHash: (nil, ErrKeyReused).
 func (s *Store) Lookup(ctx context.Context, key, requestHash string) (*Result, error) {
 	var storedHash, body string
@@ -90,17 +101,23 @@ func (s *Store) Lookup(ctx context.Context, key, requestHash string) (*Result, e
 	if storedHash != requestHash {
 		return nil, ErrKeyReused
 	}
+	if status != 200 {
+		return nil, nil
+	}
 	return &Result{Status: status, Body: json.RawMessage(body)}, nil
 }
 
 // Save records the outcome of the request identified by key and
-// requestHash. If key already has a record (a racing duplicate request
-// saved first), Save is a no-op: the first outcome wins, matching Lookup's
-// replay contract.
+// requestHash. If key already has a 200 record (a racing duplicate request
+// saved first), Save is a no-op: the first 200 wins, matching Lookup's
+// replay contract. A record with any other status (one Lookup never
+// replays) is replaced, so the 200 that follows it is the one kept.
 func (s *Store) Save(ctx context.Context, key, requestHash string, status int, body json.RawMessage) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO idempotency_keys (key, request_hash, status, body) VALUES (?, ?, ?, ?)
-		 ON CONFLICT (key) DO NOTHING`,
+		 ON CONFLICT (key) DO UPDATE SET request_hash = excluded.request_hash, status = excluded.status,
+		   body = excluded.body, created = excluded.created
+		 WHERE idempotency_keys.status <> 200`,
 		key, requestHash, status, string(body))
 	return err
 }

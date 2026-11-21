@@ -18,7 +18,9 @@ import (
 // Only the decider's own verdict is a 400. A failure anywhere else on the
 // command path -- loading or upcasting the stream, the append itself -- is
 // the platform's problem, not the caller's, and must not look like a
-// domain rejection a client would give up on.
+// domain rejection a client would give up on. A failure before the
+// decision (the stream not loading) is 503: nothing was decided (command
+// gateway contract v0.1, G3; it was 500).
 
 func TestDomainRejectionStays400(t *testing.T) {
 	srv := newTestGateway(t, nil)
@@ -31,7 +33,7 @@ func TestDomainRejectionStays400(t *testing.T) {
 	}
 }
 
-func TestInfrastructureFailureIs500NotRejection(t *testing.T) {
+func TestStreamLoadFailureIs503NotRejection(t *testing.T) {
 	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -47,8 +49,8 @@ func TestInfrastructureFailureIs500NotRejection(t *testing.T) {
 		return ev, errors.New("upcaster exploded")
 	})
 	status, body := postCreate(t, srv, "")
-	if status != http.StatusInternalServerError {
-		t.Fatalf("a stream-load failure must be 500, got %d: %s", status, body)
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("a stream-load failure must be 503, got %d: %s", status, body)
 	}
 }
 

@@ -50,12 +50,6 @@ import (
 	"github.com/jamestryand/pocketcqrs/writeguard"
 )
 
-// idempotencyRetention bounds how long a gateway idempotency record is kept
-// before StartPruner deletes it. A client retrying after an ambiguous
-// timeout does so within seconds to minutes, not days; 24h leaves ample
-// margin without letting the table grow unboundedly.
-const idempotencyRetention = 24 * time.Hour
-
 // Node roles for --cqrsRole (see docs/reference/cli.md's "Multi-node"
 // section for the single-writer/multi-reader design). roleMaster is this
 // project's entire behavior before this flag existed; roleSecondary is
@@ -581,6 +575,17 @@ func Run(opts Options) {
 		"how long a command waits for its batch to commit when --cqrsCommandBatching is set "+
 			"before returning 504; matches events.db's own busy_timeout by default",
 	)
+	// how long a gateway idempotency record is kept before the pruner
+	// deletes it: at least 7 days (command gateway contract v0.1, G7),
+	// because a payment processor redelivers a notification for days
+	var idempotencyRetention time.Duration
+	app.RootCmd.PersistentFlags().DurationVar(
+		&idempotencyRetention,
+		"cqrsIdempotencyRetention",
+		idempotency.DefaultRetention,
+		"how long an Idempotency-Key's recorded 200 is kept for replay before it is pruned; "+
+			"the gateway contract asks for at least 7 days (168h, the default)",
+	)
 	var commandQueueMaxDepth int
 	app.RootCmd.PersistentFlags().IntVar(
 		&commandQueueMaxDepth,
@@ -669,6 +674,10 @@ func Run(opts Options) {
 				log.Printf("warning: --%s is set but --cqrsRole=%s never runs its own writer (a secondary forwards or refuses commands, it does not batch or queue them)", name, roleSecondary)
 			}
 		}
+	}
+
+	if idempotencyRetention < idempotency.DefaultRetention {
+		log.Printf("warning: --cqrsIdempotencyRetention=%s is shorter than the gateway contract's 7 days: a redelivery after it is decided again", idempotencyRetention)
 	}
 
 	if forwardAuth && masterAddr == "" {

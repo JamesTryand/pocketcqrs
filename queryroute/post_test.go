@@ -135,3 +135,31 @@ func TestRefusePersonalTermsInURL(t *testing.T) {
 		t.Fatalf("on: the live route's first view is the search's result: %s %s", ev, data)
 	}
 }
+
+// A generated host builds Config in generated code, so the refusal can also
+// be switched on per deployment from the environment.
+func TestRefusePersonalTermsInURLFromEnvironment(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv(queryroute.RefusePersonalTermsInURLEnv, v)
+			f := searchSetup(t, nil)
+			status, body := f.get(t, "agent", "/api/cqrs/rm/customers?email=alice@example.com")
+			if status != 400 || !strings.Contains(body, "POST") {
+				t.Fatalf("%s=%s: a personal term in the URL is a 400 naming POST: %d %s",
+					queryroute.RefusePersonalTermsInURLEnv, v, status, body)
+			}
+			if status, body := f.post(t, "agent", "/api/cqrs/rm/customers", `{"email":"alice@example.com"}`); status != 200 || len(items(t, body)) != 1 {
+				t.Fatalf("the same search by POST works: %d %s", status, body)
+			}
+		})
+	}
+	for _, v := range []string{"", "0", "false", "yes"} {
+		t.Run("off-"+v, func(t *testing.T) {
+			t.Setenv(queryroute.RefusePersonalTermsInURLEnv, v)
+			f := searchSetup(t, nil)
+			if status, body := f.get(t, "agent", "/api/cqrs/rm/customers?email=alice@example.com"); status != 200 || len(items(t, body)) != 1 {
+				t.Fatalf("%s=%q leaves it off: %d %s", queryroute.RefusePersonalTermsInURLEnv, v, status, body)
+			}
+		})
+	}
+}

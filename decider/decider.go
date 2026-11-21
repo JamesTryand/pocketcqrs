@@ -58,6 +58,22 @@ func IsForbidden(err error) bool {
 	return errors.As(err, &f)
 }
 
+// LoadError is the stream failing to load (read or upcast) before the
+// command was decided: nothing was decided and nothing applied, so the
+// gateway answers 503, not 500 (command gateway contract v0.1, G3). It is
+// transparent: Error() is the load's own message and Unwrap exposes it, so
+// errors.Is/As on it (events.IsUnavailable, say) behave as before.
+type LoadError struct{ Err error }
+
+func (e *LoadError) Error() string { return e.Err.Error() }
+func (e *LoadError) Unwrap() error { return e.Err }
+
+// IsLoadFailure reports whether err is (or wraps) a LoadError.
+func IsLoadFailure(err error) bool {
+	var l *LoadError
+	return errors.As(err, &l)
+}
+
 // ErrRevealRequired is what a decide returns (wrapped) when it read a stored
 // personal-data value that hasn't been decrypted yet (package pii's
 // Value.Get on a Pending value). It isn't a verdict: a shell with a
@@ -344,7 +360,7 @@ func (r *Registry) DecideWithMeta(ctx context.Context, loader StreamLoader, aggr
 
 	stream, err := loader.LoadStream(ctx, aggregate, id)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, &LoadError{Err: err}
 	}
 
 	state := d.initial()

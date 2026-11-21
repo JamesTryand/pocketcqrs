@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/jamestryand/pocketcqrs/decider"
 )
 
 // GoFile is one generated Go source file. Its own shape, not File{Kind:
@@ -466,13 +468,13 @@ func (d Domain) deciderGo(pkg string, fields []namedField) string {
 	for _, c := range d.Commands {
 		fmt.Fprintf(&b, "\t\t\tcase %q:\n", c.Name)
 		if c.Once {
-			fmt.Fprintf(&b, "\t\t\t\tif s.Exists {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", Words(d.Aggregate)+" already exists")
+			fmt.Fprintf(&b, "\t\t\t\tif s.Exists {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", decider.AlreadyExistsMessage(d.Aggregate))
 		}
 		if c.Once && !c.CanBeginAgain && d.endsForGood() {
 			fmt.Fprintf(&b, "\t\t\t\tif s.Ended {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", Words(d.Aggregate)+" has ended and cannot begin again")
 		}
 		if c.RequiresExisting {
-			fmt.Fprintf(&b, "\t\t\t\tif !s.Exists {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", Words(d.Aggregate)+" does not exist")
+			fmt.Fprintf(&b, "\t\t\t\tif !s.Exists {\n\t\t\t\t\treturn nil, fmt.Errorf(%q)\n\t\t\t\t}\n", decider.DoesNotExistMessage(d.Aggregate))
 		}
 		writeGoOwnership(&b, c)
 		writeGoRefusals(&b, c)

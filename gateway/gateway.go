@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -120,9 +122,9 @@ type Config struct {
 	//
 	// Returning (false, nil) rejects the request with 403, as does a
 	// *cmdauth.Refusal error, answered with its own message; any other
-	// non-nil error rejects with 500 (this package has no logger to report it through, so
-	// the error becomes the response body, same posture Config.Mode's own
-	// error path already takes). Nil (the default) means every
+	// non-nil error is 503 with Retry-After, since nothing was decided
+	// (this package has no logger to report it through, so the error
+	// becomes the problem's detail, as Config.Mode's own error path does). Nil (the default) means every
 	// authenticated caller may issue every command — today's unchanged
 	// behavior for a deployment that wires nothing here, or for any command
 	// a wired Authorizer's own table has no policy for (except the built-in
@@ -157,14 +159,24 @@ const ErasureRefused = "erasure commands are refused until the host wires an Aut
 // rejected with 503: the write side is paused so schema-bearing functions
 // can be reloaded safely.
 //
-// Returns 200 with the appended events, 400 for a domain rejection (an
-// error returned by the decider's Decide -- see decider.IsRejection), 401
-// without a token, 404 for unknown aggregates, 409 for concurrency
-// conflicts, 503 in maintenance mode or while the event store stays locked
-// (events.IsUnavailable), 504 if Config.Batching is set and the command's
+// The answers are the command gateway contract v0.1 (gateway/contract_test.go
+// is its conformance probe): 200 with {"events":[...]} ([] for none), 400
+// for a domain rejection (an error returned by the decider's Decide -- see
+// decider.IsRejection) or a malformed command, 401 without a valid token,
+// 403 for a caller who may not send it, 404 for unknown aggregates, 409 for
+// concurrency conflicts, 410 for an erased subject, 422 for a reused
+// Idempotency-Key, 503 with Retry-After whenever nothing was applied for
+// want of a dependency before the decision (maintenance mode, the system
+// mode, the Authorize hook or the idempotency record unreadable, the stream
+// failing to load, the event store locked, the key service down, a full
+// queue, a read-only node), 504 if Config.Batching is set and the command's
 // batch does not commit within BatchTimeout, and 500 for any other failure
-// (stream load/upcast, fold, append, a JS decide that timed out) -- never
-// 400, which a client reads as "the domain said no".
+// (fold, append, a JS decide that timed out) -- never 400, which a client
+// reads as "the domain said no". Every answer but a 200 is an RFC 9457
+// problem body (application/problem+json: status, title, detail), the
+// decider's message verbatim in detail, and the two generated refusals
+// carrying reason "does-not-exist" / "already-exists"
+// (decider.RefusalReason).
 //
 // If Config.Batching is set, a command is enqueued and the handler blocks
 // until its own batch commits instead of deciding inline — every
@@ -173,8 +185,10 @@ const ErasureRefused = "erasure commands are refused until the host wires an Aut
 //
 // If Config.Idempotency is set and a request carries an Idempotency-Key
 // header, a retry with the same key and request replays the original 200
-// or 409 response verbatim rather than re-deciding the command; the same
-// key with a different aggregate/id/command/body returns 422.
+// verbatim rather than re-deciding the command (nothing else is recorded:
+// a 409 is decided again); the same key with a different
+// aggregate/id/command/body returns 422, and a key over
+// idempotency.MaxKeyLength characters 400.
 //
 // If Config.Forward is set, every command request is proxied to it
 // immediately — no local Mode check, no local auth check, no local decide —
@@ -194,7 +208,7 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 			// interaction entirely.
 			body, err := io.ReadAll(re.Request.Body)
 			if err != nil {
-				return apis.NewBadRequestError("failed reading request body", err)
+				return problem(re, http.StatusBadRequest, "failed reading request body: "+err.Error(), nil)
 			}
 			re.Request.Body = io.NopCloser(bytes.NewReader(body))
 			re.Request.ContentLength = int64(len(body))
@@ -204,15 +218,14 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		if cfg.Mode != nil {
 			mode, err := cfg.Mode(re.Request.Context())
 			if err != nil {
-				// fail closed: the barrier's state must be known
-				return re.JSON(http.StatusInternalServerError,
-					map[string]string{"error": "failed reading system mode: " + err.Error()})
+				// fail closed: the barrier's state must be known. Nothing
+				// was decided, so it is 503, not 500 (G3)
+				return unavailable(re, "failed reading system mode: "+err.Error(),
+					map[string]any{"hint": "nothing was applied; safe to retry shortly"})
 			}
 			if mode == events.ModeMaintenance {
-				return re.JSON(http.StatusServiceUnavailable, map[string]string{
-					"error": "system is in maintenance mode: domain commands are temporarily rejected",
-					"hint":  "retry after maintenance ends (pocketcqrs system maintenance off)",
-				})
+				return unavailable(re, "system is in maintenance mode: domain commands are temporarily rejected",
+					map[string]any{"hint": "retry after maintenance ends (pocketcqrs system maintenance off)"})
 			}
 		}
 
@@ -221,12 +234,12 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		cmdName := re.Request.PathValue("command")
 
 		if !registry.Has(aggregate) {
-			return apis.NewNotFoundError("unknown aggregate: "+aggregate, nil)
+			return problem(re, http.StatusNotFound, "unknown aggregate: "+aggregate, nil)
 		}
 
 		payload, err := io.ReadAll(re.Request.Body)
 		if err != nil {
-			return apis.NewBadRequestError("failed reading request body", err)
+			return problem(re, http.StatusBadRequest, "failed reading request body: "+err.Error(), nil)
 		}
 		if len(payload) == 0 {
 			payload = []byte(`{}`)
@@ -237,7 +250,11 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		// and other in-process dispatch, which legitimately carry stored
 		// envelopes along, never come through here.
 		if hasPIIEnvelope(payload) {
-			return apis.NewBadRequestError(`command payload contains a "$pii" object; send personal data as plaintext, the platform encrypts it`, nil)
+			return problem(re, http.StatusBadRequest, `command payload contains a "$pii" object; send personal data as plaintext, the platform encrypts it`, nil)
+		}
+		if n := utf8.RuneCountInString(re.Request.Header.Get("Idempotency-Key")); n > idempotency.MaxKeyLength {
+			return problem(re, http.StatusBadRequest,
+				fmt.Sprintf("Idempotency-Key is %d characters; at most %d are accepted", n, idempotency.MaxKeyLength), nil)
 		}
 
 		// Erasure destroys a key and can't be undone, and with no Authorize
@@ -246,31 +263,30 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 		// host wires a policy deciding who may erase whom (E1, as
 		// dotnetcqrs's gateway since 0.19.0). Nothing is recorded.
 		if cfg.Authorize == nil && strings.EqualFold(aggregate, pii.SubjectAggregate) {
-			return re.JSON(http.StatusForbidden, map[string]string{"error": ErasureRefused})
+			return problem(re, http.StatusForbidden, ErasureRefused, nil)
 		}
 
 		if cfg.Authorize != nil {
 			authorized, err := cfg.Authorize(re, aggregate, cmdName, id, payload)
 			var refusal *cmdauth.Refusal
 			if errors.As(err, &refusal) {
-				return re.JSON(http.StatusForbidden, map[string]string{"error": refusal.Error()})
+				return problem(re, http.StatusForbidden, refusal.Error(), nil)
 			}
 			if err != nil {
-				return re.JSON(http.StatusInternalServerError,
-					map[string]string{"error": "authorization check failed: " + err.Error()})
+				// the check could not be made (a role lookup, say): nothing
+				// was decided, so 503, not 500 (G3)
+				return unavailable(re, "authorization check failed: "+err.Error(),
+					map[string]any{"hint": "nothing was applied; safe to retry shortly"})
 			}
 			if !authorized {
-				return re.JSON(http.StatusForbidden, map[string]string{
-					"error": cmdauth.NotAuthorized(cmdName, aggregate),
-				})
+				return problem(re, http.StatusForbidden, cmdauth.NotAuthorized(cmdName, aggregate), nil)
 			}
 		}
 
-		// Idempotency-Key handling. Scoped to the two outcomes a retried
-		// command can actually double-apply or needs to see identically
-		// (success, and the concurrency conflict a redelivered success
-		// produces on retry) — a domain rejection has no side effect, so
-		// simply re-deciding it is already idempotent and is left alone.
+		// Idempotency-Key handling (G7). Only a 200 is recorded and
+		// replayed: every other answer applied nothing, so deciding it again
+		// is already safe, and a 409 in particular must be decided again
+		// (the retry is a new decision, not the lost race replayed).
 		var idemKey, idemHash string
 		if cfg.Idempotency != nil {
 			idemKey = re.Request.Header.Get("Idempotency-Key")
@@ -280,28 +296,14 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 			result, err := cfg.Idempotency.Lookup(re.Request.Context(), idemKey, idemHash)
 			switch {
 			case errors.Is(err, idempotency.ErrKeyReused):
-				return re.JSON(http.StatusUnprocessableEntity, map[string]string{
-					"error": "Idempotency-Key already used for a different request",
-				})
+				return problem(re, http.StatusUnprocessableEntity,
+					"Idempotency-Key already used for a different request", nil)
 			case err != nil:
-				return re.JSON(http.StatusInternalServerError,
-					map[string]string{"error": "idempotency lookup failed: " + err.Error()})
+				return unavailable(re, "idempotency lookup failed: "+err.Error(),
+					map[string]any{"hint": "nothing was applied; safe to retry shortly"})
 			case result != nil:
 				return re.Blob(result.Status, "application/json", result.Body)
 			}
-		}
-		respondJSON := func(status int, data any) error {
-			if idemKey == "" {
-				return re.JSON(status, data)
-			}
-			raw, err := json.Marshal(data)
-			if err != nil {
-				return err
-			}
-			// best-effort: a failed save must not stop the caller getting
-			// its answer, it only means a future retry misses the replay
-			_ = cfg.Idempotency.Save(re.Request.Context(), idemKey, idemHash, status, raw)
-			return re.Blob(status, "application/json", raw)
 		}
 
 		var appended []events.Event
@@ -312,85 +314,95 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 				decider.Command{Name: cmdName, Payload: json.RawMessage(payload)},
 				actorMeta(re, cfg))
 		}
+		// None of the answers below but the final 200 is recorded for
+		// Idempotency-Key replay (G7): each one applied nothing, or (a 500,
+		// a 504) may or may not have, and the retry must find out.
 		if err != nil {
 			if errors.Is(err, errBatchTimeout) {
-				return re.JSON(http.StatusGatewayTimeout, map[string]string{
-					"error": "batch commit did not complete in time",
-				})
+				return problem(re, http.StatusGatewayTimeout, "batch commit did not complete in time", nil)
 			}
 			var qf *batching.ErrQueueFull
 			if errors.As(err, &qf) {
-				// Not routed through respondJSON: nothing was applied, and
-				// future depth is unrelated to this moment's — caching this
-				// as the permanent idempotency-replay answer would wrongly
-				// block a later retry that might get in. Same reasoning
-				// ErrReadOnly below already uses.
-				re.Response.Header().Set("Retry-After", "1")
-				return re.JSON(http.StatusServiceUnavailable, map[string]any{
-					"error": "the command queue is full",
+				// nothing was applied, and future depth is unrelated to this
+				// moment's
+				return unavailable(re, "the command queue is full", map[string]any{
 					"hint":  "nothing was applied; safe to retry shortly (use an Idempotency-Key so a retry cannot double-apply once it does get in)",
 					"depth": qf.Depth,
 				})
 			}
 			switch {
 			case errors.Is(err, decider.ErrUnknownAggregate):
-				return apis.NewNotFoundError(err.Error(), err)
+				return problem(re, http.StatusNotFound, "unknown aggregate: "+aggregate, nil)
 			case errors.Is(err, events.ErrConcurrency):
-				return respondJSON(http.StatusConflict, map[string]string{"error": err.Error()})
+				// lost the race for the stream; nothing applied. A retry,
+				// even under the same key, is a new decision
+				return problem(re, http.StatusConflict, err.Error(), nil)
 			case errors.Is(err, events.ErrReadOnly):
 				// this node is a --cqrsRole=secondary with no Forward
 				// configured (Forward, when set, is checked before any of
 				// this runs — see the top of the handler), so refuse
 				// outright rather than accept a command that can never
-				// durably apply. Not cached for idempotency replay: no side
-				// effect happened, and which node answers is not stable.
-				return re.JSON(http.StatusServiceUnavailable, map[string]string{
-					"error": "this node is a read-only replica; commands must go to the master",
-				})
+				// durably apply.
+				return unavailable(re, "this node is a read-only replica; commands must go to the master", nil)
 			case kms.IsSubjectErased(err):
 				// the data subject was erased: permanent, unlike a 409 —
-				// a returning person is a new subject with a new id. Not
-				// cached (no side effect happened).
-				return re.JSON(http.StatusGone, map[string]string{"error": err.Error()})
+				// a returning person is a new subject with a new id.
+				return problem(re, http.StatusGone, err.Error(), nil)
 			case kms.IsUnavailable(err):
 				// the key service couldn't be used: nothing was applied
-				re.Response.Header().Set("Retry-After", "1")
-				return re.JSON(http.StatusServiceUnavailable, map[string]string{
-					"error": "dependency unavailable: the key service is unavailable; retry later",
-					"hint":  "nothing was applied; safe to retry shortly",
-				})
+				return unavailable(re, "dependency unavailable: the key service is unavailable; retry later",
+					map[string]any{"hint": "nothing was applied; safe to retry shortly"})
 			case decider.IsForbidden(err):
 				// the decider refused WHO sent it (schema 3.15.0: only the
-				// owner its own state names). Not cached (no side effect).
-				return re.JSON(http.StatusForbidden, map[string]string{"error": err.Error()})
+				// owner its own state names).
+				return problem(re, http.StatusForbidden, err.Error(), nil)
 			case decider.IsRejection(err):
-				// the decider's own verdict: the only 400 on this path. Not
-				// cached for idempotency replay (no side effect happened).
-				return apis.NewBadRequestError(err.Error(), err)
+				// the decider's own verdict: the only 400 on this path. Its
+				// message goes out verbatim (G4) — never through
+				// PocketBase's error helpers, which sentence-case it — and
+				// the two generated refusals name their reason (G5).
+				var ext map[string]any
+				if reason := decider.RefusalReason(err, aggregate); reason != "" {
+					ext = map[string]any{"reason": reason}
+				}
+				return problem(re, http.StatusBadRequest, err.Error(), ext)
 			case events.IsUnavailable(err):
 				// the event store stayed locked past its busy_timeout:
 				// nothing was applied, and a retry may well succeed
-				re.Response.Header().Set("Retry-After", "1")
-				return re.JSON(http.StatusServiceUnavailable, map[string]string{
-					"error": "the event store is busy: " + err.Error(),
-					"hint":  "nothing was applied; safe to retry shortly",
-				})
+				return unavailable(re, "the event store is busy: "+err.Error(),
+					map[string]any{"hint": "nothing was applied; safe to retry shortly"})
+			case decider.IsLoadFailure(err):
+				// the stream could not be loaded (read or upcast) before
+				// deciding: nothing was decided, so 503, not 500 (G3)
+				return unavailable(re, "dependency unavailable: the stream could not be loaded: "+err.Error(),
+					map[string]any{"hint": "nothing was applied; safe to retry shortly"})
 			default:
 				// anything else failed on the way to or from the decider
-				// (loading/upcasting the stream, folding it, the append, a
-				// JS decide that timed out): the platform's fault, not the
-				// caller's, so it must not look like a domain rejection
-				return re.JSON(http.StatusInternalServerError, map[string]string{
-					"error": "command failed: " + err.Error(),
-				})
+				// (folding the stream, the append, a JS decide that timed
+				// out): the platform's fault, not the caller's, so it must
+				// not look like a domain rejection; it may or may not have
+				// applied, so the caller retries with the same key
+				return problem(re, http.StatusInternalServerError, "command failed: "+err.Error(), nil)
 			}
 		}
 
-		return respondJSON(http.StatusOK, map[string]any{"events": appended})
+		if appended == nil {
+			appended = []events.Event{} // no events is [], never null (G6)
+		}
+		raw, err := json.Marshal(map[string]any{"events": appended})
+		if err != nil {
+			return problem(re, http.StatusInternalServerError, "command applied but its answer could not be encoded: "+err.Error(), nil)
+		}
+		if idemKey != "" {
+			// best-effort: a failed save must not stop the caller getting
+			// its answer, it only means a future retry misses the replay
+			_ = cfg.Idempotency.Save(re.Request.Context(), idemKey, idemHash, http.StatusOK, raw)
+		}
+		return re.Blob(http.StatusOK, "application/json", raw)
 	})
 
 	if !cfg.AllowAnonymous && cfg.Forward == nil {
-		route.Bind(apis.RequireAuth())
+		route.Bind(requireAuth())
 	}
 	if cfg.Metrics != nil && cfg.Forward == nil {
 		route.Bind(&hook.Handler[*core.RequestEvent]{
@@ -404,6 +416,54 @@ func RegisterRoutes(e *core.ServeEvent, registry *decider.Registry, cfg Config) 
 				return err
 			},
 		})
+	}
+}
+
+// ProblemContentType is the media type of every non-2xx answer the command
+// gateway makes itself (RFC 9457; command gateway contract v0.1, G4).
+const ProblemContentType = "application/problem+json"
+
+// problem writes an RFC 9457 problem body: status, title (the status's own
+// phrase, as RFC 9457 asks of a problem with no type of its own), detail
+// verbatim, and any extension members (reason, hint, depth). It writes the
+// answer itself rather than returning one of PocketBase's errors, whose body
+// is another shape and whose message is sentence-cased.
+func problem(re *core.RequestEvent, status int, detail string, ext map[string]any) error {
+	body := make(map[string]any, len(ext)+3)
+	for k, v := range ext {
+		body[k] = v
+	}
+	body["status"] = status
+	body["title"] = http.StatusText(status)
+	body["detail"] = detail
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	re.Response.Header().Set("Content-Type", ProblemContentType)
+	return re.Blob(status, ProblemContentType, raw)
+}
+
+// unavailable is a 503 problem: not taken, nothing applied, retry after the
+// Retry-After seconds (G3, G8).
+func unavailable(re *core.RequestEvent, detail string, ext map[string]any) error {
+	re.Response.Header().Set("Retry-After", "1")
+	return problem(re, http.StatusServiceUnavailable, detail, ext)
+}
+
+// requireAuth is apis.RequireAuth with a problem body: a request with no
+// credential, or one PocketBase could not verify (it leaves re.Auth nil), is
+// a 401 (G2). It keeps RequireAuth's id and priority, so the metrics hook
+// (priority -1) still runs first and counts the 401.
+func requireAuth() *hook.Handler[*core.RequestEvent] {
+	return &hook.Handler[*core.RequestEvent]{
+		Id: apis.DefaultRequireAuthMiddlewareId,
+		Func: func(re *core.RequestEvent) error {
+			if re.Auth == nil {
+				return problem(re, http.StatusUnauthorized, "the request requires a valid authorization token", nil)
+			}
+			return re.Next()
+		},
 	}
 }
 

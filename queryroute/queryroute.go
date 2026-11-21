@@ -11,6 +11,10 @@
 // that is not such an object is 400. Config.RefusePersonalTermsInURL
 // (off by default; to be turned on once callers have moved, decided
 // 2026-11-21) makes a GET searching a personal field a 400 naming POST.
+// A generated host builds Config in generated code, so a deployment turns
+// it on without code instead: Register also turns it on when the
+// environment variable CQRS_REFUSE_PERSONAL_TERMS_IN_URL is "1" or "true"
+// (as dotnetcqrs reads Cqrs:RefusePersonalTermsInUrl from configuration).
 //
 // What it guarantees (decided 2026-10-06):
 //
@@ -42,6 +46,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -55,6 +60,18 @@ import (
 	"github.com/jamestryand/pocketcqrs/pii"
 	"github.com/jamestryand/pocketcqrs/searchindex"
 )
+
+// RefusePersonalTermsInURLEnv names the environment variable that, set to
+// "1" or "true", turns Config.RefusePersonalTermsInURL on for every read
+// model Register serves.
+const RefusePersonalTermsInURLEnv = "CQRS_REFUSE_PERSONAL_TERMS_IN_URL"
+
+// refusePersonalTermsFromEnv reports whether RefusePersonalTermsInURLEnv
+// asks for the refusal.
+func refusePersonalTermsFromEnv() bool {
+	v := strings.TrimSpace(os.Getenv(RefusePersonalTermsInURLEnv))
+	return v == "1" || strings.EqualFold(v, "true")
+}
 
 // PathPrefix is where every read-model route lives.
 const PathPrefix = "/api/cqrs/rm/"
@@ -122,7 +139,10 @@ type Config struct {
 	// address never sits in a URL, where access logs, proxies and browser
 	// history keep it. Off by default while callers move to POST; it will
 	// be turned on once they have (decided 2026-11-21). The live route is
-	// not affected.
+	// not affected. Register also turns it on when the environment variable
+	// RefusePersonalTermsInURLEnv is "1" or "true", so a deployment whose
+	// host builds Config in generated code can switch it on; the variable
+	// never turns it off.
 	RefusePersonalTermsInURL bool
 	// Logger may be nil.
 	Logger func(msg string, args ...any)
@@ -202,6 +222,9 @@ func Register(se *core.ServeEvent, spec Spec, cfg Config) error {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = func(string, ...any) {}
+	}
+	if refusePersonalTermsFromEnv() {
+		cfg.RefusePersonalTermsInURL = true
 	}
 	// the route applies the access rules; PocketBase's own record API
 	// would serve the rows without them, so it is closed to all but

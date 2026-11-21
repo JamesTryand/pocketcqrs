@@ -12,7 +12,7 @@ POST /api/cqrs/{aggregate}/{id}/{command}
 Body: the command payload as JSON (may be empty; defaults to `{}`).
 
 **Auth**: a PocketBase record or superuser token is required unless
-`--cqrsAllowAnonymous`. The authenticated record is stamped into every
+`--cqrsAllowAnonymous`, in `Authorization`, with or without `Bearer `. The authenticated record is stamped into every
 resulting event's metadata:
 
 ```json
@@ -27,28 +27,54 @@ caller it refuses gets `403`. A command with no policy is allowed to every
 caller admitted above, and a superuser passes every policy. A Go host sets
 `gateway.Config.Authorize` itself instead.
 
+**The HTTP shape is the command gateway contract v0.1** (frozen 2026-11-21,
+the same for pocketcqrs and dotnetcqrs; `gateway/contract_test.go` is the
+conformance probe). In short:
+
 **Responses**:
 
-| status | when |
-| --- | --- |
-| `200` | `{ "events": [...] }` — the appended envelopes (empty when the decider returned no events) |
-| `400` | domain/validation rejection from the decider (its thrown message) — **only** an error the decider's `decide` itself returned or threw |
-| `401` | no/invalid auth token |
-| `403` | a configured `Authorize` hook refused the command — `{ error }`, the refusing declaration's own message when it names one (a command `scope`'s `message`) |
-| `404` | unknown aggregate |
-| `409` | concurrency conflict (the stream changed between load and append; retry the command) |
-| `422` | the `Idempotency-Key` was already used for a *different* request — see below |
-| `500` | the platform failed, not the domain: loading/upcasting the stream, folding it (`evolve`), the append, a JS `decide` that hit the execution timeout or returned something that is not an event list, or an `Authorize` hook error — `{ error }` |
-| `503` | maintenance mode — `{ error, hint }`; retry after `system maintenance off`. Also: the event store stayed locked past its busy timeout, the command queue is full, or this node is a read-only secondary with no `--cqrsMasterAddr` (nothing applied in any of these; `Retry-After` is set where a retry can help) |
-| `504` | command batching is on and the command's batch did not commit within `--cqrsBatchTimeout` |
+| status | when | the caller |
+| --- | --- | --- |
+| `200` | decided: `{ "events": [...] }`, the appended envelopes, each with `type`, `aggregate`, `aggregateId`, `data` and `metadata` as JSON objects. No events is `"events": []`, never `null` | done |
+| `400` | refused by the decider (its message, verbatim, in `detail`) — **only** an error the decider's `decide` itself returned or threw — or a malformed command: a `"$pii"` object in the body, an `Idempotency-Key` over 200 characters | final: the same request gets the same answer until the stream changes |
+| `401` | no credential, or one that does not verify | final |
+| `403` | the caller may not send it: a configured `Authorize` hook refused it (the refusing declaration's own message when it names one, a command `scope`'s `message`), an ownership rule in the decider, or an erasure command with no policy wired | final |
+| `404` | unknown aggregate | final |
+| `409` | lost the race for the stream (it changed between load and append); nothing applied | retry: a new decision, even under the same key |
+| `410` | the data subject was erased | final |
+| `422` | the `Idempotency-Key` was already used for a *different* request — see below | final |
+| `503` | not taken, nothing applied: maintenance mode (retry after `system maintenance off`), the event store stayed locked past its busy timeout, the key service is unavailable, the stream could not be loaded (read or upcast), the system mode, the `Authorize` hook or the idempotency record could not be read, the command queue is full, or this node is a read-only secondary with no `--cqrsMasterAddr`. Always with `Retry-After` (seconds) | retry, honouring `Retry-After` |
+| `500` | the platform failed after loading: folding the stream (`evolve`), the append, a JS `decide` that hit the execution timeout or returned something that is not an event list | it may or may not have applied: retry with the same key |
+| `504` | command batching is on and the command's batch did not commit within `--cqrsBatchTimeout` | as `500` |
+
+**Every answer but a `200` that the gateway makes is an RFC 9457 problem body**,
+with `Content-Type: application/problem+json` (PocketBase's own middleware, which
+runs first, keeps its shape: a body over its size limit, its rate limiter):
+
+```json
+{ "status": 400, "title": "Bad Request", "detail": "entitlement does not exist", "reason": "does-not-exist" }
+```
+
+- `detail` is the decider's message exactly as it returned or threw it: not
+  re-cased, not punctuated.
+- `reason`, on a refusal, is the machine-readable part. The two refusals the
+  generators write always carry it: `does-not-exist` (`<aggregate in words>
+  does not exist`: the stream the command needs is not there yet) and
+  `already-exists` (`<aggregate in words> already exists`: a create sent to a
+  stream that exists). A Go decider can give any refusal its own reason with
+  `decider.Refuse(reason, message)`. **Decide on `reason`, never on the words
+  in `detail`.**
+- `hint` (and `depth` on a full queue) are extra members some answers carry.
 
 ### Idempotency
 
-**Send an `Idempotency-Key` header.** A retry carrying the same key *and* the
-same aggregate/id/command/body replays the original response verbatim — the
-same `200` and the same events, or the same `409` — instead of re-deciding the
-command. The same key with a *different* request is a `422` rather than being
-silently replayed or silently applied twice.
+**Send an `Idempotency-Key` header** (at most 200 characters). A retry carrying
+the same key *and* the same aggregate/id/command/body replays the first `200`
+verbatim — the same events — instead of re-deciding the command. Nothing else
+is replayed: a `409` applied nothing, so the retry is decided again, and a
+`400`, `401`, `403`, `404`, `410` or `503` is never recorded. The same key with a
+*different* request is a `422` rather than being silently replayed or silently
+applied twice.
 
 Generate the key **client-side**. Only a caller that generates its own key can
 send the same one when it retries, which is the entire mechanism; a
@@ -65,8 +91,9 @@ understand**: without a key there is no idempotency here at all.
 > on the wire distinguishes them. Without a key, a client that retries after an
 > ambiguous timeout can double-apply.
 
-Records live in their own `idempotency.db` and are pruned on a schedule, so a
-key is replayable for a bounded window rather than forever.
+Records live in their own `idempotency.db` and are kept **at least 7 days** (a
+payment processor redelivers for days): `--cqrsIdempotencyRetention`, default
+`168h`, after which the hourly pruner deletes them.
 
 **Reactions carry this too.** A reaction is a command, and it is stamped with a
 `commandId` derived from its cause — the reactor's name, the causing event's id
@@ -96,7 +123,12 @@ term is never in a URL, where access logs, proxies and browser history keep
 it. A GET doing so works for now, while callers move; the host option
 `queryroute.Config.RefusePersonalTermsInURL` (off by default) answers it `400`,
 naming POST, and will be turned on once callers have moved (decided
-2026-11-21). The live route (server-sent events, see
+2026-11-21). A generated host builds `queryroute.Config` in generated code, so
+a deployment turns it on without code: set the environment variable
+`CQRS_REFUSE_PERSONAL_TERMS_IN_URL=1` (or `true`) and every read model the node
+serves refuses it (dotnetcqrs reads `Cqrs:RefusePersonalTermsInUrl` from
+configuration the same way). Unset, or any other value, leaves the host's own
+setting. The live route (server-sent events, see
 [personal data](../personal-data.md#watching-it-live)) is GET only and not
 affected by the option.
 

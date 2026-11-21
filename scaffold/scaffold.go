@@ -32,6 +32,7 @@ import (
 	"unicode"
 
 	"github.com/jamestryand/pocketcqrs/cmdauth"
+	"github.com/jamestryand/pocketcqrs/decider"
 )
 
 // identifier matches names that are safe in a file name, a JS identifier,
@@ -845,13 +846,13 @@ func (d Domain) decider() string {
 	for _, c := range d.Commands {
 		fmt.Fprintf(&b, "    case '%s':\n", c.Name)
 		if c.Once {
-			fmt.Fprintf(&b, "      if (state.exists) { throw new Error('%s already exists'); }\n", Words(d.Aggregate))
+			fmt.Fprintf(&b, "      if (state.exists) { throw new Error('%s'); }\n", decider.AlreadyExistsMessage(d.Aggregate))
 		}
 		if c.Once && !c.CanBeginAgain && endsForGood {
 			fmt.Fprintf(&b, "      if (state.ended) { throw new Error('%s has ended and cannot begin again'); }\n", Words(d.Aggregate))
 		}
 		if c.RequiresExisting {
-			fmt.Fprintf(&b, "      if (!state.exists) { throw new Error('%s does not exist'); }\n", Words(d.Aggregate))
+			fmt.Fprintf(&b, "      if (!state.exists) { throw new Error('%s'); }\n", decider.DoesNotExistMessage(d.Aggregate))
 		}
 		writeJSOwnership(&b, c)
 		writeJSRefusals(&b, c)
@@ -1276,25 +1277,11 @@ func columnNamesLiteral(fields []Field, key string) string {
 // words, so "loanRequest" reads "loan request", as a document's own error
 // scenarios say it. An acronym run stays as written ("orderPDF" reads
 // "order PDF").
-func Words(name string) string {
-	runes := []rune(name)
-	var words []string
-	start := 0
-	for i := 1; i < len(runes); i++ {
-		nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
-		if unicode.IsUpper(runes[i]) && (!unicode.IsUpper(runes[i-1]) || nextLower) {
-			words = append(words, string(runes[start:i]))
-			start = i
-		}
-	}
-	words = append(words, string(runes[start:]))
-	for i, w := range words {
-		if len([]rune(w)) < 2 || strings.ToUpper(w) != w {
-			words[i] = strings.ToLower(w)
-		}
-	}
-	return strings.Join(words, " ")
-}
+//
+// The words live in package decider (AggregateWords), beside the two
+// refusals built from them, so the gateway recognizes exactly what this
+// package generates (command gateway contract v0.1, G5).
+func Words(name string) string { return decider.AggregateWords(name) }
 
 // SanitizeName renders an arbitrary string as a name this package accepts:
 // a letter followed by letters, digits or underscores.

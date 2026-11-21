@@ -53,9 +53,9 @@ func TestForbiddenVerdictIs403(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var body map[string]string
+	var body map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&body)
-	if resp.StatusCode != http.StatusForbidden || body["error"] != "only the member who requested it may change it" {
+	if resp.StatusCode != http.StatusForbidden || body["detail"] != "only the member who requested it may change it" {
 		t.Fatalf("want 403 with the message, got %d %v", resp.StatusCode, body)
 	}
 }

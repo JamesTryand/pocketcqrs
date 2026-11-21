@@ -67,10 +67,11 @@ func TestAuthorizeHookAllowsWhenTrue(t *testing.T) {
 	}
 }
 
-// TestAuthorizeHookErrorRejectsWith500 proves an Authorize hook's own error
-// (a failed read-model lookup, say) surfaces as 500, distinct from an
-// ordinary authorization refusal (403).
-func TestAuthorizeHookErrorRejectsWith500(t *testing.T) {
+// TestAuthorizeHookErrorRejectsWith503 proves an Authorize hook's own error
+// (a failed read-model lookup, say) surfaces as 503, distinct from an
+// ordinary authorization refusal (403): the check could not be made, so
+// nothing was decided (command gateway contract v0.1, G3; it was 500).
+func TestAuthorizeHookErrorRejectsWith503(t *testing.T) {
 	store, err := events.Open(filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -84,8 +85,8 @@ func TestAuthorizeHookErrorRejectsWith500(t *testing.T) {
 		},
 	})
 	status, body := postCreate(t, srv, "")
-	if status != 500 {
-		t.Fatalf("expected 500 when the Authorize hook itself errors, got %d: %s", status, body)
+	if status != 503 {
+		t.Fatalf("expected 503 when the Authorize hook itself errors, got %d: %s", status, body)
 	}
 }
 

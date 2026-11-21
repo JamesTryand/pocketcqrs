@@ -136,3 +136,50 @@ func TestHashIsOrderSensitiveAndStable(t *testing.T) {
 		t.Fatal("Hash must not be vulnerable to part-boundary concatenation collisions")
 	}
 }
+
+// G7: a recorded answer is kept at least 7 days.
+func TestPruneKeepsSixDayOldRecordAtDefaultRetention(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for key, age := range map[string]time.Duration{"six-days": 6 * 24 * time.Hour, "eight-days": 8 * 24 * time.Hour} {
+		if err := s.Save(ctx, key, "hash", 200, json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE idempotency_keys SET created = ? WHERE key = ?`,
+			time.Now().Add(-age).UTC().Format("2006-01-02T15:04:05.000Z"), key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Prune(ctx, DefaultRetention); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.Lookup(ctx, "six-days", "hash"); err != nil || res == nil {
+		t.Fatalf("a 6-day-old record must survive the default retention: %v %v", res, err)
+	}
+	if res, err := s.Lookup(ctx, "eight-days", "hash"); err != nil || res != nil {
+		t.Fatalf("an 8-day-old record must be pruned: %v %v", res, err)
+	}
+}
+
+// Only a 200 is replayed; a non-200 record (a 409 an older gateway saved) is
+// decided again, and the 200 that follows replaces it.
+func TestNon200RecordIsNotReplayedAndIsReplaced(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	if err := s.Save(ctx, "k", "hash", 409, json.RawMessage(`{"error":"conflict"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.Lookup(ctx, "k", "hash"); err != nil || res != nil {
+		t.Fatalf("a 409 record must not be replayed: %v %v", res, err)
+	}
+	if _, err := s.Lookup(ctx, "k", "other"); !errors.Is(err, ErrKeyReused) {
+		t.Fatalf("a different request under the key is still 422: %v", err)
+	}
+	if err := s.Save(ctx, "k", "hash", 200, json.RawMessage(`{"events":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Lookup(ctx, "k", "hash")
+	if err != nil || res == nil || res.Status != 200 || string(res.Body) != `{"events":[]}` {
+		t.Fatalf("the 200 must replace the 409: %+v %v", res, err)
+	}
+}

@@ -3,6 +3,48 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.31.0 — the command gateway meets the gateway HTTP contract v0.1
+
+The command gateway's answers are now the command gateway HTTP contract v0.1 (platform/cqrs-runtime-contract
+`GATEWAY-HTTP-CONTRACT.md`, the user's decision 2026-11-21), the same shape dotnetcqrs answers. Its conformance probe is
+`gateway/contract_test.go`: one case per status this stack can reach.
+
+### Changed
+
+- **Every answer but a `200` the gateway makes is an RFC 9457 problem body** (`Content-Type: application/problem+json`, with `status`,
+  `title` and `detail`), replacing PocketBase's `{data, message, status}` on the `400`, `401` and `404` and the
+  gateway's own `{error[, hint]}` on the rest. `hint`, and `depth` on a full queue, stay as extra members. **A caller
+  that read `message` or `error` from a command's answer must read `detail`** (or, for a refusal, `reason`).
+- **A decider's refusal is in `detail` verbatim.** PocketBase used to sentence-case it (`entitlement does not exist`
+  reached the caller as `Entitlement does not exist.`); the gateway no longer goes through PocketBase's error helpers.
+- **The two generated refusals carry `reason`**: `does-not-exist` and `already-exists`, beside `detail`. The gateway
+  recognises the whole message the generators write (`<aggregate in words> does not exist` / `already exists`), so
+  deciders generated before this release get it without being generated again; the generated code is unchanged. The
+  words now come from one place, `decider.AggregateWords`, `decider.DoesNotExistMessage` and
+  `decider.AlreadyExistsMessage`, which the generators and the gateway both use. A Go decider can give any refusal its
+  own reason with `decider.Refuse(reason, message)`.
+- **No events is `{"events": []}`**, never `{"events": null}`. (A `200` recorded under a key by the previous release can still replay its `null` until
+  that record is pruned.)
+- **Only a `200` is replayed under an `Idempotency-Key`.** A `409` was saved and replayed for 24 hours, so a command
+  that lost a race kept losing it on every retry under the same key; it is now decided again. A `409` record saved by an
+  older gateway is not replayed either, and the `200` that follows replaces it.
+- **Idempotency records are kept 7 days** (they were 24 hours): a payment processor redelivers for days. The new flag
+  `--cqrsIdempotencyRetention` (default `168h`) sets it; a shorter value is logged as a warning.
+- **A dependency failure before the decision is a `503` with `Retry-After`, not a `500`**: the stream failing to load
+  (read or upcast, `decider.LoadError`), the system mode unreadable, the `Authorize` hook failing, the idempotency
+  record unreadable. A failure after the decision (folding, the append) stays `500`: it may or may not have applied.
+- **Every `503` carries `Retry-After: 1`**, maintenance mode and a read-only secondary included.
+- **An `Idempotency-Key` over 200 characters is a `400`.**
+- Not changed: what PocketBase's own middleware answers before the gateway runs (a body over its size limit, its
+  rate limiter, a recovered panic) keeps PocketBase's shape.
+
+### Added
+
+- **`CQRS_REFUSE_PERSONAL_TERMS_IN_URL=1`** (or `true`) turns `queryroute.Config.RefusePersonalTermsInURL` on for
+  every read model `queryroute.Register` serves. A generated host builds `queryroute.Config` in generated code, so this
+  is how a deployment switches it on (dotnetcqrs reads `Cqrs:RefusePersonalTermsInUrl` from configuration the same
+  way). Unset, or any other value, leaves the host's own setting.
+
 ## v0.30.0 — a read-model query can be a POST, so a personal search is never in a URL
 
 ### Added
