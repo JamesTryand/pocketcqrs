@@ -3,9 +3,9 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
-## Unreleased — schema 6.2.0
+## v0.32.0 — schema 6.2.0: a scenario accepted with nothing recorded, expects, and the fields a public event publishes
 
-Reads eventmodelschema 6.2.0 documents (vendored from its working copy; released with it). Additive.
+Reads eventmodelschema 6.2.0 documents (`v6.2.0`). Additive.
 
 ### Added
 

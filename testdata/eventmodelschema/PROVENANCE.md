@@ -12,7 +12,8 @@ The schema is also embedded in the importer (`emschema/schema/eventmodeling.sche
   harness's bump then replaces the schema copies with the released files). Copied: the schema (both copies), the
   manifest schema, the changelog, and `examples/links/` (the two systems in their own repositories: `expects`, a
   scenario accepted with nothing recorded, published fields). Between `e53fa6a` and this, the schema copies were
-  moved by the release harness's bump (5.0.0 to 6.1.0), which copies only the schema.
+  moved by the release harness's bump (5.0.0 to 6.1.0), which copies only the schema. **Released the same day as `v6.2.0`** (`03a381c`,
+  which changed only the coordinating document's schema since): the copied files are the released ones.
 - **Before that**: `e53fa6a`, *"Schema 4.2.0: public events and commands; the
   coordinating document (architecture 0.1.0)"*, tag `v4.2.0` (tagged
   2026-11-18; on GitHub once the user pushes it). Copied 2026-11-17: the schema
