@@ -205,6 +205,31 @@ func EdgesFor(a *Architecture, system string, doc *Document, docPath string, opt
 			}
 		}
 	}
+	// a public event whose marker lists its fields is published whether or not
+	// an edge here starts from it: a link in another view may read it, and the
+	// system's own document says what leaves it
+	for id, ev := range doc.Events {
+		if ev.Public == nil || ev.Public.Fields == nil {
+			continue
+		}
+		k := key{id, ev.Public.Version}
+		if outs[k] != nil {
+			continue
+		}
+		outs[k] = map[string]bool{}
+		for _, f := range ev.Public.Fields {
+			field, ok := fieldOf(ev.Fields, f)
+			switch {
+			case !ok:
+				problems = append(problems, fmt.Sprintf("event %q publishes %q, which is not one of its fields", id, f))
+			case field.PII:
+				problems = append(problems, fmt.Sprintf("event %q: %q is personal data: carrying a personal field "+
+					"over an edge is not built", id, f))
+			default:
+				outs[k][f] = true
+			}
+		}
+	}
 	for k, fields := range outs {
 		ev := doc.Events[k.event]
 		o := edges.Out{EventType: TypeName(ev.Name, k.event), System: doc.ID, Event: k.event, Version: k.version}

@@ -203,3 +203,29 @@ func TestAListedPersonalFieldIsRefusedAlone(t *testing.T) {
 		t.Fatalf("want the personal field refused, got %v", err)
 	}
 }
+
+// With a coordinating document too, a public event whose marker lists its
+// fields is published even when no edge in this view starts from it: a link
+// in another view may read it, and the sender's own document says what leaves.
+func TestAListedEventNoEdgeHereStartsFromIsStillPublished(t *testing.T) {
+	withOther := strings.Replace(membersWithFields(`"memberId", "branchId"`), `"commands": {`,
+		`"commands": {`, 1)
+	withOther = strings.Replace(withOther, `"events": {`, `"events": {
+    "member-moved": { "name": "Member Moved", "swimlaneId": "members", "aggregate": "member",
+      "public": { "version": 1, "fields": ["memberId"] },
+      "fields": [{ "name": "memberId", "type": "string", "idAttribute": true }, { "name": "branchId", "type": "string" }] },
+    "member-noted": { "name": "Member Noted", "swimlaneId": "members", "aggregate": "member", "public": { "version": 1 },
+      "fields": [{ "name": "memberId", "type": "string", "idAttribute": true }] },`, 1)
+	arch, dir := viewOf(t, withOther, byPath, peopleToLoans)
+	se, err := edgesIn(t, arch, "people", filepath.Join(dir, "members.eventmodel.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, o := range se.Out {
+		got[o.Event] = strings.Join(o.Fields, ",")
+	}
+	if len(got) != 2 || got["member-joined"] != "branchId,memberId" || got["member-moved"] != "memberId" {
+		t.Fatalf("want member-joined (its edge) and member-moved (listed, no edge here), not member-noted; got %v", got)
+	}
+}

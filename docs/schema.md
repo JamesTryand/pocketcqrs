@@ -434,6 +434,10 @@ pocketcqrs schema import model/commerce.eventmodel.json --lang go --out domain \
 
 ### A sender from its own document alone (v0.33.0)
 
+(Since v0.33.1 the same holds with `--architecture`: every event whose marker
+lists its fields is published, whether or not an edge in that document starts
+from it.)
+
 With no coordinating document, `--lang go` writes `edges.go` when some public
 event's marker lists the fields it publishes (schema 6.2.0):
 `"public": { "version": 1, "fields": ["memberId", "branchId"] }`. `EdgesOut`

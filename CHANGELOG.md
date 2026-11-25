@@ -3,6 +3,16 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.33.1 — a listed event is published whatever view the build is given
+
+### Fixed
+
+- With `--architecture`, a public event whose marker lists its fields (schema 6.2.0) was published only when an
+  edge in that coordinating document started from it, so a system built with one view did not publish an event
+  another view links. Now every such event is in `EdgesOut`, with exactly its listed fields, as it is with no
+  coordinating document: the system's own document says what leaves it. An event with no list is still published
+  only for the edges here.
+
 ## v0.33.0 — a message names its sender by its document id; a sender publishes from its own document alone
 
 Reads coordinating document 0.3.1 (eventmodelschema `v6.2.1`).
