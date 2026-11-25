@@ -334,3 +334,66 @@ func TestSchemaImportGoWritesAPackagePerAggregate(t *testing.T) {
 		t.Errorf("want only the two package directories in %s, got %d entries", outDir, len(entries))
 	}
 }
+
+// A sender's build needs only its own document (schema 6.2.0): with no
+// coordinating document, the public events whose markers list their fields
+// are written to edges.go under the document's id.
+func TestSchemaImportLangGoPublishesFromTheDocumentAlone(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	listed := strings.Replace(widgetDoc, `"eventModelingSchemaVersion": "4.2.0"`, `"eventModelingSchemaVersion": "6.2.0"`, 1)
+	listed = strings.Replace(listed, `"widget-created": { "name": "Widget Created", "swimlaneId": "widgets" }`,
+		`"widget-created": { "name": "Widget Created", "swimlaneId": "widgets", "public": { "version": 1, "fields": ["widgetId"] },
+		  "fields": [{ "name": "widgetId", "type": "string", "idAttribute": true }, { "name": "colour", "type": "string" }] }`, 1)
+	doc := filepath.Join(dir, "widget.json")
+	if err := os.WriteFile(doc, []byte(listed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "domain")
+
+	cmd := newSchemaImportCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{doc, "--skip-scenarios", "--out", outDir, "--aggregate", "create-widget=widget",
+		"--aggregate", "widget-created=widget", "--lang", "go"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("import failed: %v\n%s", err, out.String())
+	}
+	src, err := os.ReadFile(filepath.Join(outDir, "edges.go"))
+	if err != nil {
+		t.Fatalf("expected edges.go from the document alone: %v\n%s", err, out.String())
+	}
+	for _, want := range []string{`const EdgesSystem = "widgets"`,
+		`{EventType: "WidgetCreated", System: "widgets", Event: "widget-created", Version: 1, Fields: []string{"widgetId"}}`} {
+		if !strings.Contains(string(src), want) {
+			t.Errorf("edges.go lacks %s:\n%s", want, src)
+		}
+	}
+}
+
+// A document publishing nothing gets no edges.go, as before.
+func TestSchemaImportLangGoWritesNoEdgesWhenNothingIsListed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	doc := filepath.Join(dir, "widget.json")
+	if err := os.WriteFile(doc, []byte(widgetDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "domain")
+	cmd := newSchemaImportCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{doc, "--skip-scenarios", "--out", outDir, "--aggregate", "create-widget=widget", "--lang", "go"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("import failed: %v\n%s", err, out.String())
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "edges.go")); !os.IsNotExist(err) {
+		t.Errorf("want no edges.go, got %v", err)
+	}
+}

@@ -3,6 +3,30 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.33.0 — a message names its sender by its document id; a sender publishes from its own document alone
+
+Reads coordinating document 0.3.1 (eventmodelschema `v6.2.1`).
+
+### Changed (on the wire)
+
+- **An edge message's `system` is the sending system's document id**, never the name a coordinating document
+  gives it. `EdgesOut[].System` and the generated `EdgesSystem` are the document's `id`, and `EdgesIn[].FromSystem`
+  is the sender's document id, read from its document (named by path) or its release (named by release). Nothing
+  changes where a view names each system by its document id. Where it does not, regenerate both ends and deploy
+  them together: a carrier that names anything by the sender (`federation` names the sender's stream by
+  `EdgesSystem`) follows the new name, so drain the old stream first or let nothing be in flight.
+- An edge from a placeholder is refused when generating its receiver: a placeholder has no document, so no id its
+  messages would carry.
+
+### Added
+
+- **A sender publishes from its own document alone.** `schema import --lang go` with no `--architecture` writes
+  `edges.go` when some public event's marker lists its fields (schema 6.2.0): `EdgesOut` with exactly those, and no
+  edges in. An event whose marker lists nothing publishes nothing without a coordinating document. A listed
+  personal field is refused. `emschema.PublishedEdges` is the same, for a program of its own.
+- **A system named by release** (coordinating document 0.3.0) generates: `--system` may name a system the view names
+  by release, and the document given must be the one whose `id` the release names.
+
 ## v0.32.0 — schema 6.2.0: a scenario accepted with nothing recorded, expects, and the fields a public event publishes
 
 Reads eventmodelschema 6.2.0 documents (`v6.2.0`). Additive.

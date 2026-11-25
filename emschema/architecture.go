@@ -28,12 +28,17 @@ type Architecture struct {
 	dir string
 }
 
-// ArchitectureSystem is one system: a document by path, or a placeholder.
+// ArchitectureSystem is one system: a document by path, a released document
+// by its id and tag (0.3.0), or a placeholder.
 type ArchitectureSystem struct {
 	Name     string `json:"name"`
 	Document *struct {
 		Path string `json:"path"`
 	} `json:"document,omitempty"`
+	Release *struct {
+		System string `json:"system"`
+		Tag    string `json:"tag"`
+	} `json:"release,omitempty"`
 }
 
 // ArchitectureEdge is one edge. Only internal edges are read.
@@ -114,26 +119,39 @@ func EdgesFor(a *Architecture, system string, doc *Document, docPath string, opt
 	if !ok {
 		return nil, fmt.Errorf("the coordinating document %q has no system %q", a.ID, system)
 	}
-	if sys.Document == nil {
+	switch {
+	case sys.Release != nil:
+		// named by release: the document is the one whose id the release
+		// names; where its repository is stays out of the view
+		if sys.Release.System != doc.ID {
+			return nil, fmt.Errorf("system %q in %q is the release of %q, not this document (%q)",
+				system, a.ID, sys.Release.System, doc.ID)
+		}
+	case sys.Document != nil:
+		want, err := filepath.Abs(filepath.Join(a.dir, sys.Document.Path))
+		if err != nil {
+			return nil, err
+		}
+		got, err := filepath.Abs(docPath)
+		if err != nil {
+			return nil, err
+		}
+		if !samePath(want, got) {
+			return nil, fmt.Errorf("system %q's document in %q is %s, not %s", system, a.ID, want, got)
+		}
+	default:
 		return nil, fmt.Errorf("system %q is a placeholder in %q, so it has no document to generate", system, a.ID)
 	}
-	want, err := filepath.Abs(filepath.Join(a.dir, sys.Document.Path))
-	if err != nil {
-		return nil, err
-	}
-	got, err := filepath.Abs(docPath)
-	if err != nil {
-		return nil, err
-	}
-	if !samePath(want, got) {
-		return nil, fmt.Errorf("system %q's document in %q is %s, not %s", system, a.ID, want, got)
-	}
 
-	se := &SystemEdges{Architecture: a.ID, System: system}
+	// A message names the system that sent it by that system's document id,
+	// never by the name a view gives it: the sender knows its id from its own
+	// document, and every view naming it agrees on it.
+	se := &SystemEdges{Architecture: a.ID, System: doc.ID}
 	var problems []string
 	refuse := func(edge, format string, args ...any) {
 		problems = append(problems, fmt.Sprintf("edge %q: ", edge)+fmt.Sprintf(format, args...))
 	}
+	senders := map[string]string{} // a view's name for a sender -> its document id
 
 	// the events this system publishes: each public event an internal edge
 	// starts from. When its marker lists the fields it publishes (schema
@@ -189,7 +207,7 @@ func EdgesFor(a *Architecture, system string, doc *Document, docPath string, opt
 	}
 	for k, fields := range outs {
 		ev := doc.Events[k.event]
-		o := edges.Out{EventType: TypeName(ev.Name, k.event), System: system, Event: k.event, Version: k.version}
+		o := edges.Out{EventType: TypeName(ev.Name, k.event), System: doc.ID, Event: k.event, Version: k.version}
 		for f := range fields {
 			o.Fields = append(o.Fields, f)
 		}
@@ -230,7 +248,16 @@ func EdgesFor(a *Architecture, system string, doc *Document, docPath string, opt
 				refuse(e.ID, "command %q has no field %q", e.To.Command, cf)
 			}
 		}
-		in := edges.In{ID: e.ID, FromSystem: e.From.System, FromEvent: e.From.Event, FromVersion: e.From.Version,
+		from, ok := senders[e.From.System]
+		if !ok {
+			id, err := a.documentID(e.From.System)
+			if err != nil {
+				refuse(e.ID, "%v", err)
+				continue
+			}
+			from, senders[e.From.System] = id, id
+		}
+		in := edges.In{ID: e.ID, FromSystem: from, FromEvent: e.From.Event, FromVersion: e.From.Version,
 			Aggregate: LowerFirst(scaffold.SanitizeName(agg)), Command: TypeName(cmd.Name, e.To.Command),
 			TargetField: target, Fields: e.Fields}
 		se.In = append(se.In, in)
@@ -239,7 +266,7 @@ func EdgesFor(a *Architecture, system string, doc *Document, docPath string, opt
 		sent := publishedFields(a, e.From.System, e.From.Event, e.From.Version)
 		for _, ex := range e.Examples {
 			r := EdgeExampleResult{Edge: e.ID, Name: ex.Name}
-			m := edges.Message{ID: "example", System: e.From.System, Event: e.From.Event, Version: e.From.Version,
+			m := edges.Message{ID: "example", System: from, Event: e.From.Event, Version: e.From.Version,
 				Data: edges.Only(ex.Given, sent)}
 			id, fields, err := in.TranslateFields(m)
 			switch {
@@ -262,6 +289,72 @@ func EdgesFor(a *Architecture, system string, doc *Document, docPath string, opt
 	if len(problems) > 0 {
 		return se, fmt.Errorf("the coordinating document's edges for %q cannot be generated:\n  %s",
 			system, strings.Join(problems, "\n  "))
+	}
+	return se, nil
+}
+
+// documentID is the document id of the system a names key: the name its
+// messages carry. A document by path is read for its id; a release names it.
+// A placeholder has no document yet, so no id its messages would carry.
+func (a *Architecture) documentID(key string) (string, error) {
+	sys, ok := a.Systems[key]
+	switch {
+	case !ok:
+		return "", fmt.Errorf("the coordinating document %q has no system %q", a.ID, key)
+	case sys.Release != nil:
+		return sys.Release.System, nil
+	case sys.Document != nil:
+		doc, err := Load(filepath.Join(a.dir, sys.Document.Path))
+		if err != nil {
+			return "", fmt.Errorf("the sender %q's document: %w", key, err)
+		}
+		return doc.ID, nil
+	default:
+		return "", fmt.Errorf("the sender %q is a placeholder: a message names its sender by the sender's "+
+			"document id, and a placeholder has none yet", key)
+	}
+}
+
+// PublishedEdges is what a sender publishes from its own document alone, with
+// no coordinating document: each public event whose marker lists its fields
+// (schema 6.2.0), with exactly those, under the document's id. An event whose
+// marker lists nothing publishes the fields some edge maps, and with no
+// coordinating document there is none, so it publishes nothing. nil when
+// nothing is published.
+func PublishedEdges(doc *Document) (*SystemEdges, error) {
+	se := &SystemEdges{System: doc.ID}
+	var problems []string
+	ids := make([]string, 0, len(doc.Events))
+	for id := range doc.Events {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		ev := doc.Events[id]
+		if ev.Public == nil || ev.Public.Fields == nil {
+			continue
+		}
+		o := edges.Out{EventType: TypeName(ev.Name, id), System: doc.ID, Event: id, Version: ev.Public.Version}
+		for _, f := range ev.Public.Fields {
+			field, ok := fieldOf(ev.Fields, f)
+			switch {
+			case !ok:
+				problems = append(problems, fmt.Sprintf("event %q publishes %q, which is not one of its fields", id, f))
+			case field.PII:
+				problems = append(problems, fmt.Sprintf("event %q: %q is personal data: carrying a personal field "+
+					"over an edge is not built", id, f))
+			default:
+				o.Fields = append(o.Fields, f)
+			}
+		}
+		sort.Strings(o.Fields)
+		se.Out = append(se.Out, o)
+	}
+	if len(problems) > 0 {
+		return se, fmt.Errorf("what %q publishes cannot be generated:\n  %s", doc.ID, strings.Join(problems, "\n  "))
+	}
+	if len(se.Out) == 0 {
+		return nil, nil
 	}
 	return se, nil
 }

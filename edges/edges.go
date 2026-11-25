@@ -41,12 +41,14 @@ type Message struct {
 type Out struct {
 	// EventType is the event's type in this system's own store.
 	EventType string
-	// System, Event and Version name it as the coordinating document does.
+	// System is this system's document id: every message names its sender
+	// so, whatever a view calls it. Event and Version name the public event.
 	System  string
 	Event   string
 	Version int
-	// Fields are the event's fields some edge from it maps, sorted. Nothing
-	// else of the event leaves.
+	// Fields are the event's fields it publishes, sorted: its public marker's
+	// list, or else those some edge from it maps. Nothing else of the event
+	// leaves.
 	Fields []string
 }
 
@@ -54,7 +56,8 @@ type Out struct {
 type In struct {
 	// ID is the edge's id in the coordinating document.
 	ID string
-	// FromSystem, FromEvent and FromVersion name the source event.
+	// FromSystem, FromEvent and FromVersion name the source event: the
+	// sender by its document id, as its messages name it.
 	FromSystem  string
 	FromEvent   string
 	FromVersion int

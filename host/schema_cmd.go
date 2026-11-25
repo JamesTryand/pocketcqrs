@@ -81,6 +81,21 @@ func newSchemaImportCommand() *cobra.Command {
 				return fmt.Errorf("--architecture generates for --lang go only: a carrier's receiving side " +
 					"runs in the program's own process")
 			}
+			// with no coordinating document, a sender's build needs only its
+			// own document: the public events whose markers list their
+			// fields (schema 6.2.0) are published with exactly those
+			if se == nil && lang == "go" {
+				if se, err = emschema.PublishedEdges(doc); err != nil {
+					return err
+				}
+				if se != nil {
+					cmd.Println()
+					cmd.Printf("Published by %q from its own document: %d event(s)\n", se.System, len(se.Out))
+					for _, o := range se.Out {
+						cmd.Printf("  out %s v%d (%s): only %s\n", o.Event, o.Version, o.EventType, strings.Join(o.Fields, ", "))
+					}
+				}
+			}
 
 			// Run the document's own scenarios against the code just
 			// generated, before anything is written. A scenario is a
@@ -458,7 +473,7 @@ func writeSliceGo(mapped *emschema.Mapped, outDir string, docRaw []byte, force b
 			}
 			written += n
 		}
-	} else if se != nil {
+	} else if se != nil && se.Architecture != "" {
 		return 0, "", fmt.Errorf("--architecture writes its edge tables into the wiring package, which needs a go.mod "+
 			"at or above %s", outDir)
 	}

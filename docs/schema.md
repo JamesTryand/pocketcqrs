@@ -424,6 +424,24 @@ pocketcqrs schema import model/commerce.eventmodel.json --lang go --out domain \
   the source event's id, system, event and public version, and only the
   published fields. Not this store's own event record, so either runtime can be
   on either end.
+- **A message names its sender by the sender's document id** (v0.33.0,
+  coordinating document 0.3.1), never by the name a view gives it:
+  `EdgesSystem` and `EdgesOut[].System` are this document's `id`, and
+  `EdgesIn[].FromSystem` is the sender's, read from its document or its
+  release. An edge from a placeholder is refused: it has no id yet.
+- **A system named by release** generates too: the document given must be
+  the one whose `id` the release names.
+
+### A sender from its own document alone (v0.33.0)
+
+With no coordinating document, `--lang go` writes `edges.go` when some public
+event's marker lists the fields it publishes (schema 6.2.0):
+`"public": { "version": 1, "fields": ["memberId", "branchId"] }`. `EdgesOut`
+has each such event with exactly those fields, and `EdgesIn` is empty. An event
+whose marker lists nothing publishes nothing without a coordinating document,
+since its fields are those some edge maps. So a sender is built from its own
+document, and a link written in another repository's view can rely on what it
+publishes.
 
 ## Export
 
