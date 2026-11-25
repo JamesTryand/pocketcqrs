@@ -136,12 +136,27 @@ func EdgesFor(a *Architecture, system string, doc *Document, docPath string, opt
 	}
 
 	// the events this system publishes: each public event an internal edge
-	// starts from, with only the fields some edge from it maps
+	// starts from. When its marker lists the fields it publishes (schema
+	// 6.2.0), those, and an edge may read only those: the system's own
+	// document says what leaves it, so a link in another document can rely
+	// on them. Otherwise only the fields some edge from it here maps.
 	type key struct {
 		event   string
 		version int
 	}
 	outs := map[key]map[string]bool{}
+	publish := func(edgeID, event string, ev Event, f string, k key) {
+		field, ok := fieldOf(ev.Fields, f)
+		if !ok {
+			refuse(edgeID, "event %q has no field %q", event, f)
+			return
+		}
+		if field.PII {
+			refuse(edgeID, "%q is personal data: carrying a personal field over an edge is not built", f)
+			return
+		}
+		outs[k][f] = true
+	}
 	for _, e := range a.Edges {
 		if e.Kind != "internal" || e.From == nil || e.From.System != system {
 			continue
@@ -156,20 +171,20 @@ func EdgesFor(a *Architecture, system string, doc *Document, docPath string, opt
 			continue
 		}
 		k := key{e.From.Event, e.From.Version}
+		listed := ev.Public.Fields
 		if outs[k] == nil {
 			outs[k] = map[string]bool{}
+			for _, f := range listed {
+				publish(e.ID, e.From.Event, ev, f, k)
+			}
 		}
 		for _, f := range publishedBy(e) {
-			field, ok := fieldOf(ev.Fields, f)
-			if !ok {
-				refuse(e.ID, "event %q has no field %q", e.From.Event, f)
-				continue
+			if listed == nil {
+				publish(e.ID, e.From.Event, ev, f, k)
+			} else if !contains(listed, f) {
+				refuse(e.ID, "event %q does not publish %q: its public marker lists only %s", e.From.Event, f,
+					strings.Join(listed, ", "))
 			}
-			if field.PII {
-				refuse(e.ID, "%q is personal data: carrying a personal field over an edge is not built", f)
-				continue
-			}
-			outs[k][f] = true
 		}
 	}
 	for k, fields := range outs {
@@ -264,9 +279,12 @@ func publishedBy(e ArchitectureEdge) []string {
 	return out
 }
 
-// publishedFields is what a sender publishes of one event: the fields some
-// internal edge from it, at that version, needs (architecture-check.js's
-// published()).
+// publishedFields is what a sender publishes of one event as far as this
+// document's edges say: the fields some internal edge from it, at that
+// version, needs (architecture-check.js's published() without a marker
+// list). The receiving side's examples use it; a sender whose marker lists
+// more publishes more, which changes no translation, since an edge reads
+// only what it maps.
 func publishedFields(a *Architecture, system, event string, version int) []string {
 	set := map[string]bool{}
 	for _, e := range a.Edges {

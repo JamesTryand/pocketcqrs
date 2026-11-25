@@ -10,7 +10,7 @@
     "eventModelingSchemaVersion": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "6.1.1"
+      "default": "6.2.0"
     },
     "id": { "$ref": "#/$defs/id" },
     "name": { "type": "string", "minLength": 1 },
@@ -35,7 +35,8 @@
     },
     "hotspots": { "$ref": "#/$defs/hotspotRegistry" },
     "dataSubjects": { "$ref": "#/$defs/dataSubjects" },
-    "partitioning": { "$ref": "#/$defs/partitioning" }
+    "partitioning": { "$ref": "#/$defs/partitioning" },
+    "expects": { "$ref": "#/$defs/expectations" }
   },
   "additionalProperties": false,
 
@@ -262,7 +263,24 @@
           "type": "array",
           "items": { "$ref": "#/$defs/field" }
         },
-        "public": { "$ref": "#/$defs/publicMarker" }
+        "public": { "$ref": "#/$defs/publicEventMarker" }
+      },
+      "additionalProperties": false
+    },
+
+    "publicEventMarker": {
+      "description": "An event's public marker (publicMarker), which since 6.2.0 may also list the fields it publishes: the fields of this event that leave the system over a coordinating document's internal edge (the edge message), and nothing else of it. An edge may then read only those. The system's own document says what leaves it, so its build needs no other document. Without the list, what leaves is what the edges from this event map (6.1.0), which only a document holding every such edge can say; a system named by release in a coordinating document therefore lists them (scripts/architecture-check.js). An outside output (an external edge) is the system's own and is not governed by the list.",
+      "type": "object",
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "fields": {
+          "description": "Since 6.2.0. The names of this event's fields that it publishes; each is one of its declared fields.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true
+        }
       },
       "additionalProperties": false
     },
@@ -273,6 +291,60 @@
       "required": ["version"],
       "properties": {
         "version": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "expectations": {
+      "description": "Since 6.2.0. What this system expects from other systems: for each, by that system's document id, the public events it relies on and only the fields it uses. It is the receiver's own copy of part of another system's contract, kept apart from this system's events: an expected event has no swimlane or aggregate, and nothing in this system can append it. Empty or absent when the system relies on no other. A document checked alone is never refused for it; a coordinating document naming both systems holds it to the other system's document, and to an edge carrying it (scripts/architecture-check.js), and a system it names by release must state one for every edge into it. A system never expects from itself.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/expectation" }
+    },
+
+    "expectation": {
+      "type": "object",
+      "required": ["writtenAgainst", "events"],
+      "properties": {
+        "writtenAgainst": {
+          "description": "The other system's release tag this expectation was written against. A coordinating document that names a later tag is a note to re-check, not a failure.",
+          "type": "string",
+          "minLength": 1
+        },
+        "description": { "type": "string" },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/expectedEvent" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "expectedEvent": {
+      "type": "object",
+      "required": ["event", "version", "fields"],
+      "properties": {
+        "event": { "$ref": "#/$defs/id" },
+        "version": { "type": "integer", "minimum": 1 },
+        "description": { "type": "string" },
+        "fields": {
+          "description": "Only the fields this system relies on. The sender may add fields freely; removing or retyping one listed here breaks the expectation.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/expectedField" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "expectedField": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "$ref": "#/$defs/fieldType" },
+        "cardinality": { "$ref": "#/$defs/fieldCardinality" },
+        "description": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -869,9 +941,9 @@
       "required": ["events"],
       "properties": {
         "events": {
+          "description": "The events the command records, in order. Since 6.2.0 the list may be empty: the command is accepted and records nothing (the scenario of an outcome whose eventIds is empty). It is an assertion, not an absence: a check passes only when the command is accepted and records exactly no events, so a forgotten event or a refusal fails it. A refusal is an error scenario.",
           "type": "array",
-          "items": { "$ref": "#/$defs/eventRef" },
-          "minItems": 1
+          "items": { "$ref": "#/$defs/eventRef" }
         }
       },
       "additionalProperties": false

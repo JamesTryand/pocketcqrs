@@ -630,6 +630,10 @@ func (v *verifier) runCommandScenario(s Slice, sc Scenario, res *ScenarioResult)
 	// what the model describes, which is exactly what an author needs told.
 	res.Passed = true
 	res.Detail = fmt.Sprintf("would append %s", strings.Join(got, ", "))
+	if len(got) == 0 {
+		// an empty then (schema 6.2.0): accepted, and nothing recorded
+		res.Detail = "accepted, nothing recorded"
+	}
 	// a given event of another aggregate is an automation's trigger: said,
 	// but it is not a difference in the example data
 	if len(foreign) > 0 {

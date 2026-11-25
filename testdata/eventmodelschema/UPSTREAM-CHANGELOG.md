@@ -3,6 +3,147 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 6.2.0 — systems in their own repositories: `expects`, a `then` that records nothing; coordinating document 0.3.0
+
+**Additive (EventModel 6.2.0):**
+- `expects`, a top-level section: what this system relies on from others, by each system's document id, its
+  `writtenAgainst` release tag, and the public events it uses with only the fields it relies on (name, type, and
+  cardinality where it matters). It is the receiver's own copy of part of another system's contract, kept apart
+  from its own events: nothing in the system can append an expected event. Absent or empty when it relies on no
+  other. A document checked alone is never refused for it.
+- A `stateChange` scenario's `then.events` may be empty: **accepted, nothing recorded**, the scenario of an outcome
+  whose `eventIds` is empty (3.12.0). It is an assertion: a check passes only when the command is accepted and
+  records exactly no events, so a forgotten event or a refusal fails it. A refusal stays an `error` scenario. A
+  message that means nothing to its receiver (a purchase of a product with no feedback form) is accepted this way
+  rather than refused.
+- A public event's marker may list the **fields it publishes**: `"public": { "version": 1, "fields": ["memberId",
+  "branchId"] }`. Those fields of the event leave the system over an internal edge, and nothing else of it; an edge
+  may read only those. So the system's own document says what leaves it, personal data included, and its build
+  needs no other document. Without the list, what leaves is what the edges from the event map (6.1.0). An outside
+  output (an external edge) is the system's own and is not governed by it. Commands' public markers are unchanged.
+- A split document's manifest carries `expects` inline, like `dataSubjects` (`manifest.schema.json`); `split.js` and
+  `join.js` carry it, and `npm run roundtrip` covers documents that state it.
+
+**Additive (coordinating document 0.3.0):**
+- A system may be named **by release**: `"release": { "system": "<document id>", "tag": "<release tag>" }`, beside
+  `document` (a path in this repository) and `placeholder`. Where its repository is stays out of the document: the
+  checker takes the installation's own map (`--systems <file>`) and reads the document as it was at that tag.
+- `architecture-check.js` checks (`release`, `expects`): a system named by release is found through the map and its
+  document at that tag is the system it claims to be. Wherever an expectation is stated, it names a system here,
+  which publishes that event at that version with each relied-on field of the same type, and an edge here carries
+  it; a system never expects from itself. An edge into a system named by release is one it states an expectation
+  for, and reads only the fields listed. An expectation written against another tag is a note, not a refusal. A
+  repository's own coordinating document (systems by path, stating no expectations) checks as before.
+- Published fields (check `public`): a public event lists only its own fields, and an edge from it reads only those
+  (an expectation, too, relies only on those); a system named by release lists them for each event an edge uses,
+  since its build reads only its own document. An edge's examples translate exactly what the marker lists. A
+  placeholder publishes exactly the fields it lists.
+- `examples/links/`: the library's members and lending, each in its own repository; `npm run test:links` builds a
+  git repository per system, tags it, and holds each rule to failing when broken.
+- **Several views, and how far a check reaches.** The installation's map may list the connecting documents it holds
+  (`"views": [...]`); a check reads each, and two views name the same system when they name the same document id.
+  A connecting document checked alone is asked whether each of its links is right, and judges only the systems it
+  names by path (its own). Judging a system asks the "is anything missing?" rules of it (`received`, and an
+  expectation carried and of a system some view names) over every link into it in every view read. `--system <id>`
+  judges that system instead, and `--reach` says how far: `short` (the default) the systems named; `full` and
+  everything they depend on; `complete` everything connected to them, each judged once, with every link touching
+  them. With nothing named (no document, no `--system`) the check is the whole installation, complete, and every
+  system the map lists must be named by some view. New checks: `views` (an edge id is one link with one translation
+  in every view; a system is one document in a run) and `reach`/`complete`. A view that cannot be read, or that
+  names a system it does not hold, is refused whatever is judged; a document another view names that cannot be read
+  is refused only when a link judged needs it. A repository's own coordinating document, checked alone, checks as
+  before.
+- **A stale view is ratified, not refused.** When views give one system different documents (two releases, or a
+  release in one and the working copy by path in another), the newest is read, found by history: a release is its
+  tag's commit; a document by path is its checkout's HEAD, or newer than HEAD with changes not committed, and only
+  when it is the document the installation's map gives for that system. The older view's links judged here are
+  checked against the newer: when they hold, a `views` note says it is ratified and should be brought up to date by
+  the repository holding it; when one fails, it is refused. When which is newer cannot be told (diverged histories,
+  a copy that is not the map's document, changes not committed on the older commit), the views are refused.
+  Ratifying never rewrites a view.
+- `examples/reach/`: six systems of a shop in two views (orders → payments → warehouse → delivery, and warehouse →
+  invoicing → ledger); `npm run test:reach` breaks one thing at a time and holds each reach to refusing exactly what
+  it should see, nested (`check:reach` checks the whole installation).
+
+## 6.1.1 — coordinating document 0.2.0: an edge's examples, and the message on the wire
+
+The EventModel schema is unchanged at 6.1.0; `architecture.schema.json` goes to 0.2.0.
+
+**Additive:**
+- An internal edge's `examples`: given a source event's data, then the command the receiver sends (its target id and
+  fields, exactly). `architecture-check.js` runs them (check `examples`), and each generator runs the same ones
+  against its generated translation, so they cannot disagree. A field the edge does not map (personal data, say)
+  belongs in `given`: the example then proves it does not cross.
+- `edgeMessage`: the message that crosses between two systems, whatever carries it. It is the source event's id,
+  system, event and public version, and only the fields some internal edge from that event maps. It is not part of a
+  coordinating document; it is the contract both runtimes send and read, so either can be on either end of an edge.
+  It names no subject, stream or credential.
+
+## 6.1.0 — a command another system sends needs no screen
+
+**Additive (relaxed):**
+- A `stateChange` slice may name neither `screenId` nor `ingressId` when its command is `public`: another of your
+  systems sends it, over a coordinating document's internal edge. Before, it had to sit on a screen, as if a person
+  sent it. The edge is named once, in the coordinating document; the system's document still never refers to another
+  system. A slice may still not name both. A slice with neither whose command is not public is refused by a lint (the
+  schema cannot see the command), and `architecture-check.js` refuses one that no internal edge reaches (check
+  `received`).
+
+## 6.0.0 — the document names messages, never their sources
+
+The boundary rule (a model says that a message enters or leaves and what it means, never where it comes from or how
+it is carried) applied to the parts added in 3.4.0–3.6.0. See `docs/design-notes.md`.
+
+**Breaking (removed):**
+- An ingress's `verification` and `deliveryIdField`: how a message is checked and de-duplicated on the way in is its
+  source's, configured by surface tooling, which names the ingress by id. An ingress is now a name, a description and
+  a swimlane.
+- `schedule` on an automation (`cron`, `timeZone`), and with it automations started by time. Something started by time
+  is an outside input: a `stateChange` slice with an `ingressId`, whose command carries today's date (a decider never
+  reads the clock). How often its source sends it is surface tooling's. Every automation now has `triggerEventIds`.
+- `delay.cancelledByEventIds`: the decider's own checks already make a late message harmless, so cancelling was only
+  the scheduler being tidy. A delay keeps its length (`after` or `at`): that rule is the business's.
+- A scenario's `elapsed` step in `given`: commands carry the date, so a scenario sends a later date instead, and "a
+  decider never reads the clock" holds in tests too.
+
+**Additive:**
+- `outputs`: a message leaving after an event with nothing coming back (a notification, a publish), the mirror of
+  `ingresses`. Each names its swimlane, `triggerEventIds`, and optionally `fields`, what leaves, so personal data
+  leaving the system is visible in the model. Nothing is generated from it; its carrier is surface tooling's. A
+  hotspot may target an output.
+- `requiredOwnership.message` with `via`, as a `scope` has had since 4.0.0: an ownership refusal through a read model
+  has its own wording, so an error scenario can expect it.
+
+**Moving a 5.x document:** delete the four removed keys; turn a scheduled automation into an ingress-started
+`stateChange` slice whose command carries the date; write any `elapsed` scenario as a command with a later date.
+`examples/order-fulfillment.json`: the carrier webhook loses its verification, the scheduled reconcile slice is gone,
+the overdue timer loses its cancellation and its scenario its `elapsed`, and the order confirmation is an output.
+`manifest.schema.json` and `scripts/split.js` know the `outputs` registry.
+
+## 5.0.0 — an automation names where its command goes
+
+**Breaking:**
+- `targetIdField` on an automation slice, **required on every automation started by an event** (one with
+  `triggerEventIds`; a scheduled automation has no trigger event and doesn't take it). It names a field that every
+  trigger event carries, and its value is the id of the stream the command acts on: the same stream a command sent
+  directly with that id reaches. The command declares the same field with `idAttribute: true`.
+- Before, the document didn't say, and each generator derived the stream: the trigger's own stream when the command
+  was on the same aggregate, otherwise a prefix plus the trigger event's id or its stream's id. That reached a new
+  stream each time, never an existing one named by a field (a customer, by `customerId`, from a payment). A model
+  could pass every scenario with its commands going to the wrong stream. That rule is gone: the field is the only
+  rule.
+- **Every 4.x document with an automation started by an event must add `targetIdField`**, and its trigger events
+  and command must carry that field. Any other 4.x document validates unchanged.
+- **An automation that creates something new for each trigger event** (a notification for each comment) now needs
+  the trigger to carry that new thing's id (a `notificationId` or `commentId` on the comment). Before, the
+  generator made one up from the event's own id; now the model says it.
+- JSON Schema can't check that the field is on the trigger events and the command. The generators do, and verify
+  checks that each automation scenario's command carries the trigger's value.
+
+**Examples:**
+- `examples/order-fulfillment.json` (and its split form): the three automations started by an event name
+  `"targetIdField": "orderId"`, and the events and commands they use carry `orderId` as their identity.
+
 ## 4.2.0
 
 **Additive (non-breaking):**

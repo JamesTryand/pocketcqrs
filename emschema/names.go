@@ -52,8 +52,12 @@ func (s Scenario) EventsThen() (EventsThen, error) {
 	if err := json.Unmarshal(s.Then, &out); err != nil {
 		return out, fmt.Errorf("`then` is not an events expectation: %w", err)
 	}
-	if len(out.Events) == 0 {
-		return out, fmt.Errorf("`then` lists no events")
+	// An empty list (schema 6.2.0) is an assertion: the command is accepted
+	// and records exactly nothing. No `events` at all says nothing, so it is
+	// refused rather than read as that assertion.
+	if out.Events == nil {
+		return out, fmt.Errorf("`then` has no `events`: list the events recorded, or none (`[]`) for a command " +
+			"accepted with nothing recorded")
 	}
 	return out, nil
 }

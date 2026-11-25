@@ -26,6 +26,10 @@
       "type": "object",
       "description": "Carried inline, like swimlanes and dataSubjects: a small document-wide declaration, not a registry. Its full shape is checked against eventmodeling.schema.json once joined."
     },
+    "expects": {
+      "type": "object",
+      "description": "Since 6.2.0. What this system expects from other systems. Carried inline, like dataSubjects and partitioning: a small document-wide declaration, not a registry. Its full shape is checked against eventmodeling.schema.json once joined."
+    },
     "registries": {
       "type": "object",
       "properties": {

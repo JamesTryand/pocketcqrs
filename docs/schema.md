@@ -304,7 +304,11 @@ refusal is a *verdict* rather than an error, so "the decider correctly
 refused" is distinguishable from "the candidate is broken". An `error`
 scenario passes only on **its own** refusal: the decider's message must be
 the scenario's `then.error.message`, so a rule the model declares and the code
-lacks fails even when some other rule refuses first. A command scenario's
+lacks fails even when some other rule refuses first. A `stateChange` scenario
+whose `then.events` is empty (schema 6.2.0) is an assertion too: it passes,
+as "accepted, nothing recorded", only when the command is accepted and
+records no events, so a forgotten event or a refusal fails it; a `then` with
+no `events` at all is refused. A command scenario's
 `when.actor` and `when.at` (schema 3.10.0) are passed to the decider as
 `command.actor` and `command.now`. Before the decider, the command's
 authorization runs as the gateway runs it (package `cmdauth`), over read
@@ -400,23 +404,25 @@ pocketcqrs schema import model/commerce.eventmodel.json --lang go --out domain \
 - `edges.go`, in the wiring package: `EdgesIn` (each internal edge into this
   system: the source event at its version, the local aggregate and command,
   the field the target stream id comes from, and the field mapping) and
-  `EdgesOut` (each public event an edge out of it starts from, with only the
-  fields some edge maps). Data only: package `edges` is what they mean
+  `EdgesOut` (each public event an edge out of it starts from, with the
+  fields its public marker lists (schema 6.2.0), or else only the fields some
+  edge maps). Data only: package `edges` is what they mean
   (`edges.Publish`, `edges.In.Translate`), so there is one implementation.
 - **Each edge's `examples` run** against `edges.In.Translate`, after the
   sender's filter, and a failing one refuses the import: the checker
   (`architecture-check.js`) and this generator cannot disagree.
 - **Refused:** a system document that is not the one the coordinating
   document names; an edge's event or command that is not public here; a
-  target id of several fields; and a personal field on an edge (carrying one
-  is not built).
+  target id of several fields; a personal field on an edge or in an event's
+  published fields (carrying one is not built); and an edge reading a field
+  its event's marker does not list.
 - **No carrier is named.** The host gives the tables to one: with
   pocketcqrs-extensions' `federation`, `PublisherConfig.Edges = EdgesOut` on
   the sending system and `IngestConfig.Edges = EdgesIn` on the receiving one.
   Which carrier, its subjects and its credentials are surface tooling's.
 - What crosses is `edges.Message`, the architecture schema's `edgeMessage`:
   the source event's id, system, event and public version, and only the
-  mapped fields. Not this store's own event record, so either runtime can be
+  published fields. Not this store's own event record, so either runtime can be
   on either end.
 
 ## Export
@@ -478,7 +484,14 @@ lower-camel convention (`Order` → `order`).
 
 ## Schema version
 
-This project reads **schema 5.0.0** documents, and an export declares it.
+This project reads **schema 6.2.0** documents, and an export declares it.
+6.2.0 is additive: a scenario accepted with nothing recorded (above); a
+document's `expects`, what its system relies on from others (by each one's
+document id, with the events and only the fields it uses), read and
+generating nothing, since an expected event is never this system's own; and a
+public event's marker listing the fields it publishes, which the edge tables
+publish (above). Lint refuses a listed field the event does not declare, and
+`expects` naming the document's own id.
 Import refuses by name anything it cannot apply (above). 4.0.0 is breaking
 in one place: a command `scope`'s `memberOfVia` must name its `actorField`,
 the field of the membership read model compared with the command's actor;

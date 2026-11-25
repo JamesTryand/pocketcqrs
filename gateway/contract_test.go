@@ -292,6 +292,11 @@ func TestContract200WithNoEvents(t *testing.T) {
 	if !bytes.Contains(a.body, []byte(`"events":[]`)) {
 		t.Fatalf(`G6: no events is "events":[], got %s`, a.body)
 	}
+	// accepted with nothing recorded (a scenario whose then lists no events,
+	// schema 6.2.0): a stream that did not exist still does not
+	if n := streamLen(t, p, "e1"); n != 0 {
+		t.Fatalf("a command accepted with nothing recorded opened its stream: %d event(s)", n)
+	}
 }
 
 func TestContract400DoesNotExist(t *testing.T) {

@@ -75,6 +75,20 @@ func Lint(doc *Document) *Report {
 		} else if !swimlanes[e.SwimlaneID] {
 			r.errorf("event %q references swimlane %q, which does not exist", id, e.SwimlaneID)
 		}
+		// the fields a public event publishes (schema 6.2.0) are its own
+		if e.Public != nil {
+			for _, f := range e.Public.Fields {
+				if _, found := docField(e.Fields, f); !found {
+					r.errorf("event %q publishes %q, which is not one of its fields", id, f)
+				}
+			}
+		}
+	}
+
+	// expects (schema 6.2.0) is about other systems: a system never expects
+	// from itself, since its own events are its own
+	if _, ok := doc.Expects[doc.ID]; ok && doc.ID != "" {
+		r.errorf("expects names %q, this document's own id: a system never expects from itself", doc.ID)
 	}
 
 	// an output (schema 6.0.0): its trigger events exist, and every field it

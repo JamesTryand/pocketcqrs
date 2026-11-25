@@ -7,7 +7,13 @@ The schema is also embedded in the importer (`emschema/schema/eventmodeling.sche
 `TestEmbeddedSchemaIsTheVendoredCopy` checks they are. Update both together.
 
 - **Source**: `github.com/jamestryand/eventmodelschema`
-- **Commit**: `e53fa6a`, *"Schema 4.2.0: public events and commands; the
+- **Commit**: `75cd157`, *"6.2.0 (unreleased): a split document's manifest carries expects"*, the working copy of
+  6.2.0, copied 2026-11-25 before its release (the release waits for the engines to run against it; the release
+  harness's bump then replaces the schema copies with the released files). Copied: the schema (both copies), the
+  manifest schema, the changelog, and `examples/links/` (the two systems in their own repositories: `expects`, a
+  scenario accepted with nothing recorded, published fields). Between `e53fa6a` and this, the schema copies were
+  moved by the release harness's bump (5.0.0 to 6.1.0), which copies only the schema.
+- **Before that**: `e53fa6a`, *"Schema 4.2.0: public events and commands; the
   coordinating document (architecture 0.1.0)"*, tag `v4.2.0` (tagged
   2026-11-18; on GitHub once the user pushes it). Copied 2026-11-17: the schema
   and the changelog. 4.2.0 is additive: `public` on an event or command, read

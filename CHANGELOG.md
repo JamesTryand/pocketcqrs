@@ -3,6 +3,24 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## Unreleased — schema 6.2.0
+
+Reads eventmodelschema 6.2.0 documents (vendored from its working copy; released with it). Additive.
+
+### Added
+
+- **A scenario accepted with nothing recorded.** A `stateChange` scenario's `then.events` may be empty: verify passes it
+  ("accepted, nothing recorded") only when the command is accepted and records no events, through the generated JS and
+  the generated Go, so a forgotten event or a refusal fails it. A `then` with no `events` at all is refused rather than
+  read as an empty list. The gateway's probe now also checks that such a command leaves a stream that did not exist
+  still absent.
+- **`expects`**, what a system relies on from others, is read (every key of it, in a single or a split document) and
+  generates nothing: an expected event is never this system's own. Lint refuses `expects` naming the document's own id.
+- **A public event's marker may list the fields it publishes.** With a coordinating document, `EdgesOut` publishes those
+  fields, and an edge reading a field the marker does not list is refused, as is a personal field in the list. Without a
+  list, what is published is what this document's edges map, as before. A command's marker takes no list (refused).
+  Lint refuses a listed field the event does not declare.
+
 ## v0.31.1 — an outcome may set a field on an event carrying personal data (Go)
 
 ### Fixed

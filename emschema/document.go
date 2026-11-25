@@ -53,6 +53,39 @@ type Document struct {
 	Slices                     []Slice              `json:"slices"`
 	Hotspots                   map[string]Hotspot   `json:"hotspots,omitempty"`
 	DataSubjects               *DataSubjects        `json:"dataSubjects,omitempty"`
+	// Expects (schema 6.2.0) is what this system relies on from others, by
+	// each one's document id. Read so a document stating it imports; it
+	// generates nothing, since an expected event is never this system's own
+	// and nothing here can append one. A coordinating document's checker
+	// holds it to the other system's document.
+	Expects map[string]Expectation `json:"expects,omitempty"`
+}
+
+// Expectation (schema 6.2.0) is what one system relies on from another: the
+// public events it uses, each with only the fields it reads, as written
+// against that system's release WrittenAgainst.
+type Expectation struct {
+	WrittenAgainst string          `json:"writtenAgainst"`
+	Description    string          `json:"description,omitempty"`
+	Events         []ExpectedEvent `json:"events"`
+}
+
+// ExpectedEvent is one public event an expectation relies on, at its public
+// version.
+type ExpectedEvent struct {
+	Event       string          `json:"event"`
+	Version     int             `json:"version"`
+	Description string          `json:"description,omitempty"`
+	Fields      []ExpectedField `json:"fields"`
+}
+
+// ExpectedField is one field relied on: its name and type, and its
+// cardinality where it matters.
+type ExpectedField struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Cardinality string `json:"cardinality,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // DataSubjects is the document-wide dataSubjects (schema 3.2.0): rules for
@@ -106,16 +139,27 @@ type Event struct {
 	// Public (schema 4.2.0) marks the event part of its system's public
 	// contract, at a version: what a coordinating document's edge may use.
 	// Read so a document carrying it imports (the importer refuses keys it
-	// does not read). Nothing generated depends on it, and an export (made
-	// from a running catalog) has none to give.
-	Public *PublicMarker `json:"public,omitempty"`
+	// does not read). An export (made from a running catalog) has none to
+	// give. Since 6.2.0 it may list the fields the event publishes, which a
+	// coordinating document's edge tables then publish (EdgesFor).
+	Public *PublicEventMarker `json:"public,omitempty"`
 }
 
-// PublicMarker (schema 4.2.0) is an event's or command's public contract
-// version. It is checked across systems by eventmodelschema's
-// architecture-check, not by this importer.
+// PublicMarker (schema 4.2.0) is a command's public contract version. It is
+// checked across systems by eventmodelschema's architecture-check, not by
+// this importer.
 type PublicMarker struct {
 	Version int `json:"version"`
+}
+
+// PublicEventMarker is an event's public marker: its contract version and,
+// since schema 6.2.0, the fields it publishes. With Fields, those fields of
+// the event leave the system over an internal edge and nothing else of it,
+// and an edge may read only those; the system's own document says what
+// leaves it. Without, what leaves is what the edges from it map (6.1.0).
+type PublicEventMarker struct {
+	Version int      `json:"version"`
+	Fields  []string `json:"fields,omitempty"`
 }
 
 // Command is a command definition. Reason is methodology prose with no
@@ -751,7 +795,14 @@ type Hotspot struct {
 // neither a screen nor an ingress when its command is public; another system
 // sends it, over a coordinating document's edge. Its command is generated as
 // any other's; the lint refuses neither when the command is not public.
-const SchemaVersion = "6.1.0"
+//
+// 6.2.0 (additive) was vendored on 2026-11-25: a stateChange scenario's
+// `then` may list no events (accepted, nothing recorded: verify passes it
+// only when the command is accepted and records nothing); `expects`, what the
+// system relies on from others, is read and generates nothing; a public
+// event's marker may list the fields it publishes, which its edge tables then
+// publish, and an edge may read only those.
+const SchemaVersion = "6.2.0"
 
 // Slice patterns and scenario kinds, as the v2 schema defines them.
 const (

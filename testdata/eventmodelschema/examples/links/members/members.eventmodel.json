@@ -1,0 +1,144 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "6.2.0",
+  "id": "library-members",
+  "name": "Library: members",
+  "description": "One system of the connecting document examples/links/links.architecture.json, in a repository of its own (released as v1.0.0): members and their joining. Its public event lists the fields it publishes, so what leaves it is said here, by members alone: the id and the branch, never the email.",
+  "swimlanes": [
+    {
+      "id": "members",
+      "name": "Members",
+      "kind": "system"
+    }
+  ],
+  "dataSubjects": {
+    "erasure": {
+      "self": true,
+      "roles": [
+        "librarian"
+      ]
+    }
+  },
+  "events": {
+    "member-joined": {
+      "name": "Member Joined",
+      "swimlaneId": "members",
+      "aggregate": "member",
+      "public": {
+        "version": 1,
+        "fields": [
+          "memberId",
+          "branchId"
+        ]
+      },
+      "fields": [
+        {
+          "name": "memberId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "branchId",
+          "type": "string"
+        },
+        {
+          "name": "email",
+          "type": "string",
+          "pii": true,
+          "piiSubject": "memberId"
+        },
+        {
+          "name": "joinedOn",
+          "type": "date"
+        }
+      ]
+    },
+    "member-left": {
+      "name": "Member Left",
+      "swimlaneId": "members",
+      "aggregate": "member",
+      "fields": [
+        {
+          "name": "memberId",
+          "type": "string",
+          "idAttribute": true
+        }
+      ]
+    }
+  },
+  "commands": {
+    "join-member": {
+      "name": "Join Member",
+      "aggregate": "member",
+      "public": {
+        "version": 1
+      },
+      "fields": [
+        {
+          "name": "memberId",
+          "type": "string"
+        },
+        {
+          "name": "branchId",
+          "type": "string"
+        },
+        {
+          "name": "email",
+          "type": "string",
+          "pii": true,
+          "piiSubject": "memberId"
+        },
+        {
+          "name": "joinedOn",
+          "type": "date"
+        }
+      ]
+    },
+    "leave": {
+      "name": "Leave",
+      "aggregate": "member",
+      "fields": [
+        {
+          "name": "memberId",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "screens": {
+    "join-screen": {
+      "name": "Join the library"
+    },
+    "leave-screen": {
+      "name": "Leave the library"
+    }
+  },
+  "slices": [
+    {
+      "id": "join",
+      "name": "Join",
+      "pattern": "stateChange",
+      "swimlaneId": "members",
+      "status": "created",
+      "screenId": "join-screen",
+      "commandId": "join-member",
+      "eventIds": [
+        "member-joined"
+      ],
+      "scenarios": []
+    },
+    {
+      "id": "leave-slice",
+      "name": "Leave",
+      "pattern": "stateChange",
+      "swimlaneId": "members",
+      "status": "created",
+      "screenId": "leave-screen",
+      "commandId": "leave",
+      "eventIds": [
+        "member-left"
+      ],
+      "scenarios": []
+    }
+  ]
+}

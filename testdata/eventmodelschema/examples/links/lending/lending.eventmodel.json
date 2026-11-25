@@ -1,0 +1,261 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jamestryand/eventmodelschema/main/schema/eventmodeling.schema.json",
+  "eventModelingSchemaVersion": "6.2.0",
+  "id": "library-lending",
+  "name": "Library: lending",
+  "description": "One system of the connecting document examples/links/links.architecture.json, in a repository of its own (released as v1.0.0): borrowers and loans. It states what it relies on from members in expects, and keeps no personal data: a borrower is registered from members' member-joined, by id and branch only.",
+  "swimlanes": [
+    {
+      "id": "lending",
+      "name": "Lending",
+      "kind": "system"
+    }
+  ],
+  "events": {
+    "borrower-registered": {
+      "name": "Borrower Registered",
+      "swimlaneId": "lending",
+      "aggregate": "borrower",
+      "fields": [
+        {
+          "name": "borrowerId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "branchId",
+          "type": "string"
+        }
+      ]
+    },
+    "loan-overdue": {
+      "name": "Loan Overdue",
+      "swimlaneId": "lending",
+      "aggregate": "loan",
+      "public": {
+        "version": 1
+      },
+      "fields": [
+        {
+          "name": "loanId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "borrowerId",
+          "type": "string"
+        },
+        {
+          "name": "daysOverdue",
+          "type": "integer"
+        }
+      ]
+    },
+    "reminder-recorded": {
+      "name": "Reminder Recorded",
+      "swimlaneId": "lending",
+      "aggregate": "loan",
+      "fields": [
+        {
+          "name": "loanId",
+          "type": "string",
+          "idAttribute": true
+        },
+        {
+          "name": "delivered",
+          "type": "boolean"
+        }
+      ]
+    }
+  },
+  "commands": {
+    "register-borrower": {
+      "name": "Register Borrower",
+      "description": "Sent by the members system when someone joins (the coordinating document's edge member-becomes-borrower), so no screen or ingress starts its slice.",
+      "aggregate": "borrower",
+      "public": {
+        "version": 1
+      },
+      "fields": [
+        {
+          "name": "borrowerId",
+          "type": "string"
+        },
+        {
+          "name": "branchId",
+          "type": "string"
+        },
+        {
+          "name": "note",
+          "type": "string",
+          "optional": true
+        }
+      ]
+    },
+    "record-overdue": {
+      "name": "Record Overdue",
+      "aggregate": "loan",
+      "fields": [
+        {
+          "name": "loanId",
+          "type": "string"
+        },
+        {
+          "name": "borrowerId",
+          "type": "string"
+        },
+        {
+          "name": "daysOverdue",
+          "type": "integer"
+        }
+      ]
+    },
+    "record-reminder": {
+      "name": "Record Reminder",
+      "description": "The answer to a reminder call, and its give-up (delivered false).",
+      "aggregate": "loan",
+      "public": {
+        "version": 1
+      },
+      "fields": [
+        {
+          "name": "loanId",
+          "type": "string"
+        },
+        {
+          "name": "delivered",
+          "type": "boolean"
+        }
+      ]
+    }
+  },
+  "screens": {
+    "loans-screen": {
+      "name": "Loans"
+    }
+  },
+  "slices": [
+    {
+      "id": "register",
+      "name": "Register a borrower",
+      "pattern": "stateChange",
+      "swimlaneId": "lending",
+      "status": "created",
+      "commandId": "register-borrower",
+      "eventIds": [
+        "borrower-registered"
+      ],
+      "scenarios": [
+        {
+          "id": "a-member-becomes-a-borrower",
+          "name": "A member who joins at a lending branch becomes a borrower",
+          "kind": "stateChange",
+          "given": [],
+          "when": {
+            "commandId": "register-borrower",
+            "data": {
+              "borrowerId": "m-1",
+              "branchId": "north"
+            }
+          },
+          "then": {
+            "events": [
+              {
+                "eventId": "borrower-registered",
+                "data": {
+                  "borrowerId": "m-1",
+                  "branchId": "north"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "the-reading-room-lends-nothing",
+          "name": "A member who joins at the reading room is accepted, and nothing is recorded",
+          "kind": "stateChange",
+          "given": [],
+          "when": {
+            "commandId": "register-borrower",
+            "data": {
+              "borrowerId": "m-2",
+              "branchId": "reading-room"
+            }
+          },
+          "then": {
+            "events": []
+          }
+        }
+      ],
+      "outcomes": [
+        {
+          "eventIds": [],
+          "when": [
+            {
+              "all": [
+                {
+                  "command": "branchId",
+                  "equals": "reading-room"
+                }
+              ]
+            }
+          ],
+          "description": "The reading room lends nothing: a member who joins there is accepted, and nothing is recorded (not refused: every member who joins is sent, and lending decides)."
+        },
+        {
+          "eventIds": [
+            "borrower-registered"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "overdue",
+      "name": "A loan becomes overdue",
+      "pattern": "stateChange",
+      "swimlaneId": "lending",
+      "status": "created",
+      "screenId": "loans-screen",
+      "commandId": "record-overdue",
+      "eventIds": [
+        "loan-overdue"
+      ],
+      "scenarios": []
+    },
+    {
+      "id": "reminder",
+      "name": "A reminder's answer",
+      "pattern": "stateChange",
+      "swimlaneId": "lending",
+      "status": "created",
+      "screenId": "loans-screen",
+      "commandId": "record-reminder",
+      "eventIds": [
+        "reminder-recorded"
+      ],
+      "scenarios": []
+    }
+  ],
+  "expects": {
+    "library-members": {
+      "writtenAgainst": "v1.0.0",
+      "description": "Someone who joins becomes a borrower at their branch.",
+      "events": [
+        {
+          "event": "member-joined",
+          "version": 1,
+          "fields": [
+            {
+              "name": "memberId",
+              "type": "string"
+            },
+            {
+              "name": "branchId",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
