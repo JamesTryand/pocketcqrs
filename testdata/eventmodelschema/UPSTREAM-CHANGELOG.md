@@ -3,6 +3,19 @@
 Tracks `eventModelingSchemaVersion` releases of `schema/eventmodeling.schema.json`.
 See `docs/design-notes.md` for the full rationale behind each change.
 
+## 6.2.1 — coordinating document 0.3.1: a message names its sender by its document id
+
+The EventModel schema is unchanged at 6.2.0; `architecture.schema.json` goes to 0.3.1.
+
+**A change on the wire:** an `edgeMessage`'s `system` is the sending system's EventModel document id, never the name a
+connecting document gives it. Before, generators stamped the view's name, which matched the document id only when a
+view named the system by its id. A sender built from its own document alone knows only its id, and two views may name
+one system differently, so the id is the one name every party has. A receiver turns each view's name for a sender
+into that sender's document id. A carrier that names anything by the sender (a stream, say) follows the new name, so
+a link whose view named its sender otherwise has both ends redeployed together, or its old messages drained first. A
+placeholder has no document and so no id: an edge from one is not carried until its document exists. The field's
+name and shape are unchanged.
+
 ## 6.2.0 — systems in their own repositories: `expects`, a `then` that records nothing; coordinating document 0.3.0
 
 **Additive (EventModel 6.2.0):**
