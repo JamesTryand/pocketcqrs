@@ -3,6 +3,17 @@
 All notable changes to PocketCQRS. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions match git tags.
 
+## v0.34.0 — a system's edges from several coordinating documents
+
+### Added
+
+- `schema import --architecture` is repeatable: a system linked in several coordinating documents (views) gets its
+  edges from all of them (`emschema.EdgesForViews`): the edges in, the events published, their fields together, and
+  every example. `--system` is given once for all, once per document in order, or left out, when the system in each
+  view is the one that is this document (by its release's id, or its path). Two views giving one edge id different
+  ends or translations are refused, naming the edge and both views, as eventmodelschema's checker refuses them. The
+  single-view form is unchanged, except that `--system` may now be left out.
+
 ## v0.33.1 — a listed event is published whatever view the build is given
 
 ### Fixed

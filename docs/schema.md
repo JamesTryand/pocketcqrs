@@ -431,6 +431,21 @@ pocketcqrs schema import model/commerce.eventmodel.json --lang go --out domain \
   release. An edge from a placeholder is refused: it has no id yet.
 - **A system named by release** generates too: the document given must be
   the one whose `id` the release names.
+- **A system in several coordinating documents** (v0.34.0): `--architecture`
+  is repeatable. A system may be linked in more than one view, each held by
+  whoever owns those links. Its edges come from all of them: the edges in,
+  the events published (their fields together) and every example. `--system`
+  is given once for every document, once per document in order, or not at
+  all: then the system in each is the one that is this document (named by its
+  release's id, or by its path). Views may overlap but not contradict: an
+  edge id is one link in every view that holds it, the same ends and the same
+  translation (eventmodelschema's checker's `views` rule), and a
+  contradiction is refused, naming the edge and both views.
+
+  ```sh
+  pocketcqrs schema import model/commerce.eventmodel.json --lang go --out domain \
+    --architecture model/landing-pages.architecture.json --architecture links/system-links.architecture.json
+  ```
 
 ### A sender from its own document alone (v0.33.0)
 

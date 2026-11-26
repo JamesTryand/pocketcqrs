@@ -180,35 +180,38 @@ func newSchemaImportCommand() *cobra.Command {
 	// share it with. Only used for the completion message above.
 	imp.Flags().String("functionsDir", "pb_functions",
 		"the directory the completion message tells you to copy generated files into")
-	imp.Flags().String("architecture", "",
+	imp.Flags().StringArray("architecture", nil,
 		"a coordinating document (eventmodelschema architecture.schema.json): generate this system's edge tables "+
-			"(edges.go) and run its edges' examples; needs --system and --lang go")
-	imp.Flags().String("system", "", "this document's system id in --architecture")
+			"(edges.go) and run its edges' examples; needs --lang go. Repeatable: a system linked in several "+
+			"documents gets its edges from all of them, refused where they contradict")
+	imp.Flags().StringArray("system", nil, "this document's system id in --architecture: once for every document, "+
+		"or once per document in order; omitted, the system each names by this document's release id or path")
 	return imp
 }
 
 // systemEdges reads --architecture/--system, if given, and prints how the
 // edges' examples went. nil when no coordinating document was named.
 func systemEdges(cmd *cobra.Command, docPath string, doc *emschema.Document, opts emschema.Options) (*emschema.SystemEdges, error) {
-	archPath, _ := cmd.Flags().GetString("architecture")
-	system, _ := cmd.Flags().GetString("system")
-	if archPath == "" {
-		if system != "" {
+	archPaths, _ := cmd.Flags().GetStringArray("architecture")
+	systems, _ := cmd.Flags().GetStringArray("system")
+	if len(archPaths) == 0 {
+		if len(systems) > 0 {
 			return nil, fmt.Errorf("--system names a system in --architecture, which is not given")
 		}
 		return nil, nil
 	}
-	if system == "" {
-		return nil, fmt.Errorf("--architecture needs --system: this document's system id in it")
+	var views []*emschema.Architecture
+	for _, p := range archPaths {
+		arch, err := emschema.LoadArchitecture(p)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, arch)
 	}
-	arch, err := emschema.LoadArchitecture(archPath)
-	if err != nil {
-		return nil, err
-	}
-	se, err := emschema.EdgesFor(arch, system, doc, docPath, opts)
+	se, err := emschema.EdgesForViews(views, systems, doc, docPath, opts)
 	if se != nil {
 		cmd.Println()
-		cmd.Printf("Edges of %q in %q: %d in, %d published event(s)", system, se.Architecture, len(se.In), len(se.Out))
+		cmd.Printf("Edges of %q in %q: %d in, %d published event(s)", se.System, se.Architecture, len(se.In), len(se.Out))
 		cmd.Println()
 		for _, in := range se.In {
 			cmd.Printf("  in  %s: %s %s v%d -> %s on %s, its id from %s\n", in.ID, in.FromSystem, in.FromEvent,

@@ -461,3 +461,121 @@ func jsonOf(v map[string]any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)
 }
+
+// EdgesForViews reads one system's edges from several coordinating documents
+// (views) at once: a system may be linked in more than one, each held by
+// whoever owns those links. In each view the system is the one named
+// systems[i] when given (one name for every view, or one per view), else the
+// one that is this document (named by its release's id, or by its path). Each
+// view is read as EdgesFor reads it, and the results are joined: the edges in,
+// the events published (their fields together) and the examples. Views may
+// overlap but not contradict: an edge id is one link in every view that holds
+// it, the same ends and the same translation, as eventmodelschema's checker
+// requires; a contradiction is refused, naming the edge and both views.
+func EdgesForViews(views []*Architecture, systems []string, doc *Document, docPath string, opts Options) (*SystemEdges, error) {
+	if len(views) == 0 {
+		return nil, fmt.Errorf("no coordinating document given")
+	}
+	if len(systems) > 1 && len(systems) != len(views) {
+		return nil, fmt.Errorf("%d system names for %d coordinating documents: give one for all, or one per document",
+			len(systems), len(views))
+	}
+	joined := &SystemEdges{System: doc.ID}
+	var ids []string
+	inFrom := map[string]string{} // edge id -> the view it was read from
+	ins := map[string]edges.In{}
+	type key struct {
+		event   string
+		version int
+	}
+	outs := map[key]*edges.Out{}
+	var problems []string
+	for i, a := range views {
+		var system string
+		switch {
+		case len(systems) == 1:
+			system = systems[0]
+		case len(systems) > 1:
+			system = systems[i]
+		default:
+			var err error
+			if system, err = a.systemOf(doc, docPath); err != nil {
+				return nil, err
+			}
+		}
+		se, err := EdgesFor(a, system, doc, docPath, opts)
+		if err != nil {
+			return se, err
+		}
+		ids = append(ids, a.ID)
+		for _, in := range se.In {
+			if prev, ok := ins[in.ID]; ok {
+				if !reflect.DeepEqual(prev, in) {
+					problems = append(problems, fmt.Sprintf("edge %q is one link in %q and another in %q: "+
+						"an edge id is the same link in every view", in.ID, inFrom[in.ID], a.ID))
+				}
+				continue
+			}
+			ins[in.ID], inFrom[in.ID] = in, a.ID
+			joined.In = append(joined.In, in)
+		}
+		for _, o := range se.Out {
+			k := key{o.Event, o.Version}
+			if prev, ok := outs[k]; ok {
+				for _, f := range o.Fields {
+					if !contains(prev.Fields, f) {
+						prev.Fields = append(prev.Fields, f)
+					}
+				}
+				sort.Strings(prev.Fields)
+				continue
+			}
+			c := o
+			c.Fields = append([]string(nil), o.Fields...)
+			outs[k] = &c
+		}
+		joined.Examples = append(joined.Examples, se.Examples...)
+	}
+	for _, o := range outs {
+		joined.Out = append(joined.Out, *o)
+	}
+	sort.Slice(joined.Out, func(i, j int) bool { return joined.Out[i].Event < joined.Out[j].Event })
+	sort.Slice(joined.In, func(i, j int) bool { return joined.In[i].ID < joined.In[j].ID })
+	joined.Architecture = strings.Join(ids, ", ")
+	if len(problems) > 0 {
+		return joined, fmt.Errorf("the coordinating documents contradict each other for %q:\n  %s", doc.ID,
+			strings.Join(problems, "\n  "))
+	}
+	return joined, nil
+}
+
+// systemOf is the key a names this document by: the system whose release
+// names its id, or whose document is the file at docPath. Exactly one.
+func (a *Architecture) systemOf(doc *Document, docPath string) (string, error) {
+	got, err := filepath.Abs(docPath)
+	if err != nil {
+		return "", err
+	}
+	var found []string
+	for k, sys := range a.Systems {
+		switch {
+		case sys.Release != nil && sys.Release.System == doc.ID:
+			found = append(found, k)
+		case sys.Document != nil:
+			if want, err := filepath.Abs(filepath.Join(a.dir, sys.Document.Path)); err == nil && samePath(want, got) {
+				found = append(found, k)
+			}
+		}
+	}
+	sort.Strings(found)
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return "", fmt.Errorf("the coordinating document %q names no system that is this document (%q, %s): "+
+			"name it with --system", a.ID, doc.ID, docPath)
+	default:
+		return "", fmt.Errorf("the coordinating document %q names this document as more than one system (%s): "+
+			"name one with --system", a.ID, strings.Join(found, ", "))
+	}
+}
